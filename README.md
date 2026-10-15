@@ -14,5 +14,13 @@ packages in order, and how each one is verified against a real emulator.
 
 ## Status
 
-WP0: `make check` builds the (empty) library and the test harness, warning-clean with
-GCC and Clang. `CC=clang make MODE=release check` for the Clang build.
+- WP0 skeleton: done.
+- WP1 VDP state machine: done. All eight NHL '94 traces (787 frames: boot, title, menus,
+  faceoff, play, pause) replay with registers, VRAM, CRAM and VSRAM byte-exact at every frame and
+  every data port read matching the oracle; 89 hand-written unit checks.
+- WP2 renderer: pixel-exact on all 786 traced frames; unit tests, the framediff tool and a
+  second program's trace still to do.
+
+`make check` (GCC, sanitizers); `CC=clang make MODE=release check` for Clang. Vectors come from
+`$MDRT_VECTORS` (default `../nhl95/out/vectors`, recorded with
+`../nhl95/tools/oracle/vdptrace.py`).
