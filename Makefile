@@ -18,7 +18,7 @@ B       := build/$(MODE)
 MDRT_VECTORS ?= ../nhl95/out/vectors
 export MDRT_VECTORS
 
-LIBSRC  := $(wildcard src/vdp/*.c src/mdrt/*.c)
+LIBSRC  := $(wildcard src/vdp/*.c src/pad/*.c src/sram/*.c src/mdrt/*.c)
 LIBOBJ  := $(LIBSRC:%.c=$(B)/%.o)
 TESTS   := $(patsubst tests/%.c,$(B)/tests/%,$(filter-out tests/check.c tests/png.c,$(wildcard tests/*.c)))
 

@@ -23,6 +23,9 @@ packages in order, and how each one is verified against a real emulator.
   scroll, the window both ways, 80 sprites, the per-line limit and X 0 masking, fill and copy
   DMA): 1035 frames. 37 unit checks; `build/framediff/` gets a PNG of the first bad frame.
 
+- WP5 pads and save RAM: done. The game's pad port reads replay exactly (3600 / 3600 over 900
+  frames of random input on both pads); 6-button sequence and save RAM checked by hand.
+
 `make check` (GCC, sanitizers); `CC=clang make MODE=release check` for Clang. Vectors come from
 `$MDRT_VECTORS` (default `../nhl95/out/vectors`, recorded with
 `../nhl95/tools/oracle/vdptrace.py`; the test ROM with `tests/rom/build.sh`, which uses the vasm
