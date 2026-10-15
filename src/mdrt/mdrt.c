@@ -152,14 +152,14 @@ static int make_sound(mdrt *m)
     return made;
 }
 
-void mdrt_wait_vblank(mdrt *m)
+int mdrt_wait_vblank(mdrt *m)
 {
     mdrt_vdp_render(&m->vdp, m->picture, 320);
     int made = make_sound(m);
     const mdrt_platform *p = &m->cfg.platform;
     if (p->present) p->present(p->user, m->picture, mdrt_vdp_width(&m->vdp), mdrt_vdp_height(&m->vdp), 320);
     if (p->audio) p->audio(p->user, m->audio, made);
-    if (p->wait) p->wait(p->user);
+    int stop = p->wait ? p->wait(p->user) : 0;
     uint16_t buttons[2] = { m->pads.buttons[0], m->pads.buttons[1] };
     if (m->pad_src) m->pad_src(m->pad_user, buttons);
     else if (p->input) p->input(p->user, buttons);
@@ -170,6 +170,7 @@ void mdrt_wait_vblank(mdrt *m)
     m->beam = 0;
     mdrt_vdp_set_position(&m->vdp, 224, 0);
     mdrt_vdp_set_vblank(&m->vdp, 1);
+    return stop;
 }
 
 void mdrt_vblank_end(mdrt *m) { mdrt_vdp_set_vblank(&m->vdp, 0); }

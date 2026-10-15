@@ -38,8 +38,8 @@ typedef struct mdrt_platform {
     void (*present)(void *user, const uint16_t *pixels, int width, int height, int pitch);
     /* the frame's sound: stereo pairs at the configured rate */
     void (*audio)(void *user, const int16_t *samples, int frames);
-    /* block until the next frame may start (NULL: go on at once) */
-    void (*wait)(void *user);
+    /* block until the next frame may start (NULL: go on at once); nonzero: the game should stop */
+    int (*wait)(void *user);
     /* the buttons held on pads 1 and 2 (MDRT_PAD_*) for the frame starting (NULL: as they are) */
     void (*input)(void *user, uint16_t buttons[2]);
 } mdrt_platform;
@@ -80,8 +80,9 @@ void mdrt_set_pad_source(mdrt *m, mdrt_pad_fn fn, void *user);
 
 /* the handshake: draw the picture, make the frame's sound, hand both to the platform, wait for
  * its go, read the pads. On return the next frame has begun with the VDP in its vertical blank
- * (status bit 3) until mdrt_vblank_end, which the client calls when its vblank code is done. */
-void mdrt_wait_vblank(mdrt *m);
+ * (status bit 3) until mdrt_vblank_end, which the client calls when its vblank code is done.
+ * Nonzero: the platform is closing and the game should stop. */
+int mdrt_wait_vblank(mdrt *m);
 void mdrt_vblank_end(mdrt *m);
 
 #endif

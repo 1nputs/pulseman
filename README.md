@@ -44,6 +44,14 @@ packages in order, and how each one is verified against a real emulator.
   counter and pads injectable. A test game (moving picture, a scale on the PSG, DAC samples from
   a tick) runs 600 frames headless: 480605 samples at 48 kHz against 480604.4 (no drift),
   deterministic over two runs, every note at its pitch.
+- WP7 native platform (SDL2): done. `mdrt_sdl_run` (`include/mdrt/platform_sdl2.h`,
+  `src/platform/sdl2/`): the game on its own thread, the window on the caller's, frames paced by
+  the sound queue (3 frames' worth), the keyboard and two game controllers, save RAM in a file,
+  pause, full screen, a clean quit (`mdrt_wait_vblank` returns nonzero). `make sdl` builds it and
+  the examples: `testgame` (the WP6 game in a window: 300 frames in 4.88 s with SDL's real-time
+  disk audio, 5.00 s of sound) and `trace-player` (a client's .vdptrace pictures and .sndtrace
+  sound live; NHL '94's 100 s game trace plays in real time at 42% of a core, release build).
+  Under the sanitizers SDL2 reports a 768-byte leak of its own (`ASAN_OPTIONS=detect_leaks=0`).
 - WP5 pads and save RAM: done. The game's pad port reads replay exactly (3600 / 3600 over 900
   frames of random input on both pads); 6-button sequence and save RAM checked by hand.
 

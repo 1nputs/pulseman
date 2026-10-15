@@ -56,6 +56,20 @@ $(B)/tests/%: tests/%.c $(TESTLIB) $(TESTLIB:.c=.h) $(B)/libmdrt.a
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) -Itests -o $@ $< $(TESTLIB) $(B)/libmdrt.a $(LDFLAGS) $(LDLIBS) -lm
 
+# the SDL2 platform and the examples: make sdl
+SDLCFLAGS := $(shell pkg-config --cflags sdl2 2>/dev/null)
+SDLLIBS   := $(shell pkg-config --libs sdl2 2>/dev/null)
+EXAMPLES  := $(patsubst examples/%.c,$(B)/examples/%,$(wildcard examples/*.c))
+$(B)/src/platform/sdl2/%.o: src/platform/sdl2/%.c $(wildcard include/mdrt/*.h)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(SDLCFLAGS) -c $< -o $@
+$(B)/libmdrt_sdl2.a: $(B)/src/platform/sdl2/sdl2.o
+	ar rcs $@ $^
+$(B)/examples/%: examples/%.c $(B)/libmdrt_sdl2.a $(B)/libmdrt.a
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(SDLCFLAGS) -o $@ $< $(B)/libmdrt_sdl2.a $(B)/libmdrt.a $(LDFLAGS) $(LDLIBS) $(SDLLIBS) -lm
+sdl: $(B)/libmdrt_sdl2.a $(EXAMPLES)
+
 check: all
 	@fail=0; for t in $(TESTS); do echo "== $$t"; $$t || fail=1; done; \
 	if [ $$fail = 0 ]; then echo "all tests passed"; else echo "TESTS FAILED"; exit 1; fi
@@ -63,4 +77,4 @@ check: all
 clean:
 	rm -rf build
 
-.PHONY: all check clean
+.PHONY: all check clean sdl
