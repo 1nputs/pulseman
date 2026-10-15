@@ -20,6 +20,13 @@ Recorded by `../nhl95/tools/oracle/vdptrace.py` into `$MDRT_VECTORS` (default
 screens, from power on with Start presses), `faceoff`, `play` (CPU against CPU), `pause` (the
 pause menu). Each is 90-150 frames.
 
+Sound traces (`*.sndtrace`, `../nhl95/tools/oracle/sndtrace.py`; format in
+`../nhl95/tools/hybrid/oracle_shim.c`, version 3): `game` (6000 frames from power on: EA logo,
+title, menus, the faceoff, 40 s of play), `game_psg` and `game_fm` (the same with the FM chip,
+or the PSG, left out of the oracle's audio: preamp 0), `boot` (3000 frames from power on),
+`play` (3000 frames from a save state: its chips start in a state the trace does not hold, so
+only the Z80 relay uses it). Times are master clocks modulo 2^32; readers unwrap them.
+
 ## Log
 
 (dated entries: a quirk, the vector that showed it, what the runtime does)
@@ -42,4 +49,15 @@ pause menu). Each is 90-150 frames.
   tiles of the plane A column after it (the "window bug").
 - 2026-10-15, `vdptest`: a trace started while a DMA fill was still running in the oracle cannot
   be followed by an instant-DMA model; the vectors start after the program's set-up.
-
+- 2026-10-15, PSG (SMS Power "SN76489", `game_psg`): the model follows the documentation: 16-bit
+  noise register reset to $8000, white noise taps bits 0 and 3 (period 57337 shifts), the noise
+  register shifting on its flip-flop's rising edge, 2 dB attenuation steps, tone periods 0 and 1
+  a constant +1. Genesis Plus GX agrees except on periods 0 and 1, where it toggles every internal
+  clock (an ultrasonic square that averages to half level); NHL '94 never sets them.
+- 2026-10-15, `game_psg`: the oracle's PSG sound is band-limited by its resampler (blip_buf) and
+  rolls off above about 5 kHz at 44100 Hz (-1.6 dB at 7.3 kHz, -2 dB at 11.6 kHz, -3.6 dB at 14.4
+  kHz); the model's band-limited steps are flat to 17 kHz. The spectral comparison stops at
+  5 kHz.
+- 2026-10-15, `game_psg`: the oracle's PSG (GPGX: 2800 per channel, unipolar, x 1.5 preamp)
+  measures 0.370 of the model's level (MDRT_PSG_MAX = 6144 a channel, bipolar) in the 200 Hz -
+  5 kHz bands: the mixer's PSG gain against the FM starts from that (WP4).
