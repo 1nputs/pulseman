@@ -1,0 +1,15 @@
+# build products
+/build/
+*.o
+*.a
+*.so
+*.wasm
+*.wasm.map
+# test vectors are derived from a copyrighted ROM and never committed
+/vectors/
+*.vdptrace
+*.sndtrace
+*.mdsnap
+# ROMs
+*.gen
+*.smd
