@@ -14,4 +14,5 @@ packages in order, and how each one is verified against a real emulator.
 
 ## Status
 
-Planning. Nothing builds yet.
+WP0: `make check` builds the (empty) library and the test harness, warning-clean with
+GCC and Clang. `CC=clang make MODE=release check` for the Clang build.
