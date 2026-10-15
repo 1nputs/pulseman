@@ -25,15 +25,24 @@ static int tile_pixel(const mdrt_vdp *v, uint16_t e, int x, int y)
 /* a layer's line: colour (palette << 4 | index, 0 = transparent) and priority per pixel */
 struct layer { uint8_t col[320], pri[320]; };
 
-static void scroll_plane(const mdrt_vdp *v, int line, uint32_t table, int hscroll, int plane, int width, struct layer *out)
+/* bug_x: plane A's left edge next to a window on the left (0 when none). The partly shown plane A
+ * column there shows the tiles of the column after it (the "window bug": the vdptest vector,
+ * docs/HARDWARE.md). */
+static void scroll_plane(const mdrt_vdp *v, int line, uint32_t table, int hscroll, int plane, int width, int bug_x, struct layer *out)
 {
     static const int cells[4] = { 32, 64, 32, 128 };      /* R16: 00 32, 01 64, 11 128 */
     int w = cells[v->s.reg[16] & 3], h = cells[(v->s.reg[16] >> 4) & 3];
+    /* R11 bit 2: vertical scroll per 2-cell column. The columns are the plane's, moved by its fine
+     * horizontal scroll: column c starts at x = (hscroll & 15) + 16 c and uses VSRAM word 2c (A) or
+     * 2c + 1 (B). A partly shown column at the left takes, in H40, the AND of VSRAM words 38 and
+     * 39 for both planes, and in H32 no vertical scroll (the vdptest vector; docs/HARDWARE.md). */
+    int fine = hscroll & 15;
+    int left = (width == 320) ? (v->s.vsram[38] & v->s.vsram[39]) : 0;
     for (int x = 0; x < width; x++) {
-        /* R11 bit 2: vertical scroll per 2-cell column */
-        int vs = (v->s.reg[11] & 4) ? v->s.vsram[((x >> 4) * 2 + plane) % 40] : v->s.vsram[plane];
+        int vs = v->s.vsram[plane];
+        if (v->s.reg[11] & 4) vs = x < fine ? left : v->s.vsram[(((x - fine) >> 4) * 2 + plane) % 40];
         int py = (line + vs) & (h * 8 - 1);
-        int px = (x - hscroll) & (w * 8 - 1);
+        int px = (x - hscroll + (bug_x && x >= bug_x && x < bug_x + fine ? 16 : 0)) & (w * 8 - 1);
         uint16_t e = vword(v, table + (uint32_t)(((py >> 3) * w + (px >> 3)) << 1));
         int c = tile_pixel(v, e, px & 7, py & 7);
         out->col[x] = (uint8_t)(c ? (((e >> 13) & 3) << 4) | c : 0);
@@ -113,10 +122,10 @@ void mdrt_vdp_render(const mdrt_vdp *v, uint16_t *out, int pitch)
         if ((v->s.reg[11] & 3) == 2) hl = line & ~7;
         else if ((v->s.reg[11] & 3) == 3) hl = line;
         int hsa = vword(v, hs + (uint32_t)(hl << 2)) & 0x3FF, hsb = vword(v, hs + (uint32_t)(hl << 2) + 2) & 0x3FF;
-        scroll_plane(v, line, tb, hsb, 1, width, &b);
-        scroll_plane(v, line, ta, hsa, 0, width, &a);
         int w0, w1;
         window_span(v, line, width, &w0, &w1);
+        scroll_plane(v, line, tb, hsb, 1, width, 0, &b);
+        scroll_plane(v, line, ta, hsa, 0, width, (w0 == 0 && w1 > 0 && w1 < width) ? w1 : 0, &a);
         for (int x = w0; x < w1; x++) {
             uint16_t e = vword(v, tw + (uint32_t)(((line >> 3) * wcells + (x >> 3)) << 1));
             int c = tile_pixel(v, e, x & 7, line & 7);

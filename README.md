@@ -18,9 +18,12 @@ packages in order, and how each one is verified against a real emulator.
 - WP1 VDP state machine: done. All eight NHL '94 traces (787 frames: boot, title, menus,
   faceoff, play, pause) replay with registers, VRAM, CRAM and VSRAM byte-exact at every frame and
   every data port read matching the oracle; 89 hand-written unit checks.
-- WP2 renderer: pixel-exact on all 786 traced frames; unit tests, the framediff tool and a
-  second program's trace still to do.
+- WP2 renderer: done. Pixel-exact on every frame of the NHL '94 traces and of `vdptest`
+  (tests/rom/vdptest.s, our own program: H40 / H32, 128-cell planes, line / cell / column
+  scroll, the window both ways, 80 sprites, the per-line limit and X 0 masking, fill and copy
+  DMA): 1035 frames. 37 unit checks; `build/framediff/` gets a PNG of the first bad frame.
 
 `make check` (GCC, sanitizers); `CC=clang make MODE=release check` for Clang. Vectors come from
 `$MDRT_VECTORS` (default `../nhl95/out/vectors`, recorded with
-`../nhl95/tools/oracle/vdptrace.py`).
+`../nhl95/tools/oracle/vdptrace.py`; the test ROM with `tests/rom/build.sh`, which uses the vasm
+built in `../nhl95/ref/`).

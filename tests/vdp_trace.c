@@ -7,6 +7,7 @@
 #include <string.h>
 #include "check.h"
 #include "mdrt/vdp.h"
+#include "png.h"
 
 enum { T_CTRL16 = 1, T_CTRL32, T_DATA16, T_DATA32, T_READ16, T_STATUS, T_HV8, T_HV16, T_DMASRC, T_FRAME, T_END };
 
@@ -47,6 +48,26 @@ static int state_diff(const mdrt_vdp_state *a, const mdrt_vdp_state *b, char *wh
 static mdrt_vdp vdp;
 static mdrt_vdp_state want;
 static uint16_t picture[320 * 240];
+static uint32_t panels[(320 * 3 + 8) * 240];
+
+/* framediff: the runtime's picture, the oracle's, and the differing pixels in red, side by side,
+ * to build/framediff/NAME-FRAME.png */
+static void framediff(const char *name, int frame, const uint8_t *expect, int w, int h)
+{
+    int pw = w * 3 + 8;
+    for (int i = 0; i < pw * h; i++) panels[i] = 0x404040;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            uint16_t g = picture[y * 320 + x], e = (uint16_t)(expect[(y * w + x) * 2] | expect[(y * w + x) * 2 + 1] << 8);
+            panels[y * pw + x] = mdrt_vdp_rgb(g, 0);
+            panels[y * pw + w + 4 + x] = mdrt_vdp_rgb(e, 0);
+            panels[y * pw + 2 * w + 8 + x] = g == e ? (mdrt_vdp_rgb(e, 0) >> 2 & 0x3F3F3F) : 0xFF0000;
+        }
+    char path[512];
+    (void)!system("mkdir -p build/framediff");
+    snprintf(path, sizeof path, "build/framediff/%s-%03d.png", name, frame);
+    if (png_write(path, panels, pw, h) == 0) printf("  wrote %s\n", path);
+}
 
 static void replay(const char *path)
 {
@@ -115,6 +136,14 @@ static void replay(const char *path)
                             if (!bad++ && !pic_bad && !first[0]) snprintf(first, sizeof first, "frame %d: pixel %d,%d %03x, expected %03x", frames, x, y, picture[y * 320 + x], e);
                         }
                     }
+                if (bad && !pic_bad) {
+                    char base[64];
+                    const char *slash = strrchr(path, '/');
+                    snprintf(base, sizeof base, "%s", slash ? slash + 1 : path);
+                    char *dot = strchr(base, '.');
+                    if (dot) *dot = 0;
+                    framediff(base, frames, r.p, w, h);
+                }
                 if (bad) pic_bad++;
             }
             r.p += (size_t)w * h * 2;

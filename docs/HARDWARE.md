@@ -33,3 +33,13 @@ pause menu). Each is 90-150 frames.
 - 2026-10-15, all vectors: a frame-granular renderer (the state at the start of the vertical
   blank, drawn whole) is pixel-exact for NHL '94: the game writes the VDP only in the vertical
   blank or with the display off.
+- 2026-10-15, `vdptest` phase 3: vertical scroll per 2-cell column uses the plane's columns,
+  which move with its fine horizontal scroll: column c covers x = (hscroll & 15) + 16c .. +15
+  and takes VSRAM word 2c (A) or 2c + 1 (B). A partly shown column at the left edge takes, in
+  H40, VSRAM word 38 AND word 39 for both planes; in H32 it is not scrolled vertically.
+- 2026-10-15, `vdptest` phase 4: with the window on the left and plane A finely scrolled, the
+  partly shown plane A column at the window's right edge (x = edge .. edge + fine - 1) shows the
+  tiles of the plane A column after it (the "window bug").
+- 2026-10-15, `vdptest`: a trace started while a DMA fill was still running in the oracle cannot
+  be followed by an instant-DMA model; the vectors start after the program's set-up.
+

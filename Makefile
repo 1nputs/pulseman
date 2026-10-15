@@ -20,7 +20,7 @@ export MDRT_VECTORS
 
 LIBSRC  := $(wildcard src/vdp/*.c src/mdrt/*.c)
 LIBOBJ  := $(LIBSRC:%.c=$(B)/%.o)
-TESTS   := $(patsubst tests/%.c,$(B)/tests/%,$(filter-out tests/check.c,$(wildcard tests/*.c)))
+TESTS   := $(patsubst tests/%.c,$(B)/tests/%,$(filter-out tests/check.c tests/png.c,$(wildcard tests/*.c)))
 
 all: $(B)/libmdrt.a $(TESTS)
 
@@ -32,9 +32,9 @@ $(B)/libmdrt.a: $(LIBOBJ)
 	@mkdir -p $(dir $@)
 	ar rcs $@ $^
 
-$(B)/tests/%: tests/%.c tests/check.c tests/check.h $(B)/libmdrt.a
+$(B)/tests/%: tests/%.c tests/check.c tests/check.h tests/png.c tests/png.h $(B)/libmdrt.a
 	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -Itests -o $@ $< tests/check.c $(B)/libmdrt.a $(LDFLAGS)
+	$(CC) $(CFLAGS) -Itests -o $@ $< tests/check.c tests/png.c $(B)/libmdrt.a $(LDFLAGS)
 
 check: all
 	@fail=0; for t in $(TESTS); do echo "== $$t"; $$t || fail=1; done; \
