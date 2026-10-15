@@ -37,6 +37,13 @@ packages in order, and how each one is verified against a real emulator.
   title song and play): FM alone within 1 dB loudness in 1299 / 1305 windows (the oracle's MAME
   core; 1304 / 1305 against the oracle on Nuked-OPN2 too), the full mix within 1 dB in 1614 /
   1621 at the same level (gain 0.9998), peak 25303, nothing clipped.
+- WP6 composition and the frame handshake: done. `mdrt_new` puts the modules together;
+  `mdrt_wait_vblank` draws the picture, makes the frame's sound (writes at their master clock in
+  the frame, the client's sound processor run through the sound tick, writes past the frame's end
+  carried over), hands both to the platform's callbacks, waits for its go, reads the pads; HV
+  counter and pads injectable. A test game (moving picture, a scale on the PSG, DAC samples from
+  a tick) runs 600 frames headless: 480605 samples at 48 kHz against 480604.4 (no drift),
+  deterministic over two runs, every note at its pitch.
 - WP5 pads and save RAM: done. The game's pad port reads replay exactly (3600 / 3600 over 900
   frames of random input on both pads); 6-button sequence and save RAM checked by hand.
 
