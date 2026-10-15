@@ -52,6 +52,10 @@ packages in order, and how each one is verified against a real emulator.
   disk audio, 5.00 s of sound) and `trace-player` (a client's .vdptrace pictures and .sndtrace
   sound live; NHL '94's 100 s game trace plays in real time at 42% of a core, release build).
   Under the sanitizers SDL2 reports a 768-byte leak of its own (`ASAN_OPTIONS=detect_leaks=0`).
+- WP9 client integration: NHL '94 runs on the runtime with sound (`../nhl95`, `make nhl94`):
+  its `native/hal_native.c` maps the game's hardware calls, its Z80 relay port feeds the FM chip
+  through the sound tick, and the first two seconds of its sound match the oracle's within about
+  1 dB a 100 ms window. `docs/API.md` describes the contract.
 - WP5 pads and save RAM: done. The game's pad port reads replay exactly (3600 / 3600 over 900
   frames of random input on both pads); 6-button sequence and save RAM checked by hand.
 
