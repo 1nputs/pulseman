@@ -6,7 +6,7 @@
 static uint32_t u32(const uint8_t *p) { return (uint32_t)(p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24); }
 static uint16_t u16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
 
-#define HEADER (20 + 0x2000 + 8)
+#define HEADER (20 + 0x2000 + 12)
 
 /* the time stored modulo 2^32, unwrapped (events come in order give or take a few hundred clocks) */
 static uint64_t unwrap(sndtrace *t, uint32_t v)
