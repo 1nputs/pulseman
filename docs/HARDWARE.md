@@ -23,7 +23,8 @@ pause menu). Each is 90-150 frames.
 Sound traces (`*.sndtrace`, `../nhl95/tools/oracle/sndtrace.py`; format in
 `../nhl95/tools/hybrid/oracle_shim.c`, version 3): `game` (6000 frames from power on: EA logo,
 title, menus, the faceoff, 40 s of play), `game_psg` and `game_fm` (the same with the FM chip,
-or the PSG, left out of the oracle's audio: preamp 0), `boot` (3000 frames from power on),
+or the PSG, left out of the oracle's audio: preamp 0), `game_fm_nuked` (`game_fm` with the oracle
+on Nuked-OPN2 too), `boot` (3000 frames from power on),
 `play` (3000 frames from a save state: its chips start in a state the trace does not hold, so
 only the Z80 relay uses it). Times are master clocks modulo 2^32; readers unwrap them.
 
@@ -58,6 +59,14 @@ only the Z80 relay uses it). Times are master clocks modulo 2^32; readers unwrap
   rolls off above about 5 kHz at 44100 Hz (-1.6 dB at 7.3 kHz, -2 dB at 11.6 kHz, -3.6 dB at 14.4
   kHz); the model's band-limited steps are flat to 17 kHz. The spectral comparison stops at
   5 kHz.
-- 2026-10-15, `game_psg`: the oracle's PSG (GPGX: 2800 per channel, unipolar, x 1.5 preamp)
-  measures 0.370 of the model's level (MDRT_PSG_MAX = 6144 a channel, bipolar) in the 200 Hz -
-  5 kHz bands: the mixer's PSG gain against the FM starts from that (WP4).
+- 2026-10-15, `game`, `game_psg`, `game_fm`: the oracle's audio is exactly its FM output plus its
+  PSG output (the three recordings agree sample for sample). Against ours in the 200 Hz - 5 kHz
+  bands the oracle's PSG measures 0.3361 of the model's level and its FM 1.7731 of `mdrt_fm`'s,
+  so the mixer takes the FM at 1.7708 and the PSG at 0.3357 (MDRT_MIX_FM_GAIN / PSG_GAIN): the
+  full mix then measures 0.9998 of the oracle's, peaking at 25303 on `game`.
+- 2026-10-15, FM: Nuked-OPN2 in its YM2612 mode models the discrete chip's DAC "ladder": idle
+  slots output a step above zero, a DC offset (432 at `mdrt_fm`'s scale). The mixer's 10 Hz
+  high-pass removes it, as the console's output capacitor does.
+- 2026-10-15, `game_fm`: the oracle's FM core (MAME's YM2612 in GPGX) and Nuked-OPN2 agree within
+  1 dB of loudness in 1299 of 1305 windows; ymfm agrees with the oracle in 1304. Genesis Plus GX
+  resets the FM chip when the Z80's reset is asserted and again when it is released.
