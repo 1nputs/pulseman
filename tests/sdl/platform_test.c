@@ -7,7 +7,9 @@
  * the menu: a ROM chosen in its browser (one the client turns down first), the upscaler (MMPX 4x
  * from then on, and on the next start), the scaling and FM chip
  * changed, a reset, another ROM while playing, a key changed by pressing it, and the ROM chosen
- * last found again on the next start. */
+ * last found again on the next start; and four players: EA's 4 Way Play in the ports, two virtual
+ * controllers given to players 1 and 3, a button moved, a turbo button, the stick's dead zone, a
+ * controller pulled out, the Players page and a controller button changed by pressing it. */
 #include <SDL2/SDL.h>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -28,7 +30,7 @@
 #define BACKDROP 0x0E42                                   /* the picture: the backdrop's colour */
 
 static const char *const shots = "shots", *const sound = "sound.raw", *const settings_path = "settings.ini";
-static SDL_atomic_t frame, held, starts, fm_second;
+static SDL_atomic_t frame, held, starts, fm_second, pads4[MDRT_PADS], adaptor;
 static int run;
 static char rom_seen[16];                                 /* the start of the ROM the client was given */
 
@@ -205,7 +207,7 @@ static int menu_player(void *user)
     CHECK_EQ(SDL_AtomicGet(&starts), 3);
     CHECK(!strcmp(rom_seen, "GOOD-other"));
     keys(SDL_SCANCODE_ESCAPE, 1);
-    keys(SDL_SCANCODE_DOWN, 8);
+    keys(SDL_SCANCODE_DOWN, 9);
     keys(SDL_SCANCODE_RETURN, 1);                         /* Keys: pad 1's up, down ... */
     keys(SDL_SCANCODE_DOWN, 7);
     keys(SDL_SCANCODE_RETURN, 1);                         /* Pad 1 Start: press the new key */
@@ -216,6 +218,70 @@ static int menu_player(void *user)
     SDL_Delay(200);
     CHECK_EQ(SDL_AtomicGet(&held) & MDRT_PAD_START, MDRT_PAD_START);
     key(SDL_SCANCODE_HOME, 0);
+    quit_event();
+    return 0;
+}
+
+/* run 5: two virtual controllers (SDL's standard layout), plugged in while the game runs */
+static void vbutton(SDL_Joystick *j, SDL_GameControllerButton b, int on) { SDL_JoystickSetVirtualButton(j, b, (Uint8)on); SDL_Delay(120); }
+
+static int players(void *user)
+{
+    (void)user;
+    until_frame(20);
+    int i1 = SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_GAMECONTROLLER, SDL_CONTROLLER_AXIS_MAX, SDL_CONTROLLER_BUTTON_MAX, 0);
+    SDL_Joystick *c1 = SDL_JoystickOpen(i1);
+    int i2 = SDL_JoystickAttachVirtual(SDL_JOYSTICK_TYPE_GAMECONTROLLER, SDL_CONTROLLER_AXIS_MAX, SDL_CONTROLLER_BUTTON_MAX, 0);
+    SDL_Joystick *c2 = SDL_JoystickOpen(i2);
+    SDL_Delay(300);
+    CHECK_EQ(SDL_AtomicGet(&adaptor), MDRT_ADAPTOR_EA4WAY);
+    vbutton(c1, SDL_CONTROLLER_BUTTON_Y, 1);              /* controller 1 is player 3's; C is on Y */
+    CHECK_EQ(SDL_AtomicGet(&pads4[2]) & 0xFF, MDRT_PAD_C);   /* (Y too: still the pad's Y, which a 3-button pad lacks) */
+    CHECK_EQ(SDL_AtomicGet(&pads4[0]), 0);
+    vbutton(c1, SDL_CONTROLLER_BUTTON_Y, 0);
+    vbutton(c2, SDL_CONTROLLER_BUTTON_DPAD_UP, 1);        /* controller 2 is player 1's */
+    CHECK_EQ(SDL_AtomicGet(&pads4[0]), MDRT_PAD_UP);
+    vbutton(c2, SDL_CONTROLLER_BUTTON_DPAD_UP, 0);
+    SDL_JoystickSetVirtualAxis(c2, SDL_CONTROLLER_AXIS_LEFTX, 20000);   /* 61%: past the dead zone (50%) */
+    SDL_Delay(120);
+    CHECK_EQ(SDL_AtomicGet(&pads4[0]), MDRT_PAD_RIGHT);
+    SDL_JoystickSetVirtualAxis(c2, SDL_CONTROLLER_AXIS_LEFTX, 12000);   /* 37%: inside it */
+    SDL_Delay(120);
+    CHECK_EQ(SDL_AtomicGet(&pads4[0]), 0);
+    SDL_JoystickSetVirtualAxis(c2, SDL_CONTROLLER_AXIS_LEFTX, 0);
+    SDL_JoystickSetVirtualButton(c1, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, 1);   /* turbo B: on and off, ten a second */
+    int changes = 0, last = 0;
+    for (int f = SDL_AtomicGet(&frame), k = 0; k < 60; k++) {
+        while (SDL_AtomicGet(&frame) == f) SDL_Delay(1);
+        f = SDL_AtomicGet(&frame);
+        int b = (SDL_AtomicGet(&pads4[2]) & MDRT_PAD_B) != 0;
+        changes += b != last;
+        last = b;
+    }
+    SDL_JoystickSetVirtualButton(c1, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, 0);
+    printf("  turbo: %d changes of B in 60 frames\n", changes);
+    CHECK(changes >= 12 && changes <= 30);
+    SDL_JoystickClose(c2);                                /* controller 2 pulled out: controller 1 keeps its slot */
+    SDL_JoystickDetachVirtual(i2);
+    SDL_Delay(200);
+    vbutton(c1, SDL_CONTROLLER_BUTTON_Y, 1);
+    CHECK_EQ(SDL_AtomicGet(&pads4[2]) & 0xFF, MDRT_PAD_C);   /* (Y too: still the pad's Y, which a 3-button pad lacks) */
+    vbutton(c1, SDL_CONTROLLER_BUTTON_Y, 0);
+    /* the menu: [Resume, Reset, Save, Load, Video, Sound, Players, Options, Keys, Quit] */
+    keys(SDL_SCANCODE_ESCAPE, 1);
+    keys(SDL_SCANCODE_DOWN, 6);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* Players: [Controllers, Player 1-4, Controller buttons ...] */
+    keys(SDL_SCANCODE_DOWN, 1);
+    keys(SDL_SCANCODE_RIGHT, 1);                          /* player 1: controller 2 -> 3 */
+    keys(SDL_SCANCODE_DOWN, 4);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* Controller buttons: [A, B, C ...] */
+    keys(SDL_SCANCODE_RETURN, 1);                         /* A: press the button */
+    vbutton(c1, SDL_CONTROLLER_BUTTON_LEFTSTICK, 1);
+    vbutton(c1, SDL_CONTROLLER_BUTTON_LEFTSTICK, 0);
+    keys(SDL_SCANCODE_ESCAPE, 3);
+    SDL_Delay(200);
+    SDL_JoystickClose(c1);
+    SDL_JoystickDetachVirtual(i1);
     quit_event();
     return 0;
 }
@@ -244,11 +310,13 @@ static void game(mdrt *m, void *user)
     mdrt_psg_port(m, 0, 0x80 | (254 & 15));               /* a 440 Hz square, loud */
     mdrt_psg_port(m, 100, 254 >> 4);
     mdrt_psg_port(m, 200, 0x90);
-    SDL_Thread *t = run <= 2 ? SDL_CreateThread(player, "player", NULL) : NULL;
+    SDL_Thread *t = run <= 2 ? SDL_CreateThread(player, "player", NULL) : run == 5 ? SDL_CreateThread(players, "players", NULL) : NULL;
     for (;;) {
         mdrt_vblank_end(m);
         if (mdrt_wait_vblank(m)) break;
         SDL_AtomicSet(&held, mdrt_get_pads(m)->buttons[0]);
+        for (int p = 0; p < MDRT_PADS; p++) SDL_AtomicSet(&pads4[p], mdrt_get_pads(m)->buttons[p]);
+        SDL_AtomicSet(&adaptor, mdrt_get_pads(m)->adaptor);
         SDL_AtomicSet(&fm_second, mdrt_fm_cores(1) && !strcmp(mdrt_fm_core_of(mdrt_get_fm(m)), mdrt_fm_cores(1)));
         SDL_AtomicAdd(&frame, 1);
     }
@@ -284,7 +352,7 @@ static int play(void)
     c.audio_rate = 48000;
     mdrt_sdl_options o = { .title = "platform test", .app = "platform-test" };   /* (settings.ini here) */
     SDL_Thread *t = NULL;
-    if (run >= 3) {
+    if (run == 3 || run == 4) {
         o.rom_default = "missing.gen";
         o.rom_check = rom_check;
         o.rom_use = rom_use;
@@ -410,5 +478,26 @@ int main(int argc, char **argv)
     free(t);
     run = 4;
     CHECK_EQ(play(), 0);
+    /* four players: the adaptor, two controllers given to players 1 and 3, C on Y, turbo B */
+    t = slurp(settings_path, &len);
+    if (t) {
+        static const char *const old[] = { "input.adaptor = none\n", "player1.controller = 1\n", "player3.controller = 3\n",
+                                           "controller.c = b\n", "controller.turbo_b =\n" };
+        for (size_t i = 0; i < sizeof old / sizeof *old; i++) {   /* (made comments; the new values follow) */
+            char *at = strstr(t, old[i]);
+            if (at) *at = '#';
+        }
+        char *ed = malloc((size_t)len + 512);
+        snprintf(ed, (size_t)len + 512, "%sinput.adaptor = ea4way\nplayer1.controller = 2\nplayer3.controller = 1\ncontroller.c = y\n"
+                 "controller.turbo_b = rightshoulder\n", t);
+        spit(settings_path, ed);
+        free(ed);
+    }
+    free(t);
+    run = 5;
+    CHECK_EQ(play(), 0);
+    t = slurp(settings_path, &len);
+    CHECK(t && strstr(t, "\nplayer1.controller = 3\n") && strstr(t, "\ncontroller.a = leftstick\n"));
+    free(t);
     return check_done("platform_test");
 }

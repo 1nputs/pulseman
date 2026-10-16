@@ -46,14 +46,29 @@ static const char *const button_name[BUTTONS] = { "up", "down", "left", "right",
 static const char *const button_label[BUTTONS] = { "up", "down", "left", "right", "A", "B", "C", "Start", "X", "Y", "Z", "Mode" };
 static const uint16_t button_bit[BUTTONS] = { MDRT_PAD_UP, MDRT_PAD_DOWN, MDRT_PAD_LEFT, MDRT_PAD_RIGHT, MDRT_PAD_A, MDRT_PAD_B,
                                               MDRT_PAD_C, MDRT_PAD_START, MDRT_PAD_X, MDRT_PAD_Y, MDRT_PAD_Z, MDRT_PAD_MODE };
-static const char *const button_default[2][BUTTONS] = {
+static const char *const button_default[MDRT_PADS][BUTTONS] = {
     { "Up", "Down", "Left", "Right", "Z", "X", "C", "Return", "", "", "", "" },
     { "I", "K", "J", "L", "Q", "W", "E", "Tab", "", "", "", "" },
+    { "", "", "", "", "", "", "", "", "", "", "", "" },
+    { "", "", "", "", "", "", "", "", "", "", "", "" },
 };
-static const SDL_GameControllerButton pad_button[8] = {
-    SDL_CONTROLLER_BUTTON_DPAD_UP, SDL_CONTROLLER_BUTTON_DPAD_DOWN, SDL_CONTROLLER_BUTTON_DPAD_LEFT, SDL_CONTROLLER_BUTTON_DPAD_RIGHT,
-    SDL_CONTROLLER_BUTTON_X, SDL_CONTROLLER_BUTTON_A, SDL_CONTROLLER_BUTTON_B, SDL_CONTROLLER_BUTTON_START,
-};
+/* turbo: A, B or C pressed and let go over and over while the turbo key or button is held */
+enum { TURBOS = 3 };
+static const char *const turbo_name[TURBOS] = { "turbo_a", "turbo_b", "turbo_c" };
+static const char *const turbo_label[TURBOS] = { "turbo A", "turbo B", "turbo C" };
+static const uint16_t turbo_bit[TURBOS] = { MDRT_PAD_A, MDRT_PAD_B, MDRT_PAD_C };
+/* a controller's buttons for the pad's (SDL's names: a b x y start back leftshoulder ...); the d-pad
+ * and the left stick are the directions. The last three are turbo. */
+enum { CBUTTONS = 11, SLOTS = 8 };
+static const char *const cbutton_name[CBUTTONS] = { "a", "b", "c", "start", "x", "y", "z", "mode", "turbo_a", "turbo_b", "turbo_c" };
+static const char *const cbutton_label[CBUTTONS] = { "A", "B", "C", "Start", "X", "Y", "Z", "Mode", "Turbo A", "Turbo B", "Turbo C" };
+static const char *const cbutton_default[CBUTTONS] = { "x", "a", "b", "start", "leftshoulder", "y", "rightshoulder", "", "", "", "" };
+static const uint16_t cbutton_bit[CBUTTONS] = { MDRT_PAD_A, MDRT_PAD_B, MDRT_PAD_C, MDRT_PAD_START, MDRT_PAD_X, MDRT_PAD_Y,
+                                                MDRT_PAD_Z, MDRT_PAD_MODE, MDRT_PAD_A, MDRT_PAD_B, MDRT_PAD_C };
+static const char *const adaptor_label[2] = { "two pads", "EA 4 Way Play" };
+static const char *const adaptor_name[2] = { "none", "ea4way" };
+static const int turbo_rates[6] = { 5, 8, 10, 12, 15, 20 };
+static const char *const turbo_rate_label[6] = { "5 a second", "8 a second", "10 a second", "12 a second", "15 a second", "20 a second" };
 static const char *const scale_name[3] = { "sharp", "integer", "fit" };
 static const char *const aspect_name[2] = { "square", "4:3" };
 static const char *const aspect_label[2] = { "square pixels", "4:3" };
@@ -66,11 +81,15 @@ static const char *const fast_label[6] = { "2x", "3x", "4x", "6x", "8x", "as fas
 #define ROM_MAX (16u << 20)                               /* (no cartridge is larger) */
 
 /* the menu's pages and items */
-enum { PAGE_MAIN, PAGE_VIDEO, PAGE_SOUND, PAGE_OPTIONS, PAGE_KEYS, PAGE_ROM };
+enum { PAGE_MAIN, PAGE_VIDEO, PAGE_SOUND, PAGE_OPTIONS, PAGE_KEYS, PAGE_ROM, PAGE_PLAYERS, PAGE_CBUTTONS };
 enum { I_RESUME = 1, I_ROM, I_RESET, I_SAVE, I_LOAD, I_VIDEO, I_SOUND, I_OPTIONS, I_KEYS, I_QUIT, I_BACK,
        I_UPSCALE, I_SCALE, I_ASPECT, I_FULL, I_VOLUME, I_MUTE, I_FM_CORE, I_FM_CHIP, I_FOCUS, I_FAST, I_UP,
+       I_PLAYERS, I_ADAPTOR, I_TURBO, I_DEADZONE, I_CBUTTONS,
+       I_PLAYER = 900,           /* + player (0-3) */
        I_PAD = 1000,             /* + pad * BUTTONS + button */
        I_CONTROL = 2000,         /* + K_ */
+       I_TURBOKEY = 2500,        /* + pad * TURBOS + turbo */
+       I_CBUTTON = 3000,         /* + a controller button (cbutton_*) */
        I_ENTRY = 10000 };        /* + a directory entry's index */
 
 typedef struct sdl {
@@ -85,11 +104,11 @@ typedef struct sdl {
     SDL_mutex *lock;
     uint32_t picture[320 * 240];
     int width, height, fresh, redraw;
-    SDL_atomic_t buttons[2], quit, stop, paused, in_menu, done;
+    SDL_atomic_t buttons[MDRT_PADS], quit, stop, paused, in_menu, done;
     SDL_atomic_t saves, loads, rewind;      /* presses of the state keys since the game last asked; held */
     SDL_atomic_t fast, slow, step, volume, mute;
     SDL_atomic_t fm_want;       /* 1 + the FM core's index x 2 + the model: for the game thread to make */
-    SDL_GameController *pads[2];
+    SDL_GameController *ctrl[SLOTS];   /* the controllers, each in the slot it was given when plugged in */
     const mdrt_sdl_options *o;
     mdrt_config *cfg;
     mdrt *m;
@@ -104,9 +123,15 @@ typedef struct sdl {
     mdrt_settings *set;
     const char *set_path;
     uint32_t set_saved;         /* SDL_GetTicks of the last write */
-    SDL_Scancode key[K_COUNT], button_key[2][BUTTONS];
+    SDL_Scancode key[K_COUNT], button_key[MDRT_PADS][BUTTONS], turbo_key[MDRT_PADS][TURBOS];
     uint8_t down[SDL_NUM_SCANCODES];
-    uint16_t pad_ignore[2];     /* controller buttons held when the menu closed, until let go */
+    uint16_t pad_ignore[MDRT_PADS];   /* controller buttons held when the menu closed, until let go */
+    int adaptor;                /* MDRT_ADAPTOR_* in the ports (the game looks at power on) */
+    int player_ctrl[MDRT_PADS]; /* each player's controller slot + 1 (0: none) */
+    SDL_GameControllerButton cbutton[CBUTTONS];
+    int turbo_rate, dead_zone;  /* turbo presses a second; the stick's dead zone, in % */
+    char ctrl_label[SLOTS + 1][64];
+    const char *ctrl_choice[SLOTS + 1];
     int scale, aspect, focus_pause, auto_paused;
     int upscale;                /* MDRT_UPSCALE_: the game's frames through it, before the scaling */
     uint32_t *frame, *big, *big_scratch;   /* the frame taken from the game thread; it upscaled; mmpx4x's halfway */
@@ -220,11 +245,10 @@ static int wait(void *user)
     return ending(s);
 }
 
-static void input(void *user, uint16_t buttons[2])
+static void input(void *user, uint16_t buttons[MDRT_PADS])
 {
     sdl *s = user;
-    buttons[0] = (uint16_t)SDL_AtomicGet(&s->buttons[0]);
-    buttons[1] = (uint16_t)SDL_AtomicGet(&s->buttons[1]);
+    for (int p = 0; p < MDRT_PADS; p++) buttons[p] = (uint16_t)SDL_AtomicGet(&s->buttons[p]);
 }
 
 static unsigned requests(void *user)
@@ -254,6 +278,7 @@ static int start_game(sdl *s)
 {
     s->m = mdrt_new(s->cfg);
     if (!s->m) return 0;
+    mdrt_pads_set_adaptor(mdrt_get_pads(s->m), s->adaptor);   /* (in the ports at power on) */
     s->waits = s->queued = 0;
     s->next_tick = 0;
     if (s->dev) { SDL_PauseAudioDevice(s->dev, 1); SDL_ClearQueuedAudio(s->dev); }
@@ -420,13 +445,37 @@ static void settings_load(sdl *s)
         { "general.pause_on_focus_loss", "1" }, { "general.fast_forward", "4" }, { "general.screenshots", "screenshots" },
     };
     for (size_t i = 0; i < sizeof defaults / sizeof *defaults; i++) mdrt_settings_default(s->set, defaults[i][0], defaults[i][1]);
-    for (int p = 0; p < 2; p++)
+    for (int p = 0; p < MDRT_PADS; p++) {
+        char k[48];
         for (int b = 0; b < BUTTONS; b++) {
-            char k[32];
             snprintf(k, sizeof k, "pad%d.%s", p + 1, button_name[b]);
             mdrt_settings_default(s->set, k, button_default[p][b]);
             s->button_key[p][b] = bound(mdrt_settings_get(s->set, k));
         }
+        for (int t = 0; t < TURBOS; t++) {
+            snprintf(k, sizeof k, "pad%d.%s", p + 1, turbo_name[t]);
+            mdrt_settings_default(s->set, k, "");
+            s->turbo_key[p][t] = bound(mdrt_settings_get(s->set, k));
+        }
+        snprintf(k, sizeof k, "player%d.controller", p + 1);
+        static const char *const slot[MDRT_PADS] = { "1", "2", "3", "4" };
+        mdrt_settings_default(s->set, k, slot[p]);
+        s->player_ctrl[p] = clamp(mdrt_settings_get_int(s->set, k, p + 1), 0, SLOTS);
+    }
+    for (int i = 0; i < CBUTTONS; i++) {
+        char k[48];
+        snprintf(k, sizeof k, "controller.%s", cbutton_name[i]);
+        mdrt_settings_default(s->set, k, cbutton_default[i]);
+        const char *v = mdrt_settings_get(s->set, k);
+        s->cbutton[i] = v && *v ? SDL_GameControllerGetButtonFromString(v) : SDL_CONTROLLER_BUTTON_INVALID;
+        if (v && *v && s->cbutton[i] == SDL_CONTROLLER_BUTTON_INVALID) fprintf(stderr, "settings: no controller button called \"%s\"\n", v);
+    }
+    mdrt_settings_default(s->set, "input.adaptor", "none");
+    mdrt_settings_default(s->set, "controller.dead_zone", "50");
+    mdrt_settings_default(s->set, "general.turbo_rate", "10");
+    s->adaptor = named(mdrt_settings_get(s->set, "input.adaptor"), adaptor_name, 2, MDRT_ADAPTOR_NONE);
+    s->dead_zone = clamp(mdrt_settings_get_int(s->set, "controller.dead_zone", 50), 5, 95);
+    s->turbo_rate = clamp(mdrt_settings_get_int(s->set, "general.turbo_rate", 10), 1, 30);
     for (int i = 0; i < K_COUNT; i++) {
         mdrt_settings_default(s->set, key_setting[i][0], key_setting[i][1]);
         s->key[i] = bound(mdrt_settings_get(s->set, key_setting[i][0]));
@@ -622,6 +671,59 @@ static void kept_path(char *out, size_t size, const char *path)
 
 static void build_page(sdl *s, int page, int select);
 
+/* the Players page's choices: none, then each controller slot with what is plugged into it */
+static void ctrl_choices(sdl *s)
+{
+    snprintf(s->ctrl_label[0], sizeof s->ctrl_label[0], "none");
+    for (int i = 0; i < SLOTS; i++) {
+        const char *name = s->ctrl[i] ? SDL_GameControllerName(s->ctrl[i]) : NULL;
+        snprintf(s->ctrl_label[i + 1], sizeof s->ctrl_label[i + 1], "controller %d: %.28s", i + 1, s->ctrl[i] ? name ? name : "?" : "none yet");
+    }
+    for (int i = 0; i <= SLOTS; i++) s->ctrl_choice[i] = s->ctrl_label[i];
+}
+
+/* the controller's buttons held, as the pad's (turbo_on: the turbo buttons' moment to press) */
+static uint16_t ctrl_buttons(sdl *s, SDL_GameController *c, int turbo_on)
+{
+    static const SDL_GameControllerButton dpad[4] = { SDL_CONTROLLER_BUTTON_DPAD_UP, SDL_CONTROLLER_BUTTON_DPAD_DOWN,
+                                                      SDL_CONTROLLER_BUTTON_DPAD_LEFT, SDL_CONTROLLER_BUTTON_DPAD_RIGHT };
+    uint16_t b = 0;
+    for (int i = 0; i < 4; i++) if (SDL_GameControllerGetButton(c, dpad[i])) b |= button_bit[i];
+    for (int i = 0; i < CBUTTONS; i++)
+        if (s->cbutton[i] != SDL_CONTROLLER_BUTTON_INVALID && SDL_GameControllerGetButton(c, s->cbutton[i]) && (i < 8 || turbo_on))
+            b |= cbutton_bit[i];
+    int x = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTX), y = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTY);
+    int dead = 32767 * s->dead_zone / 100;
+    if (y < -dead) b |= MDRT_PAD_UP;
+    if (y > dead) b |= MDRT_PAD_DOWN;
+    if (x < -dead) b |= MDRT_PAD_LEFT;
+    if (x > dead) b |= MDRT_PAD_RIGHT;
+    return b;
+}
+
+static SDL_GameController *player_ctrl(sdl *s, int p) { return s->player_ctrl[p] ? s->ctrl[s->player_ctrl[p] - 1] : NULL; }
+
+/* a controller plugged in (device index): into the first free slot, unless it is open already */
+static void ctrl_added(sdl *s, int index)
+{
+    if (!SDL_IsGameController(index)) return;
+    SDL_JoystickID id = SDL_JoystickGetDeviceInstanceID(index);
+    for (int i = 0; i < SLOTS; i++)
+        if (s->ctrl[i] && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(s->ctrl[i])) == id) return;
+    for (int i = 0; i < SLOTS; i++)
+        if (!s->ctrl[i]) { s->ctrl[i] = SDL_GameControllerOpen(index); break; }
+}
+
+/* a controller pulled out (instance id): its slot empty, the others where they were */
+static void ctrl_removed(sdl *s, SDL_JoystickID id)
+{
+    for (int i = 0; i < SLOTS; i++)
+        if (s->ctrl[i] && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(s->ctrl[i])) == id) {
+            SDL_GameControllerClose(s->ctrl[i]);
+            s->ctrl[i] = NULL;
+        }
+}
+
 static const char *core_label(const char *core) { return !strcmp(core, "nuked") ? "Nuked-OPN2" : core; }
 
 static void build_page(sdl *s, int page, int select)
@@ -645,6 +747,7 @@ static void build_page(sdl *s, int page, int select)
         }
         mdrt_menu_add(m, I_VIDEO, MDRT_ITEM_ACTION, "Video");
         mdrt_menu_add(m, I_SOUND, MDRT_ITEM_ACTION, "Sound");
+        mdrt_menu_add(m, I_PLAYERS, MDRT_ITEM_ACTION, "Players");
         mdrt_menu_add(m, I_OPTIONS, MDRT_ITEM_ACTION, "Options");
         mdrt_menu_add(m, I_KEYS, MDRT_ITEM_ACTION, "Keys");
         mdrt_menu_add(m, I_QUIT, MDRT_ITEM_ACTION, "Quit");
@@ -683,16 +786,50 @@ static void build_page(sdl *s, int page, int select)
     case PAGE_KEYS:
         mdrt_menu_page(m, "Keys");
         snprintf(m->subtitle, sizeof m->subtitle, "Enter: change one");
-        for (int p = 0; p < 2; p++)
+        for (int p = 0; p < MDRT_PADS; p++) {
+            char label[48];
             for (int b = 0; b < BUTTONS; b++) {
-                char label[48];
                 snprintf(label, sizeof label, "Pad %d %s", p + 1, button_label[b]);
                 if ((it = mdrt_menu_add(m, I_PAD + p * BUTTONS + b, MDRT_ITEM_ACTION, label)))
                     snprintf(it->detail, sizeof it->detail, "%s", key_name(s->button_key[p][b]));
             }
+            for (int t = 0; t < TURBOS; t++) {
+                snprintf(label, sizeof label, "Pad %d %s", p + 1, turbo_label[t]);
+                if ((it = mdrt_menu_add(m, I_TURBOKEY + p * TURBOS + t, MDRT_ITEM_ACTION, label)))
+                    snprintf(it->detail, sizeof it->detail, "%s", key_name(s->turbo_key[p][t]));
+            }
+        }
         for (int k = 0; k < K_COUNT; k++)
             if ((it = mdrt_menu_add(m, I_CONTROL + k, MDRT_ITEM_ACTION, key_setting[k][2])))
                 snprintf(it->detail, sizeof it->detail, "%s", key_name(s->key[k]));
+        mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
+        break;
+    case PAGE_PLAYERS: {
+        mdrt_menu_page(m, "Players");
+        snprintf(m->subtitle, sizeof m->subtitle, "%s", s->adaptor ? "EA 4 Way Play: four players (from power on)"
+                                                                   : "Players 3 and 4 need EA's 4 Way Play");
+        mdrt_menu_add_choice(m, I_ADAPTOR, "Controllers", adaptor_label, 2, s->adaptor);
+        ctrl_choices(s);
+        for (int p = 0; p < MDRT_PADS; p++) {
+            char label[48];
+            snprintf(label, sizeof label, "Player %d", p + 1);
+            mdrt_menu_add_choice(m, I_PLAYER + p, label, s->ctrl_choice, SLOTS + 1, s->player_ctrl[p]);
+        }
+        mdrt_menu_add(m, I_CBUTTONS, MDRT_ITEM_ACTION, "Controller buttons");
+        int rate = 2;
+        for (int i = 0; i < 6; i++) if (turbo_rates[i] == s->turbo_rate) rate = i;
+        mdrt_menu_add_choice(m, I_TURBO, "Turbo", turbo_rate_label, 6, rate);
+        mdrt_menu_add_number(m, I_DEADZONE, "Stick dead zone", s->dead_zone, 10, 90, 10, "%");
+        mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
+        break;
+    }
+    case PAGE_CBUTTONS:
+        mdrt_menu_page(m, "Controller buttons");
+        snprintf(m->subtitle, sizeof m->subtitle, "Enter: change one (Esc: keep, Delete: none)");
+        for (int i = 0; i < CBUTTONS; i++)
+            if ((it = mdrt_menu_add(m, I_CBUTTON + i, MDRT_ITEM_ACTION, cbutton_label[i])))
+                snprintf(it->detail, sizeof it->detail, "%s", s->cbutton[i] == SDL_CONTROLLER_BUTTON_INVALID ? "none"
+                         : SDL_GameControllerGetStringForButton(s->cbutton[i]));
         mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
         break;
     case PAGE_ROM:
@@ -733,10 +870,9 @@ static void close_menu(sdl *s)
 {
     s->menu_open = 0;
     memset(s->down, 0, sizeof s->down);                   /* (the key that closed it does not reach the game) */
-    for (int p = 0; p < 2; p++) {
-        s->pad_ignore[p] = 0;
-        for (int i = 0; i < 8 && s->pads[p]; i++)
-            if (SDL_GameControllerGetButton(s->pads[p], pad_button[i])) s->pad_ignore[p] |= button_bit[i];
+    for (int p = 0; p < MDRT_PADS; p++) {
+        SDL_GameController *c = player_ctrl(s, p);
+        s->pad_ignore[p] = c ? ctrl_buttons(s, c, 1) : 0;
     }
     SDL_AtomicSet(&s->in_menu, 0);
     SDL_LockMutex(s->lock);
@@ -767,16 +903,40 @@ static void restart(sdl *s, const char *rom_path)
     close_menu(s);
 }
 
+/* a controller button for a pad's button (SDL_CONTROLLER_BUTTON_INVALID: none) */
+static void bind_cbutton(sdl *s, int id, SDL_GameControllerButton b)
+{
+    char setting[32];
+    s->binding = -1;
+    s->cbutton[id - I_CBUTTON] = b;
+    snprintf(setting, sizeof setting, "controller.%s", cbutton_name[id - I_CBUTTON]);
+    mdrt_settings_set(s->set, setting, b == SDL_CONTROLLER_BUTTON_INVALID ? "" : SDL_GameControllerGetStringForButton(b));
+    build_page(s, PAGE_CBUTTONS, id);
+    for (int i = 0; i < CBUTTONS && b != SDL_CONTROLLER_BUTTON_INVALID; i++)   /* the button's other use, if it has one */
+        if (i != id - I_CBUTTON && s->cbutton[i] == b)
+            snprintf(s->menu.message, sizeof s->menu.message, "%s is also %s", SDL_GameControllerGetStringForButton(b), cbutton_label[i]);
+}
+
 /* a key for the item being bound (Esc keeps the old one, Delete leaves none) */
 static void bind_key(sdl *s, SDL_Scancode k)
 {
     int id = s->binding, sel = id;
     s->binding = -1;
+    if (id >= I_CBUTTON) {                                /* (a controller button: the keyboard keeps or clears it) */
+        if (k == SDL_SCANCODE_DELETE) bind_cbutton(s, id, SDL_CONTROLLER_BUTTON_INVALID);
+        else if (k == SDL_SCANCODE_ESCAPE) build_page(s, PAGE_CBUTTONS, sel);
+        else s->binding = id;
+        return;
+    }
     if (k == SDL_SCANCODE_ESCAPE) { build_page(s, PAGE_KEYS, sel); return; }
     if (k == SDL_SCANCODE_DELETE) k = SDL_SCANCODE_UNKNOWN;
     char setting[32];
     const char *other = NULL;
-    if (id >= I_CONTROL) {
+    if (id >= I_TURBOKEY) {
+        int p = (id - I_TURBOKEY) / TURBOS, t = (id - I_TURBOKEY) % TURBOS;
+        s->turbo_key[p][t] = k;
+        snprintf(setting, sizeof setting, "pad%d.%s", p + 1, turbo_name[t]);
+    } else if (id >= I_CONTROL) {
         if (id - I_CONTROL == K_MENU && k == SDL_SCANCODE_UNKNOWN) {
             build_page(s, PAGE_KEYS, sel);
             snprintf(s->menu.message, sizeof s->menu.message, "The menu needs a key");
@@ -830,8 +990,28 @@ static void act(sdl *s, int id)
     case I_SOUND: build_page(s, PAGE_SOUND, I_VOLUME); return;
     case I_OPTIONS: build_page(s, PAGE_OPTIONS, I_FOCUS); return;
     case I_KEYS: build_page(s, PAGE_KEYS, I_PAD); return;
+    case I_PLAYERS: build_page(s, PAGE_PLAYERS, I_ADAPTOR); return;
+    case I_CBUTTONS: build_page(s, PAGE_CBUTTONS, I_CBUTTON); return;
+    case I_ADAPTOR:
+        s->adaptor = it->value;
+        mdrt_settings_set(s->set, "input.adaptor", adaptor_name[s->adaptor]);
+        build_page(s, PAGE_PLAYERS, I_ADAPTOR);
+        if (running) snprintf(s->menu.message, sizeof s->menu.message, "From the next power on: Reset");
+        return;
+    case I_TURBO:
+        s->turbo_rate = turbo_rates[it->value];
+        mdrt_settings_set_int(s->set, "general.turbo_rate", s->turbo_rate);
+        return;
+    case I_DEADZONE:
+        s->dead_zone = it->value;
+        mdrt_settings_set_int(s->set, "controller.dead_zone", s->dead_zone);
+        return;
     case I_QUIT: if (!running || confirmed(s, id, "quit")) quit(s); return;
-    case I_BACK: build_page(s, PAGE_MAIN, s->page == PAGE_VIDEO ? I_VIDEO : s->page == PAGE_SOUND ? I_SOUND : s->page == PAGE_OPTIONS ? I_OPTIONS : I_KEYS); return;
+    case I_BACK:
+        if (s->page == PAGE_CBUTTONS) { build_page(s, PAGE_PLAYERS, I_CBUTTONS); return; }
+        build_page(s, PAGE_MAIN, s->page == PAGE_VIDEO ? I_VIDEO : s->page == PAGE_SOUND ? I_SOUND : s->page == PAGE_OPTIONS ? I_OPTIONS
+                                 : s->page == PAGE_PLAYERS ? I_PLAYERS : I_KEYS);
+        return;
     case I_UPSCALE:                                       /* (the frame is upscaled again when the menu closes) */
         s->upscale = it->value;
         mdrt_settings_set(s->set, "video.upscaler", mdrt_upscale_name(s->upscale));
@@ -891,6 +1071,14 @@ static void act(sdl *s, int id)
         if (why) { snprintf(s->menu.message, sizeof s->menu.message, "%s", why); s->confirm = 0; return; }
         if (running && !confirmed(s, id, "start the game with it")) return;
         restart(s, path);
+    } else if (id >= I_PLAYER && id < I_PLAYER + MDRT_PADS) {   /* a player's controller */
+        char k[32];
+        s->player_ctrl[id - I_PLAYER] = it->value;
+        snprintf(k, sizeof k, "player%d.controller", id - I_PLAYER + 1);
+        mdrt_settings_set_int(s->set, k, it->value);
+    } else if (id >= I_CBUTTON && id < I_CBUTTON + CBUTTONS) {   /* a controller button to change */
+        s->binding = id;
+        snprintf(s->menu.message, sizeof s->menu.message, "Press a controller's button for %s", it->label);
     } else if (id >= I_PAD && id < I_ENTRY) {             /* a key to change */
         s->binding = id;
         snprintf(s->menu.message, sizeof s->menu.message, "Press a key for %s (Esc: keep, Delete: none)", it->label);
@@ -903,7 +1091,7 @@ static void menu_input(sdl *s, int in)
     if (s->confirm && id != s->confirm) { s->confirm = 0; s->menu.message[0] = 0; }   /* (not chosen again) */
     if (id == MDRT_MENU_CLOSE) {
         if (s->page == PAGE_ROM) build_page(s, PAGE_MAIN, I_ROM);
-        else if (s->page != PAGE_MAIN) act(s, I_BACK);
+        else if (s->page != PAGE_MAIN) act(s, I_BACK);   /* (the controller buttons' page: back to Players) */
         else if (s->thread) close_menu(s);
     } else if (id >= 0) act(s, id);
     s->redraw = 1;
@@ -966,6 +1154,7 @@ static void pad_pressed(sdl *s, SDL_GameControllerButton b)
         if (b == SDL_CONTROLLER_BUTTON_BACK || b == SDL_CONTROLLER_BUTTON_GUIDE) open_menu(s, PAGE_MAIN, I_RESUME);
         return;
     }
+    if (s->binding >= I_CBUTTON) { bind_cbutton(s, s->binding, b); s->redraw = 1; return; }
     if (s->binding >= 0) return;
     int in = b == SDL_CONTROLLER_BUTTON_DPAD_UP ? MDRT_MENU_UP : b == SDL_CONTROLLER_BUTTON_DPAD_DOWN ? MDRT_MENU_DOWN :
              b == SDL_CONTROLLER_BUTTON_DPAD_LEFT ? MDRT_MENU_LEFT : b == SDL_CONTROLLER_BUTTON_DPAD_RIGHT ? MDRT_MENU_RIGHT :
@@ -976,21 +1165,19 @@ static void pad_pressed(sdl *s, SDL_GameControllerButton b)
 
 static void read_buttons(sdl *s)
 {
-    for (int p = 0; p < 2; p++) {
+    int turbo_on = (int)(SDL_GetTicks() * (Uint32)s->turbo_rate * 2 / 1000) % 2 == 0;   /* (pressed half the time) */
+    for (int p = 0; p < MDRT_PADS; p++) {
         uint16_t b = 0, pad = 0;
         for (int i = 0; i < BUTTONS; i++) {
             SDL_Scancode k = s->button_key[p][i];
             if (k != SDL_SCANCODE_UNKNOWN && s->down[k]) b |= button_bit[i];
-            if (i < 8 && s->pads[p] && SDL_GameControllerGetButton(s->pads[p], pad_button[i])) pad |= button_bit[i];
         }
-        if (s->pads[p]) {
-            int x = SDL_GameControllerGetAxis(s->pads[p], SDL_CONTROLLER_AXIS_LEFTX);
-            int y = SDL_GameControllerGetAxis(s->pads[p], SDL_CONTROLLER_AXIS_LEFTY);
-            if (y < -16000) pad |= MDRT_PAD_UP;
-            if (y > 16000) pad |= MDRT_PAD_DOWN;
-            if (x < -16000) pad |= MDRT_PAD_LEFT;
-            if (x > 16000) pad |= MDRT_PAD_RIGHT;
+        for (int t = 0; t < TURBOS && turbo_on; t++) {
+            SDL_Scancode k = s->turbo_key[p][t];
+            if (k != SDL_SCANCODE_UNKNOWN && s->down[k]) b |= turbo_bit[t];
         }
+        SDL_GameController *c = player_ctrl(s, p);
+        if (c) pad = ctrl_buttons(s, c, turbo_on);
         s->pad_ignore[p] &= pad;                          /* (let go: counted again) */
         b |= pad & ~s->pad_ignore[p];
         SDL_AtomicSet(&s->buttons[p], s->menu_open ? 0 : b);
@@ -1171,8 +1358,7 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
     if (!s->dev) fprintf(stderr, "no sound (%s): the frames keep time by the clock\n", SDL_GetError());
     s->rate = (uint32_t)want.freq;
     cfg->audio_rate = s->rate;
-    for (int i = 0, p = 0; i < SDL_NumJoysticks() && p < 2; i++)
-        if (SDL_IsGameController(i)) s->pads[p++] = SDL_GameControllerOpen(i);
+    for (int i = 0; i < SDL_NumJoysticks(); i++) ctrl_added(s, i);
     s->lock = SDL_CreateMutex();
     cfg->platform = (mdrt_platform){ .user = s, .present = present, .audio = audio, .wait = wait, .input = input, .requests = requests };
     mdrt_menu_init(&s->menu);
@@ -1194,8 +1380,10 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
             } else if (e.type == SDL_CONTROLLERBUTTONDOWN) pad_pressed(s, (SDL_GameControllerButton)e.cbutton.button);
             else if (e.type == SDL_WINDOWEVENT) window_event(s, &e.window);
             else if (e.type == SDL_RENDER_TARGETS_RESET) s->redraw = 1;
-            else if (e.type == SDL_CONTROLLERDEVICEADDED) {
-                for (int p = 0; p < 2; p++) if (!s->pads[p]) { s->pads[p] = SDL_GameControllerOpen(e.cdevice.which); break; }
+            else if (e.type == SDL_CONTROLLERDEVICEADDED || e.type == SDL_CONTROLLERDEVICEREMOVED) {
+                if (e.type == SDL_CONTROLLERDEVICEADDED) ctrl_added(s, e.cdevice.which);
+                else ctrl_removed(s, e.cdevice.which);
+                if (s->menu_open && s->page == PAGE_PLAYERS && s->binding < 0) build_page(s, PAGE_PLAYERS, s->menu.items[s->menu.sel].id);
             }
         } while (SDL_PollEvent(&e));
         if (s->thread && SDL_AtomicGet(&s->done) && !SDL_AtomicGet(&s->stop)) break;   /* the game ended by itself */

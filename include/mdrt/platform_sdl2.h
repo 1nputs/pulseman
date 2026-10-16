@@ -9,26 +9,32 @@
  * game's ROM (a file browser; the client checks each one), a reset, a state saved or loaded, the
  * video (a pixel-art upscaler for the game's frames: mdrt/upscale.h; scaling, aspect, full
  * screen), the sound (volume, mute, the FM core and chip, changed as
- * the game plays), options (pausing when the window loses focus, fast-forward's speed) and every
- * key, each changed by pressing the new one. Arrows and Enter work it, or a controller's d-pad, A
+ * the game plays), the players (two pads, or EA's 4 Way Play for four, from the next power on;
+ * each player's controller; the controllers' buttons, turbo A / B / C, the stick's dead zone),
+ * options (pausing when the window loses focus, fast-forward's speed) and every key, each changed
+ * by pressing the new one (a controller's button, on a controller). Arrows and Enter work it, or a controller's d-pad, A
  * and B. It is drawn over the picture at the console's resolution (mdrt/menu.h).
  *
  * Keys (the defaults; every one can be changed in the menu or the settings file, by SDL's key
  * name: A, F1, Up, Return, Space, Left Shift, Keypad 8, the sign of , . - = ...):
  *   pad 1  arrows, Z / X / C = A / B / C, Enter = Start
  *   pad 2  I J K L, Q / W / E = A / B / C, Tab = Start
+ *   pads 3 and 4, and turbo A / B / C on each pad: no keys until given some
  *   F1 mute, F2 / F3 volume down / up, F4 held to step back (mdrt_requests); F5 pause, F6 held
  *   fast-forward, F7 slow motion, F8 one frame while paused; F9 / F10 ask the game to save /
  *   load a state, F11 or Alt+Enter full screen, F12 a screenshot; Esc the menu
- * The first two game controllers are pads 1 and 2 (X / A / B = A / B / C, Start). A change shows
- * for a moment in the window's title.
+ * Controllers keep the slot they were given when plugged in; by default controller N is player N's
+ * (X / A / B = A / B / C, Start, the left shoulder X, Y Y, the right shoulder Z; the d-pad and the
+ * left stick are the directions). A change shows for a moment in the window's title.
  *
  * The settings file (settings.ini in the directory the game runs in, beside its saves and
  * screenshots) is written with every setting the first time and whenever one changes; edit it
  * while the game is closed. It keeps the ROM chosen last, the window's size, place and full
  * screen, the upscaler, the scaling (sharp, integer, fit) and aspect (square, 4:3), the volume and mute, the
- * sound device and how many frames of sound are queued (latency), the FM core and chip, pausing
- * when the window loses focus, fast-forward's speed, the screenshots' directory and every key. */
+ * sound device and how many frames of sound are queued (latency), the FM core and chip, the
+ * adaptor in the ports, each player's controller, the controllers' buttons, turbo's speed, the
+ * stick's dead zone, pausing when the window loses focus, fast-forward's speed, the screenshots'
+ * directory and every key. */
 #ifndef MDRT_PLATFORM_SDL2_H
 #define MDRT_PLATFORM_SDL2_H
 #include "mdrt/mdrt.h"

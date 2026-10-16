@@ -70,6 +70,12 @@ This README carries the status.
   NHL '94 from power on with the adaptor in the reference emulator, four pads pressing their own
   buttons through the title and the setup screen, replays 17878 / 17878 reads (its
   `four_way.padtrace`), the detection included.
+- 2026-10-16, players in the SDL2 platform: a Players page (two pads or EA's 4 Way Play, from
+  the next power on; each player's controller, controllers keeping the slot they were plugged
+  into; the controllers' buttons and turbo A / B / C, each set by pressing the button; turbo's
+  speed; the stick's dead zone), keys for pads 3 and 4 and turbo keys. `make sdl-check` plugs in
+  two virtual controllers and checks players 1 and 3 get them, a moved button, the d-pad, the
+  dead zone, turbo, a controller pulled out, and a button set from the menu.
 - 2026-10-16, the review's small findings: PAL's master clock (`MDRT_MASTER_CLOCK_PAL`,
   `mdrt_master_clock`) in the mixer and the platform; the default HV counter through the VDP's
   counter mapping; `mdrt_vdp_reg` and a rule for what in the structs is API; the mixer's gains in
