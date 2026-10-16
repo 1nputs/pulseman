@@ -1,10 +1,13 @@
 /* The platform's pure helpers: the settings store (a hand-edited file read, changed and written
  * back with its comments, order and unknown keys kept), where the picture goes in a window for
  * each scaling mode and aspect, and the PNG encoder (decoded back here: chunks, CRCs, the stored
- * deflate blocks, Adler-32, every pixel). */
+ * deflate blocks, Adler-32, every pixel); and the menu: its moves and values, a long list's pages,
+ * its drawing (MDRT_MENU_PNG=FILE writes a page as a PNG to look at). */
 #include <stdlib.h>
 #include <string.h>
 #include "check.h"
+#include <stdio.h>
+#include "mdrt/menu.h"
 #include "mdrt/png.h"
 #include "mdrt/settings.h"
 #include "mdrt/view.h"
@@ -131,10 +134,89 @@ static void png(void)
     free(raw); free(b);
 }
 
+static void menu(void)
+{
+    static const char *const names[3] = { "sharp", "integer", "fit" };
+    mdrt_menu m;
+    mdrt_menu_init(&m);
+    mdrt_menu_page(&m, "Video");
+    mdrt_menu_add(&m, 1, MDRT_ITEM_ACTION, "Resume");
+    snprintf(mdrt_menu_add(&m, 2, MDRT_ITEM_TEXT, "Shown, not chosen")->detail, 96, "F1");
+    mdrt_menu_add_choice(&m, 3, "Scaling", names, 3, 0);
+    mdrt_menu_add_number(&m, 4, "Volume", 50, 0, 100, 10, "%");
+    snprintf(mdrt_menu_add(&m, 5, MDRT_ITEM_ACTION, "Game ROM")->detail, 96, "/a/very/long/path/to/the/roms/NHL 94 (UE) [!].gen");
+    mdrt_menu_select(&m, 2);                                          /* (text: the first selectable) */
+    CHECK_EQ(m.sel, 0);
+    CHECK_EQ(mdrt_menu_input(&m, MDRT_MENU_DOWN), MDRT_MENU_NOTHING);
+    CHECK_EQ(m.sel, 2);                                               /* past the text */
+    CHECK_EQ(mdrt_menu_input(&m, MDRT_MENU_OK), 3);
+    CHECK_EQ(m.items[2].value, 1);
+    CHECK_EQ(mdrt_menu_input(&m, MDRT_MENU_RIGHT), 3);
+    CHECK_EQ(mdrt_menu_input(&m, MDRT_MENU_RIGHT), 3);
+    CHECK_EQ(m.items[2].value, 0);                                    /* around the end */
+    CHECK_EQ(mdrt_menu_input(&m, MDRT_MENU_LEFT), 3);
+    CHECK_EQ(m.items[2].value, 2);
+    mdrt_menu_input(&m, MDRT_MENU_DOWN);
+    CHECK_EQ(mdrt_menu_input(&m, MDRT_MENU_RIGHT), 4);
+    CHECK_EQ(m.items[3].value, 60);
+    for (int i = 0; i < 4; i++) mdrt_menu_input(&m, MDRT_MENU_RIGHT);
+    CHECK_EQ(mdrt_menu_input(&m, MDRT_MENU_RIGHT), MDRT_MENU_NOTHING);  /* at its most */
+    CHECK_EQ(m.items[3].value, 100);
+    CHECK_EQ(mdrt_menu_input(&m, MDRT_MENU_OK), MDRT_MENU_NOTHING);
+    mdrt_menu_input(&m, MDRT_MENU_DOWN);
+    CHECK_EQ(mdrt_menu_input(&m, MDRT_MENU_OK), 5);
+    mdrt_menu_input(&m, MDRT_MENU_DOWN);
+    CHECK_EQ(m.sel, 0);                                               /* around the end */
+    mdrt_menu_input(&m, MDRT_MENU_UP);
+    CHECK_EQ(m.sel, 4);
+    CHECK_EQ(mdrt_menu_input(&m, MDRT_MENU_BACK), MDRT_MENU_CLOSE);
+    CHECK(mdrt_menu_find(&m, 4) == &m.items[3] && mdrt_menu_find(&m, 9) == NULL);
+    /* drawn: the picture darkened, the selected row's bar, the text in the font */
+    static uint32_t px[320 * 224];
+    for (int i = 0; i < 320 * 224; i++) px[i] = 0xC0C0C0;
+    mdrt_menu_select(&m, 1);
+    snprintf(m.subtitle, sizeof m.subtitle, "the line under the title");
+    snprintf(m.message, sizeof m.message, "A message: what went wrong");
+    mdrt_menu_draw(&m, px, 320, 224, 320);
+    CHECK_EQ(px[25 * 320 + 2], 0x303030);
+    CHECK_EQ(px[(2 + 3 * 10) * 320 + 300], 0x2A4C9C);                 /* the bar on row 3, the first item's */
+    CHECK_EQ(m.rows, 16);
+    const char *file = getenv("MDRT_MENU_PNG");
+    if (file) {
+        for (int y = 0; y < 224; y++) for (int x = 0; x < 320; x++) px[y * 320 + x] = (uint32_t)(x * 255 / 320) << 16 | (uint32_t)(y * 255 / 224) << 8 | 0x60;
+        mdrt_menu_draw(&m, px, 320, 224, 320);
+        size_t n = mdrt_png_encode(px, 320, 224, 320, NULL, 0);
+        uint8_t *b = malloc(n);
+        mdrt_png_encode(px, 320, 224, 320, b, n);
+        FILE *f = fopen(file, "wb");
+        if (f) { fwrite(b, 1, n, f); fclose(f); }
+        free(b);
+    }
+    for (int i = 0; i < 320 * 8; i++) px[i] = 0;
+    CHECK_EQ(mdrt_menu_text(px, 320, 224, 320, 0, 0, "A", 0xFFFFFF), 6);
+    CHECK(px[0] == 0 && px[1] == 0xFFFFFF && px[3] == 0xFFFFFF && px[4] == 0 && px[320] == 0xFFFFFF && px[320 + 4] == 0xFFFFFF);
+    /* a long list: LEFT / RIGHT move a page, the drawing keeps the selected one in sight */
+    mdrt_menu_page(&m, "Files");
+    for (int i = 0; i < 40; i++) mdrt_menu_add(&m, 100 + i, MDRT_ITEM_ACTION, "a file");
+    mdrt_menu_draw(&m, px, 320, 224, 320);
+    mdrt_menu_input(&m, MDRT_MENU_RIGHT);
+    CHECK_EQ(m.sel, 15);
+    mdrt_menu_input(&m, MDRT_MENU_RIGHT);
+    mdrt_menu_input(&m, MDRT_MENU_RIGHT);
+    CHECK_EQ(m.sel, 39);
+    mdrt_menu_draw(&m, px, 320, 224, 320);
+    CHECK_EQ(m.top, 24);
+    mdrt_menu_input(&m, MDRT_MENU_DOWN);
+    mdrt_menu_draw(&m, px, 320, 224, 320);
+    CHECK(m.sel == 0 && m.top == 0);
+    mdrt_menu_free(&m);
+}
+
 int main(void)
 {
     settings();
     views();
     png();
+    menu();
     return check_done("platform_unit");
 }

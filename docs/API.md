@@ -24,10 +24,25 @@ full screen, the scaling (sharp, integer, fit) and aspect (square pixels, 4:3), 
 sound device and latency, pausing when the window loses focus, fast-forward's speed, the
 screenshots' directory and every key of both pads and of the player's controls (on the function
 keys by default: `include/mdrt/platform_sdl2.h` lists them). `scale` (a window of N times the
-picture) and `aspect` (4:3) set this run's window over the settings'. The pieces with no SDL in them are there for another platform (a browser's) to use:
+picture) and `aspect` (4:3) set this run's window over the settings'.
+
+Esc opens the platform's menu (a controller's Back or Guide button too), drawn over the picture
+at the console's resolution while the game waits in `mdrt_wait_vblank`: the game's ROM, a reset,
+a state saved or loaded, the video, the sound (with the FM core and chip, changed as the game
+plays: `mdrt_set_fm`), options and every key. A client that runs a ROM gives the platform
+`rom_check` (are these bytes a ROM the game can run, or why not, in a few words) and `rom_use`
+(the ROM, before the game starts), and `rom_path` (the command line's) and `rom_default`: the
+platform reads the file, keeps the bytes, remembers the one the player chose in the settings and,
+when none will do, opens the menu on a file browser. The menu's reset and a new ROM stop the game
+(`mdrt_wait_vblank` returns nonzero), make a new console and call the game function again: it
+must then start from scratch, as at power on, whatever it kept in its own statics (NHL '94's
+`make golden-check` runs a restart against a fresh power on, frame by frame).
+
+The pieces with no SDL in them are there for another platform (a browser's) to use:
 `mdrt/settings.h` (the file's text, read and written back with its comments and unknown keys),
-`mdrt/view.h` (where the picture goes in a window for each scaling) and `mdrt/png.h` (a
-screenshot's PNG, in memory).
+`mdrt/view.h` (where the picture goes in a window for each scaling), `mdrt/png.h` (a
+screenshot's PNG, in memory) and `mdrt/menu.h` (the menu's pages, inputs and drawing, with
+pulseman's own font).
 
 Without a window, fill `c.platform` (present, audio, wait, input: any may be NULL), create the
 console with `mdrt_new(&c)` and call the game yourself.

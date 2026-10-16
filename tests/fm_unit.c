@@ -1,6 +1,7 @@
 /* WP4: the FM chip behind mdrt/fm.h: writes reach the core in order through the right ports (a
  * voice on channel 1 through ports 0 / 1 panned left, one on channel 4 through ports 2 / 3 panned
- * right, each side at its own pitch), the DAC, the register shadow, the reset. */
+ * right, each side at its own pitch), the DAC, the register shadow, the reset; and the console's
+ * chip changed between frames to every core and model, its voice going on at its pitch. */
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -131,6 +132,78 @@ static void core_checks(const char *core, int model)
     mdrt_fm_free(f);
 }
 
+/* ---- the console's chip changed between frames (mdrt_set_fm): the voice set up on one core goes
+ * on at its pitch on every other core and model after the next key-on */
+static int16_t out[2 * 48000];
+static int out_n;
+static void capture(void *user, const int16_t *s, int frames)
+{
+    (void)user;
+    for (int i = 0; i < frames && out_n < 48000; i++, out_n++) { out[2 * out_n] = s[2 * i]; out[2 * out_n + 1] = s[2 * i + 1]; }
+}
+
+static double out_frequency(int from)
+{
+    int ups = 0, first = -1, last = -1;
+    for (int i = from + 1; i < out_n; i++)
+        if (out[2 * (i - 1)] < 0 && out[2 * i] >= 0) { ups++; if (first < 0) first = i; last = i; }
+    return ups > 1 ? (ups - 1) * 48000.0 / (last - first) : 0;
+}
+
+static void frames(mdrt *m, int n)
+{
+    for (int i = 0; i < n; i++) { mdrt_vblank_end(m); mdrt_wait_vblank(m); }
+}
+
+static void switch_checks(void)
+{
+    mdrt_config c = { 0 };
+    c.audio_rate = 48000;
+    c.platform.audio = capture;
+    mdrt *m = mdrt_new(&c);
+    CHECK(m != NULL);
+    if (!m) return;
+    int fa = (int)lround(440.0 * (1 << 20) / (RATE * 8));
+    static const uint8_t op[6] = { 0x30, 0x40, 0x50, 0x60, 0x70, 0x80 };
+    static const uint8_t val[6] = { 0x01, 0x7F, 0x1F, 0x00, 0x00, 0x0F };
+    uint32_t at = 0;
+    for (int o = 0; o < 16; o += 4)                       /* the voice of core_checks, on channel 1 */
+        for (int r = 0; r < 6; r++) {
+            mdrt_ym_write(m, at, 0, (uint8_t)(op[r] + o));
+            mdrt_ym_write(m, at + 600, 1, r == 1 && o == 12 ? 0x00 : val[r]);
+            at += 1400;
+        }
+    static const uint8_t regs[5][2] = { { 0xB0, 0x07 }, { 0xB4, 0xC0 }, { 0xA4, 0 }, { 0xA0, 0 }, { 0x28, 0xF0 } };
+    for (int r = 0; r < 5; r++) {
+        uint8_t v = r == 2 ? (uint8_t)(4 << 3 | fa >> 8) : r == 3 ? (uint8_t)fa : regs[r][1];
+        mdrt_ym_write(m, at, 0, regs[r][0]);
+        mdrt_ym_write(m, at + 600, 1, v);
+        at += 1400;
+    }
+    frames(m, 2);
+    CHECK_EQ(mdrt_set_fm(m, "none", MDRT_FM_YM2612), -1);
+    for (int i = 0; mdrt_fm_cores(i); i++)
+        for (int model = MDRT_FM_YM2612; model <= MDRT_FM_YM3438; model++) {
+            const char *core = mdrt_fm_cores(i);
+            CHECK_EQ(mdrt_set_fm(m, core, model), 0);
+            CHECK(!strcmp(mdrt_fm_core_of(mdrt_get_fm(m)), core) && mdrt_fm_model(mdrt_get_fm(m)) == model);
+            CHECK_EQ(mdrt_fm_reg(mdrt_get_fm(m), 0, 0xA0), (uint8_t)fa);
+            mdrt_ym_write(m, 0, 0, 0x28);                 /* key off, then on */
+            mdrt_ym_write(m, 600, 1, 0x00);
+            mdrt_ym_write(m, 2000, 0, 0x28);
+            mdrt_ym_write(m, 2600, 1, 0xF0);
+            out_n = 0;
+            frames(m, 30);
+            double hz = out_frequency(4800), level = 0;
+            for (int s = 4800; s < out_n; s++) level += (double)out[2 * s] * out[2 * s];
+            level = sqrt(level / (out_n - 4800));
+            printf("  switched to %s, %s: %.2f Hz, level %.0f\n", core, model ? "YM3438" : "YM2612", hz, level);
+            CHECK(fabs(hz - fa * RATE * 8 / (1 << 20)) < 1);
+            CHECK(level > 1000);
+        }
+    mdrt_free(m);
+}
+
 int main(void)
 {
     printf("  cores: the default %s;", mdrt_fm_core());
@@ -156,5 +229,6 @@ int main(void)
         CHECK(off[0] > 100);
         CHECK(fabs(off[1]) < 1);
     }
+    switch_checks();
     return check_done("fm_unit");
 }

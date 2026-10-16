@@ -3,14 +3,20 @@
  * rate at full speed, with fast-forward held and in slow motion; pause and a frame step; pausing
  * when the window loses focus (and the keys let go); a screenshot (its size and colour); the
  * volume and mute in the sound written to disk; the settings kept in the file in the directory it
- * runs in, with its comment and an unknown key; and, run again, keys bound in that file by hand. */
+ * runs in, with its comment and an unknown key; run again, keys bound in that file by hand; and
+ * the menu: a ROM chosen in its browser (one the client turns down first), the video and FM chip
+ * changed, a reset, another ROM while playing, a key changed by pressing it, and the ROM chosen
+ * last found again on the next start. */
 #include <SDL2/SDL.h>
 #include <dirent.h>
+#include <sys/stat.h>
 #ifdef _WIN32
 #include <direct.h>
 #define chdir _chdir
+#define make_dir(d) _mkdir(d)
 #else
 #include <unistd.h>
+#define make_dir(d) mkdir(d, 0777)
 #endif
 #include <stdlib.h>
 #include <string.h>
@@ -21,8 +27,17 @@
 #define BACKDROP 0x0E42                                   /* the picture: the backdrop's colour */
 
 static const char *const shots = "shots", *const sound = "sound.raw", *const settings_path = "settings.ini";
-static SDL_atomic_t frame, held;
+static SDL_atomic_t frame, held, starts, fm_second;
 static int run;
+static char rom_seen[16];                                 /* the start of the ROM the client was given */
+
+static void quit_event(void)
+{
+    SDL_Event e;
+    SDL_zero(e);
+    e.type = SDL_QUIT;
+    SDL_PushEvent(&e);
+}
 
 static void key(SDL_Scancode k, int down)
 {
@@ -70,7 +85,7 @@ static int player(void *user)
         key(SDL_SCANCODE_RETURN, 0); key(SDL_SCANCODE_Z, 0); key(SDL_SCANCODE_K, 1); SDL_Delay(200);
         CHECK_EQ(SDL_AtomicGet(&held) & 0xFFF, MDRT_PAD_B);
         key(SDL_SCANCODE_K, 0);
-        press(SDL_SCANCODE_Q);                            /* (quit, here) */
+        quit_event();
         return 0;
     }
     double normal = rate(1000);
@@ -119,13 +134,105 @@ static int player(void *user)
     key(SDL_SCANCODE_F6, 0);
     press(SDL_SCANCODE_F1);
     SDL_Delay(800);
-    press(SDL_SCANCODE_ESCAPE);
+    quit_event();
     return 0;
+}
+
+/* the menu, as a player works it: run 3 starts with no ROM it can find */
+static void keys(SDL_Scancode k, int n) { for (int i = 0; i < n; i++) { press(k); SDL_Delay(40); } }
+
+static int menu_player(void *user)
+{
+    (void)user;
+    while (!SDL_WasInit(SDL_INIT_VIDEO)) SDL_Delay(10);
+    SDL_Delay(500);
+    if (run == 4) {                                       /* the ROM chosen last: playing at once */
+        SDL_Delay(300);
+        CHECK_EQ(SDL_AtomicGet(&starts), 1);
+        CHECK(!strcmp(rom_seen, "GOOD-other"));
+        quit_event();
+        return 0;
+    }
+    CHECK_EQ(SDL_AtomicGet(&starts), 0);                  /* the ROM page: [.., roms/, shots/, bad.gen, good.gen] */
+    keys(SDL_SCANCODE_RETURN, 1);                         /* bad.gen, selected first: turned down */
+    SDL_Delay(300);
+    CHECK_EQ(SDL_AtomicGet(&starts), 0);
+    keys(SDL_SCANCODE_DOWN, 1);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* good.gen: the game starts */
+    SDL_Delay(500);
+    CHECK_EQ(SDL_AtomicGet(&starts), 1);
+    CHECK(!strcmp(rom_seen, "GOOD-good"));
+    CHECK(SDL_AtomicGet(&frame) > 10);
+    /* the menu: [Resume, Game ROM, Reset, Save, Load, Video, Sound, Options, Keys, Quit] */
+    keys(SDL_SCANCODE_ESCAPE, 1);
+    SDL_Delay(200);
+    int f0 = SDL_AtomicGet(&frame);
+    SDL_Delay(300);
+    CHECK_EQ(SDL_AtomicGet(&frame), f0);                  /* the game waits */
+    keys(SDL_SCANCODE_DOWN, 5);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* Video: [Scaling, Aspect, Full screen, Back] */
+    keys(SDL_SCANCODE_RIGHT, 1);                          /* integer (run 1's file) -> fit */
+    keys(SDL_SCANCODE_ESCAPE, 1);
+    keys(SDL_SCANCODE_DOWN, 1);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* Sound: [Volume, Mute, FM core, FM chip, Back] */
+    keys(SDL_SCANCODE_DOWN, 2);
+    keys(SDL_SCANCODE_RIGHT, 1);                          /* the next FM core */
+    keys(SDL_SCANCODE_ESCAPE, 2);                         /* back, and out */
+    SDL_Delay(300);
+    CHECK(SDL_AtomicGet(&frame) > f0 + 5);
+    CHECK_EQ(SDL_AtomicGet(&fm_second), mdrt_fm_cores(1) != NULL);   /* (changed between frames) */
+    keys(SDL_SCANCODE_ESCAPE, 1);
+    keys(SDL_SCANCODE_DOWN, 2);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* Reset: chosen once, asked again */
+    SDL_Delay(200);
+    CHECK_EQ(SDL_AtomicGet(&starts), 1);
+    keys(SDL_SCANCODE_RETURN, 1);
+    SDL_Delay(400);
+    CHECK_EQ(SDL_AtomicGet(&starts), 2);
+    f0 = SDL_AtomicGet(&frame);
+    SDL_Delay(200);
+    CHECK(SDL_AtomicGet(&frame) > f0);                    /* playing again, the menu closed */
+    keys(SDL_SCANCODE_ESCAPE, 1);
+    keys(SDL_SCANCODE_DOWN, 1);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* Game ROM: good.gen selected */
+    keys(SDL_SCANCODE_UP, 3);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* roms/: [.., other.gen] */
+    keys(SDL_SCANCODE_RETURN, 2);                         /* other.gen, chosen again: the game starts with it */
+    SDL_Delay(400);
+    CHECK_EQ(SDL_AtomicGet(&starts), 3);
+    CHECK(!strcmp(rom_seen, "GOOD-other"));
+    keys(SDL_SCANCODE_ESCAPE, 1);
+    keys(SDL_SCANCODE_DOWN, 8);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* Keys: pad 1's up, down ... */
+    keys(SDL_SCANCODE_DOWN, 7);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* Pad 1 Start: press the new key */
+    keys(SDL_SCANCODE_HOME, 1);
+    keys(SDL_SCANCODE_ESCAPE, 2);
+    SDL_Delay(200);
+    key(SDL_SCANCODE_HOME, 1);
+    SDL_Delay(200);
+    CHECK_EQ(SDL_AtomicGet(&held) & MDRT_PAD_START, MDRT_PAD_START);
+    key(SDL_SCANCODE_HOME, 0);
+    quit_event();
+    return 0;
+}
+
+static const char *rom_check(const uint8_t *rom, size_t size, void *user)
+{
+    (void)user;
+    return size >= 4 && !memcmp(rom, "GOOD", 4) ? NULL : "not a ROM this game can run";
+}
+
+static void rom_use(const uint8_t *rom, size_t size, void *user)
+{
+    (void)user;
+    snprintf(rom_seen, sizeof rom_seen, "%.*s", (int)(size < 15 ? size : 15), (const char *)rom);
 }
 
 static void game(mdrt *m, void *user)
 {
     (void)user;
+    SDL_AtomicAdd(&starts, 1);
     mdrt_vdp *v = mdrt_get_vdp(m);
     static const uint8_t regs[] = { 0x04, 0x44, 0x30, 0x3C, 0x07, 0x6C, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x81, 0x37, 0x00, 0x02, 0x01 };
     for (int r = 0; r < (int)sizeof regs; r++) mdrt_vdp_ctrl16(v, (uint16_t)(0x8000 | r << 8 | regs[r]));
@@ -134,14 +241,15 @@ static void game(mdrt *m, void *user)
     mdrt_psg_port(m, 0, 0x80 | (254 & 15));               /* a 440 Hz square, loud */
     mdrt_psg_port(m, 100, 254 >> 4);
     mdrt_psg_port(m, 200, 0x90);
-    SDL_Thread *t = SDL_CreateThread(player, "player", NULL);
+    SDL_Thread *t = run <= 2 ? SDL_CreateThread(player, "player", NULL) : NULL;
     for (;;) {
         mdrt_vblank_end(m);
         if (mdrt_wait_vblank(m)) break;
         SDL_AtomicSet(&held, mdrt_get_pads(m)->buttons[0]);
+        SDL_AtomicSet(&fm_second, mdrt_fm_cores(1) && !strcmp(mdrt_fm_core_of(mdrt_get_fm(m)), mdrt_fm_cores(1)));
         SDL_AtomicAdd(&frame, 1);
     }
-    SDL_WaitThread(t, NULL);
+    if (t) SDL_WaitThread(t, NULL);
 }
 
 static char *slurp(const char *path, long *len)
@@ -168,10 +276,20 @@ static int play(void)
 {
     SDL_AtomicSet(&frame, 0);
     SDL_AtomicSet(&held, 0);
+    SDL_AtomicSet(&starts, 0);
     mdrt_config c = { 0 };
     c.audio_rate = 48000;
     mdrt_sdl_options o = { .title = "platform test", .app = "platform-test" };   /* (settings.ini here) */
-    return mdrt_sdl_run(&c, &o, game, NULL);
+    SDL_Thread *t = NULL;
+    if (run >= 3) {
+        o.rom_default = "missing.gen";
+        o.rom_check = rom_check;
+        o.rom_use = rom_use;
+        t = SDL_CreateThread(menu_player, "menu player", NULL);
+    }
+    int r = mdrt_sdl_run(&c, &o, game, NULL);
+    if (t) SDL_WaitThread(t, NULL);
+    return r;
 }
 
 /* the screenshot: one PNG, the picture's size, the backdrop's colour */
@@ -232,6 +350,7 @@ static void check_settings(void)
         "# the test's own comment\n", "mystery.key = kept\n", "general.screenshots = shots\n", "general.fast_forward = 4\n",
         "audio.volume = 80\n", "audio.mute = 1\n", "video.scale = integer\n", "video.aspect = square\n",
         "pad1.start = Return\n", "pad2.a = Q\n", "key.screenshot = F12\n", "key.slow_motion = F5\n", "key.mute = F1\n",
+        "key.menu = Escape\n", "game.rom =\n",
     };
     for (size_t i = 0; i < sizeof want / sizeof *want; i++)
         if (!strstr(t, want[i])) { printf("  settings: no \"%s\"\n", want[i]); CHECK(0); }
@@ -262,10 +381,9 @@ int main(int argc, char **argv)
     long len = 0;
     char *t = slurp(settings_path, &len), *edited = t ? malloc((size_t)len + 64) : NULL;
     if (edited) {
-        const char *rules[][2] = { { "pad1.start = Return\n", "pad1.start = S\n" }, { "pad1.a = Z\n", "pad1.a =\n" }, { "pad1.b = X\n", "pad1.b = K\n" },
-                                   { "key.quit = Escape\n", "key.quit = Q\n" } };
+        const char *rules[][2] = { { "pad1.start = Return\n", "pad1.start = S\n" }, { "pad1.a = Z\n", "pad1.a =\n" }, { "pad1.b = X\n", "pad1.b = K\n" } };
         strcpy(edited, t);
-        for (size_t i = 0; i < 4; i++) {
+        for (size_t i = 0; i < 3; i++) {
             char *at = strstr(edited, rules[i][0]);
             CHECK(at != NULL);
             if (at) { memmove(at + strlen(rules[i][1]), at + strlen(rules[i][0]), strlen(at + strlen(rules[i][0])) + 1); memcpy(at, rules[i][1], strlen(rules[i][1])); }
@@ -274,6 +392,19 @@ int main(int argc, char **argv)
     }
     free(t); free(edited);
     run = 2;
+    CHECK_EQ(play(), 0);
+    /* the menu: ROMs the test's client checks ("GOOD" at the start), one in a folder */
+    make_dir("roms");
+    spit("bad.gen", "BAD!");
+    spit("good.gen", "GOOD-good");
+    spit("roms/other.gen", "GOOD-other");
+    run = 3;
+    CHECK_EQ(play(), 0);
+    t = slurp(settings_path, &len);
+    CHECK(t && strstr(t, "game.rom = roms/other.gen\n") && strstr(t, "video.scale = fit\n") && strstr(t, "pad1.start = Home\n"));
+    if (t && mdrt_fm_cores(1)) { char want[64]; snprintf(want, sizeof want, "audio.fm_core = %s\n", mdrt_fm_cores(1)); CHECK(strstr(t, want) != NULL); }
+    free(t);
+    run = 4;
     CHECK_EQ(play(), 0);
     return check_done("platform_test");
 }

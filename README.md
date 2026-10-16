@@ -107,6 +107,18 @@ This README carries the status.
   the PNG decoded back; `make sdl-check` plays the platform from a thread pressing keys under SDL's
   dummy video and disk sound (frame rates, pause and step, focus, the screenshot, the volume and
   mute in the sound written, the file, keys rebound by hand).
+- 2026-10-16, the menu (Esc, or a controller's Back or Guide): `mdrt/menu.h` draws pages over the
+  picture at the console's resolution in pulseman's own 5 x 8 font and works them with six inputs.
+  The SDL2 platform's pages: the game's ROM (a file browser; the client checks each file through
+  `rom_check` and gets it through `rom_use`; the one chosen is remembered, and with none the game
+  starts on that page), a reset (a new console, the game function called again), states, video,
+  sound with the FM core and chip changed as the game plays (`mdrt_set_fm`: a new chip given the
+  old one's registers between frames), options, and every key changed by pressing it. The game
+  waits while it is open; the key that closes it does not reach the game. `fm_unit` switches a
+  console's chip to every core and model and hears the voice go on at its pitch; `platform_unit`
+  works a page and draws it; `make sdl-check` works the menu as a player (a ROM turned down, one
+  taken, the video and FM chip changed, a reset, another ROM in play, a key changed, the ROM found
+  again on the next start).
 
 `make check` (GCC, sanitizers; both FM cores, each against the vectors); `make sdl-check` (the SDL2
 platform, about 15 s in real time; `MODE=release` to time fast-forward too); `CC=clang CXX=clang++

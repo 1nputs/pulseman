@@ -130,6 +130,39 @@ mdrt_vdp *mdrt_get_vdp(mdrt *m) { return &m->vdp; }
 mdrt_pads *mdrt_get_pads(mdrt *m) { return &m->pads; }
 mdrt_sram *mdrt_get_sram(mdrt *m) { return &m->sram; }
 mdrt_fm *mdrt_get_fm(mdrt *m) { return m->fm; }
+
+/* a write to the new chip, then the time the hardware's busy flag asks for (the samples dropped) */
+static void fm_copy_write(mdrt_fm *f, int port, uint8_t value, uint32_t mclk)
+{
+    int16_t spare[2 * 4];
+    mdrt_fm_write(f, port, value);
+    mdrt_fm_run(f, mclk, spare, 4);
+}
+
+int mdrt_set_fm(mdrt *m, const char *core, int model)
+{
+    mdrt_fm *f = mdrt_fm_new_core(core, model);
+    if (!f) return -1;
+    /* (the chip latches a frequency's high byte until its low one is written: one latch for the
+     * channels, one for channel 3's special mode, so each pair goes together) */
+    static const uint8_t order[] = { 0xA4, 0xA0, 0xA5, 0xA1, 0xA6, 0xA2, 0xAC, 0xA8, 0xAD, 0xA9, 0xAE, 0xAA };
+    for (int half = 0; half < 2; half++) {               /* every register but the key and DAC data ones */
+        for (int r = 0x21; r <= 0xB6; r++) {
+            if (r == 0x28 || r == 0x2A || (half && r < 0x30) || (r >= 0xA0 && r < 0xB0)) continue;
+            fm_copy_write(f, half * 2, (uint8_t)r, 17 * MDRT_FM_CYCLE_MCLKS);
+            fm_copy_write(f, half * 2 + 1, mdrt_fm_reg(m->fm, half, (uint8_t)r), 32 * MDRT_FM_CYCLE_MCLKS);
+        }
+        for (size_t i = 0; i < sizeof order; i++) {      /* each frequency: its high byte, then its low */
+            fm_copy_write(f, half * 2, order[i], 17 * MDRT_FM_CYCLE_MCLKS);
+            fm_copy_write(f, half * 2 + 1, mdrt_fm_reg(m->fm, half, order[i]), 32 * MDRT_FM_CYCLE_MCLKS);
+        }
+    }
+    mdrt_fm_free(m->fm);
+    m->fm = f;
+    m->cfg.fm_core = mdrt_fm_core_of(f);
+    m->cfg.fm_model = model;
+    return 0;
+}
 uint32_t mdrt_master_clock(const mdrt *m) { return master_clock(m); }
 uint32_t mdrt_frame_mclks(const mdrt *m) { return m->frame; }
 uint64_t mdrt_frame_count(const mdrt *m) { return m->frames; }

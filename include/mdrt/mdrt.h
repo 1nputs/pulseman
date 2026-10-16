@@ -73,6 +73,11 @@ mdrt_vdp *mdrt_get_vdp(mdrt *m);
 mdrt_pads *mdrt_get_pads(mdrt *m);
 mdrt_sram *mdrt_get_sram(mdrt *m);
 mdrt_fm *mdrt_get_fm(mdrt *m);                  /* (its core and model: mdrt_fm_core_of, mdrt_fm_model) */
+/* another FM chip in place of the console's, between frames (on the game's thread: in the
+ * platform's wait, or by the client between handshakes): the core named (NULL: the default) and the
+ * model, given the registers the old chip had. Notes sounding stop until their next key-on. 0, or
+ * -1 when the build has no such core (nothing changed). The player's choice in the SDL2 menu. */
+int mdrt_set_fm(mdrt *m, const char *core, int model);
 
 /* the master clock in Hz, the frame's length in master clocks (896040 NTSC, 1070460 PAL) and
  * frames completed */
