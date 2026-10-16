@@ -1,4 +1,4 @@
-# Using md-runtime from a client
+# Using pulseman from a client
 
 A client is a game reimplemented in C whose hardware accesses were 68k bus accesses. It links
 `build/release/libmdrt.a` (and `libmdrt_sdl2.a` for a window), includes `mdrt/mdrt.h` (and
@@ -164,7 +164,7 @@ model and loads only into a console with the same.
 
 `mdrt_record(m, MDRT_TRACE_VDP / _PADS / _SOUND, sink, user)` has the console write the trace
 formats of `docs/VECTORS.md` to `sink(user, bytes, n)` from then on (the core touches no files:
-the client's sink does); a NULL sink ends one. md-runtime's tests replay them as they replay the
+the client's sink does); a NULL sink ends one. pulseman's tests replay them as they replay the
 oracle's: the pictures, VDP states and pad reads must come out the same and the sound sample for
 sample, so a run recorded with one build is a test of the next. Start the VDP trace after the
 client has set any state outside the ports (a snapshot), since the trace begins with the VDP's

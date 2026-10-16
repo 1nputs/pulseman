@@ -140,6 +140,6 @@ int main(int argc, char **argv)
     }
     if (!vid.b && !snd.b) { fprintf(stderr, "usage: %s [FILE.vdptrace] [FILE.sndtrace]\n", argv[0]); return 2; }
     mdrt_config c = { 0 };
-    mdrt_sdl_options o = { "md-runtime trace player", 3, 0, NULL };
+    mdrt_sdl_options o = { "pulseman trace player", 3, 0, NULL };
     return mdrt_sdl_run(&c, &o, game, NULL);
 }

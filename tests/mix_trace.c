@@ -35,7 +35,7 @@ static int replay(const char *path, const char *name, const char *core)
     sndtrace t;
     if (!sndtrace_load(&t, path)) { printf("  %s: not a version 3 sndtrace\n", name); check_failures++; return 0; }
     if (t.psg_preamp == 0 || t.fm_preamp == 0 || !t.power_on) { sndtrace_free(&t); return 0; }
-    int own = (t.flags & 4) != 0;                         /* md-runtime's own recording: its core only, sample for sample */
+    int own = (t.flags & 4) != 0;                         /* pulseman's own recording: its core only, sample for sample */
     if (own && strcmp(core, (t.flags & 2) ? "nuked" : "ymfm")) { sndtrace_free(&t); return 0; }
     size_t cap = (size_t)((double)t.end / MDRT_MASTER_CLOCK_NTSC * t.rate) + 64, made = 0;
     int16_t *ours = calloc(2 * cap, sizeof *ours);
@@ -77,7 +77,7 @@ static int replay(const char *path, const char *name, const char *core)
     if (own) {
         size_t n = made < t.frames ? made : t.frames, same = 0;
         for (size_t i = 0; i < 2 * n; i++) same += ours[i] == t.audio[i];
-        printf("  %s, %s: md-runtime's own recording: %zu of %zu samples the same (%zu made, %zu recorded)\n",
+        printf("  %s, %s: pulseman's own recording: %zu of %zu samples the same (%zu made, %zu recorded)\n",
                name, core, same, 2 * n, made, t.frames);
         CHECK_EQ(made, t.frames);
         CHECK_EQ(same, 2 * n);

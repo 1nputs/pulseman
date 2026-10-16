@@ -8,7 +8,8 @@ never committed (they come from copyrighted programs, apart from the test ROM's)
 
 ## Where they live
 
-`make check` reads every vector in `$MDRT_VECTORS` (default `../ninety-four/out/vectors`). With no
+`make check` reads every vector in `$MDRT_VECTORS` (default `../ninety-four/out/vectors`, or
+`../../out/vectors` when pulseman is ninety-four's submodule). With no
 directory, or no vector of a kind, the vector tests say so and are skipped; set
 `MDRT_REQUIRE_VECTORS=1` on a machine that has the vectors and a skip is a failure instead, so a
 wrong path cannot pass. The first client's `make runtime-check` sets both.
@@ -104,7 +105,7 @@ ports its Z80 program (the first client checks its relay against every write's t
 runtime's chip tests take the writes and compare their audio with the oracle's by loudness and
 spectrum in 50 ms windows, since the cores are different emulations.
 
-## Recorded by md-runtime
+## Recorded by pulseman
 
 `mdrt_record` writes the same three formats (`docs/API.md`, "Recording"): the VDP trace with each
 access's time on the composition's clock, the pad trace with byte accesses, the sound trace with

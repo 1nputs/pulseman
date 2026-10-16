@@ -178,7 +178,7 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
     s->o = o; s->cfg = cfg; s->game = game; s->user = user;
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER) != 0) { fprintf(stderr, "SDL: %s\n", SDL_GetError()); return 1; }
     int scale = o->scale > 0 ? o->scale : 3;
-    s->win = SDL_CreateWindow(o->title ? o->title : "md-runtime", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
+    s->win = SDL_CreateWindow(o->title ? o->title : "pulseman", SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
                               (o->aspect ? 299 : 320) * scale, 224 * scale, SDL_WINDOW_RESIZABLE);
     s->ren = s->win ? SDL_CreateRenderer(s->win, -1, SDL_RENDERER_ACCELERATED) : NULL;
     if (s->win && !s->ren) s->ren = SDL_CreateRenderer(s->win, -1, SDL_RENDERER_SOFTWARE);   /* no GPU */

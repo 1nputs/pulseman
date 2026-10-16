@@ -2,7 +2,9 @@
 # Assemble the test ROM: tests/rom/build.sh [VASM] -> build/vdptest.bin
 set -e
 cd "$(dirname "$0")/../.."
-VASM="${1:-${VASM:-../ninety-four/ref/vasm-src/vasm/vasmm68k_mot}}"
+DEFAULT=../ninety-four/ref/vasm-src/vasm/vasmm68k_mot                   # (ninety-four beside it,
+[ -x "$DEFAULT" ] || DEFAULT=../../ref/vasm-src/vasm/vasmm68k_mot         #  or around it as a submodule)
+VASM="${1:-${VASM:-$DEFAULT}}"
 mkdir -p build
 "$VASM" -quiet -Fbin -m68000 -o build/vdptest.bin tests/rom/vdptest.s
 # pad to 256 KB

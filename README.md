@@ -1,10 +1,14 @@
-# md-runtime
+# pulseman
+
+*Named for the hero of Game Freak's 1994 Mega Drive game, who lives inside the circuitry.*
 
 A small, permissively licensed, modular Mega Drive / Genesis hardware runtime in C11: the VDP
 (state machine and renderer), PSG, YM2612 interface, controller ports and save RAM, with an
 SDL2 platform layer for Linux. A WebAssembly build for the browser is planned (WP8, not started).
-It is the runtime for games reimplemented in C, first the NHL '94 port in the sibling `ninety-four`
-repository, and is meant to be reused by later ports and other projects.
+It is the runtime for games reimplemented in C, first NHL '94 in
+[ninety-four](https://github.com/1nputs/ninety-four) (which has it as a git submodule), and is
+meant to be reused by later ports and other projects. The C API is prefixed `mdrt_` (Mega Drive
+runtime).
 
 No 68k or Z80 emulation: the game logic is C, and the game's own sound relay drives the sound
 chips directly.

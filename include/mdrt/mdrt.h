@@ -1,4 +1,4 @@
-/* md-runtime: the composition of the hardware modules and the timing constants.
+/* pulseman: the composition of the hardware modules and the timing constants.
  * See docs/API.md. */
 #ifndef MDRT_MDRT_H
 #define MDRT_MDRT_H
@@ -117,7 +117,7 @@ void mdrt_bus_write32(mdrt *m, uint32_t addr, uint32_t value);
  * MDRT_TRACE_PADS a .padtrace (the I/O chip's accesses, the buttons each frame), MDRT_TRACE_SOUND a
  * .sndtrace (every sound write at its master clock as the chips take it, and the console's own
  * audio; flags bit 2 says so, bit 1 that the FM core was Nuked-OPN2, bit 0 that the recording began
- * at the first frame). md-runtime's tests replay them as they replay the oracle's, so a run of a
+ * at the first frame). pulseman's tests replay them as they replay the oracle's, so a run of a
  * release is a test of the next. A NULL sink ends the trace (its END tag) and stops. */
 enum { MDRT_TRACE_VDP, MDRT_TRACE_PADS, MDRT_TRACE_SOUND };
 typedef void (*mdrt_sink_fn)(void *user, const void *bytes, size_t n);

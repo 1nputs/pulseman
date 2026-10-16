@@ -195,7 +195,7 @@ typedef struct
     Bit8u status;
     Bit32u status_time;
 
-    /* md-runtime: the chip type per chip (was a static: OPN2_SetChipType) */
+    /* pulseman: the chip type per chip (was a static: OPN2_SetChipType) */
     Bit32u chip_type;
 } ym3438_t;
 
