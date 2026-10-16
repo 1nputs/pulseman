@@ -3,6 +3,7 @@
  * answers the game's reads. */
 #ifndef MDRT_PAD_H
 #define MDRT_PAD_H
+#include <stddef.h>
 #include <stdint.h>
 
 /* buttons, in the bit order the 3-button protocol returns them */
@@ -30,5 +31,9 @@ void mdrt_pad_write(mdrt_pads *p, uint32_t addr, uint8_t value);
 /* a frame boundary: the 6-button pad's TH counter times out (it resets after about 1.5 ms
  * without a transition, and games read the pads once a frame) */
 void mdrt_pads_frame(mdrt_pads *p);
+/* the I/O chip and the pads as bytes: save returns the size (out NULL: only that); load returns
+ * 0, or -1 for the wrong size (then nothing changed) */
+size_t mdrt_pads_save(const mdrt_pads *p, uint8_t *out);
+int mdrt_pads_load(mdrt_pads *p, const uint8_t *in, size_t size);
 
 #endif

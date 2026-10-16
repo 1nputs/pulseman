@@ -17,5 +17,9 @@ void mdrt_sram_init(mdrt_sram *s, size_t size);
  * $FF and ignore writes */
 uint8_t mdrt_sram_read8(const mdrt_sram *s, uint32_t off);
 void mdrt_sram_write8(mdrt_sram *s, uint32_t off, uint8_t v);
+/* the save RAM's bytes (size of them): save returns the size (out NULL: only that); load returns
+ * 0, or -1 for the wrong size (then nothing changed). A load that changes them marks them dirty. */
+size_t mdrt_sram_save(const mdrt_sram *s, uint8_t *out);
+int mdrt_sram_load(mdrt_sram *s, const uint8_t *in, size_t size);
 
 #endif

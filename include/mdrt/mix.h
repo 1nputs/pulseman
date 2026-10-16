@@ -5,6 +5,7 @@
  * 20 kHz low-pass. Integer arithmetic only: the same samples on every host. */
 #ifndef MDRT_MIX_H
 #define MDRT_MIX_H
+#include <stddef.h>
 #include <stdint.h>
 
 /* the gains of the FM and PSG outputs, in 1/32768ths: Genesis Plus GX's balance (FM preamp 100%,
@@ -32,5 +33,9 @@ void mdrt_mix_set_gains(mdrt_mix *m, int32_t fm_gain, int32_t psg_gain);
  * output samples they complete (left, right pairs) go to out; returns how many. out has room for
  * n * rate / 53267 + 2 of them. The output is 16 input samples (0.3 ms) late. */
 int mdrt_mix_run(mdrt_mix *m, const int16_t *fm, const int16_t *psg, int n, int16_t *out);
+/* the mixer as bytes (its settings and its history): save returns the size (out NULL: only that);
+ * load returns 0, or -1 for the wrong size (then nothing changed) */
+size_t mdrt_mix_save(const mdrt_mix *m, uint8_t *out);
+int mdrt_mix_load(mdrt_mix *m, const uint8_t *in, size_t size);
 
 #endif

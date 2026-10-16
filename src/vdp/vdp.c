@@ -2,6 +2,7 @@
  * docs/HARDWARE.md). */
 #include <string.h>
 #include "mdrt/vdp.h"
+#include "../state.h"
 
 void mdrt_vdp_init(mdrt_vdp *v, int pal)
 {
@@ -248,4 +249,42 @@ void mdrt_vdp_set_state(mdrt_vdp *v, const mdrt_vdp_state *in)
     v->code = 0;
     uint32_t base = sat_base(v);
     for (uint32_t i = 0; i < sizeof v->sat; i++) v->sat[i] = v->s.vram[(base + i) & 0xFFFF];
+}
+
+static void save(const mdrt_vdp *v, st_out *o)
+{
+    st_put(o, v->s.reg, 24);
+    st_put(o, v->s.vram, sizeof v->s.vram);
+    st_u16s(o, v->s.cram, 64);
+    st_u16s(o, v->s.vsram, 40);
+    st_put(o, v->sat, sizeof v->sat);
+    st_u16(o, v->addr); st_u16(o, v->addr_hi);
+    st_u8(o, v->code); st_u8(o, v->pending); st_u8(o, v->fill); st_u8(o, v->fifo_idx);
+    st_u16s(o, v->fifo, 4);
+    st_u8(o, v->pal); st_u8(o, v->vblank); st_u8(o, v->vint_pending);
+    st_u16(o, v->line); st_u16(o, v->hpos);
+}
+
+size_t mdrt_vdp_save(const mdrt_vdp *v, uint8_t *out)
+{
+    st_out o = { out, 0 };
+    save(v, &o);
+    return o.n;
+}
+
+int mdrt_vdp_load(mdrt_vdp *v, const uint8_t *in, size_t size)
+{
+    if (size != mdrt_vdp_save(v, NULL)) return -1;
+    st_in i = { in, 0, size, 0 };
+    st_get(&i, v->s.reg, 24);
+    st_get(&i, v->s.vram, sizeof v->s.vram);
+    st_g16s(&i, v->s.cram, 64);
+    st_g16s(&i, v->s.vsram, 40);
+    st_get(&i, v->sat, sizeof v->sat);
+    v->addr = st_g16(&i); v->addr_hi = st_g16(&i);
+    v->code = st_g8(&i); v->pending = st_g8(&i); v->fill = st_g8(&i); v->fifo_idx = st_g8(&i);
+    st_g16s(&i, v->fifo, 4);
+    v->pal = st_g8(&i); v->vblank = st_g8(&i); v->vint_pending = st_g8(&i);
+    v->line = st_g16(&i); v->hpos = st_g16(&i);
+    return 0;
 }

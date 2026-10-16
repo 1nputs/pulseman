@@ -6,7 +6,8 @@
  *
  * Keys: pad 1 arrows, Z / X / C = A / B / C, Enter = Start; pad 2 I J K L, Q / W / E, Tab. The
  * first two game controllers are pads 1 and 2 (X / A / B = A / B / C, Start). Esc or closing the
- * window quits, P pauses, F11 or Alt+Enter toggles full screen. */
+ * window quits, P pauses, F11 or Alt+Enter toggles full screen. F5 and F9 ask the game to save and
+ * load a state, Backspace held to step back (mdrt_requests). */
 #ifndef MDRT_PLATFORM_SDL2_H
 #define MDRT_PLATFORM_SDL2_H
 #include "mdrt/mdrt.h"

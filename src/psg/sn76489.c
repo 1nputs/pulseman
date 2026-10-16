@@ -19,6 +19,7 @@
 #include <string.h>
 #include "mdrt/psg.h"
 #include "kernel.h"
+#include "../state.h"
 
 /* MDRT_PSG_MAX x 10^(-2n / 20), n = 0..14; 15 is off */
 static const int16_t level[16] = {
@@ -122,4 +123,39 @@ void mdrt_psg_render(mdrt_psg *p, int16_t *out, int n)
             if (now != p->level) { add_step(p, now - p->level, p->sample, 0); p->level = now; }
         }
     }
+}
+
+size_t mdrt_psg_save(const mdrt_psg *p, uint8_t *out)
+{
+    st_out o = { out, 0 };
+    st_u16s(&o, p->reg, 8);
+    st_u8(&o, p->latch);
+    st_u16s(&o, p->count, 4);
+    st_put(&o, p->flip, 4);
+    st_u16(&o, p->lfsr);
+    st_u8(&o, p->noise_out);
+    st_u16(&o, p->phase);
+    st_u32(&o, (uint32_t)p->level);
+    st_u32(&o, p->sample);
+    st_u32s(&o, p->pending, 64);
+    st_u64(&o, (uint64_t)p->sum);
+    return o.n;
+}
+
+int mdrt_psg_load(mdrt_psg *p, const uint8_t *in, size_t size)
+{
+    if (size != mdrt_psg_save(p, NULL)) return -1;
+    st_in i = { in, 0, size, 0 };
+    st_g16s(&i, p->reg, 8);
+    p->latch = st_g8(&i);
+    st_g16s(&i, p->count, 4);
+    st_get(&i, p->flip, 4);
+    p->lfsr = st_g16(&i);
+    p->noise_out = st_g8(&i);
+    p->phase = st_g16(&i);
+    p->level = (int32_t)st_g32(&i);
+    p->sample = st_g32(&i);
+    st_g32s(&i, p->pending, 64);
+    p->sum = (int64_t)st_g64(&i);
+    return 0;
 }

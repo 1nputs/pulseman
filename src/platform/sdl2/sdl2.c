@@ -18,6 +18,7 @@ typedef struct sdl {
     uint32_t picture[320 * 240];
     int width, height, fresh;
     SDL_atomic_t buttons[2], quit, paused, done;
+    SDL_atomic_t saves, loads, rewind;      /* presses of the state keys since the game last asked; held */
     SDL_GameController *pads[2];
     const mdrt_sdl_options *o;
     mdrt_config *cfg;
@@ -98,6 +99,16 @@ static void input(void *user, uint16_t buttons[2])
     buttons[1] = (uint16_t)SDL_AtomicGet(&s->buttons[1]);
 }
 
+static unsigned requests(void *user)
+{
+    sdl *s = user;
+    unsigned r = 0;
+    if (SDL_AtomicSet(&s->saves, 0)) r |= MDRT_REQUEST_SAVE;
+    if (SDL_AtomicSet(&s->loads, 0)) r |= MDRT_REQUEST_LOAD;
+    if (SDL_AtomicGet(&s->rewind)) r |= MDRT_REQUEST_REWIND;
+    return r;
+}
+
 static int game_thread(void *user)
 {
     sdl *s = user;
@@ -138,6 +149,7 @@ static void read_buttons(sdl *s)
         }
         SDL_AtomicSet(&s->buttons[p], b);
     }
+    SDL_AtomicSet(&s->rewind, k[SDL_SCANCODE_BACKSPACE] ? 1 : 0);
 }
 
 static void draw(sdl *s)
@@ -184,7 +196,7 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
     for (int i = 0, p = 0; i < SDL_NumJoysticks() && p < 2; i++)
         if (SDL_IsGameController(i)) s->pads[p++] = SDL_GameControllerOpen(i);
     s->lock = SDL_CreateMutex();
-    cfg->platform = (mdrt_platform){ s, present, audio, wait, input };
+    cfg->platform = (mdrt_platform){ .user = s, .present = present, .audio = audio, .wait = wait, .input = input, .requests = requests };
     s->m = mdrt_new(cfg);
     if (!s->m) { fprintf(stderr, "out of memory\n"); SDL_Quit(); return 1; }
     SDL_Thread *t = SDL_CreateThread(game_thread, "game", s);
@@ -195,6 +207,8 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
             else if (e.type == SDL_KEYDOWN && !e.key.repeat) {
                 SDL_Keycode k = e.key.keysym.sym;
                 if (k == SDLK_ESCAPE) SDL_AtomicSet(&s->quit, 1);
+                else if (k == SDLK_F5) SDL_AtomicAdd(&s->saves, 1);
+                else if (k == SDLK_F9) SDL_AtomicAdd(&s->loads, 1);
                 else if (k == SDLK_p) SDL_AtomicSet(&s->paused, !SDL_AtomicGet(&s->paused));
                 else if (k == SDLK_F11 || (k == SDLK_RETURN && (e.key.keysym.mod & KMOD_ALT)))
                     SDL_SetWindowFullscreen(s->win, (SDL_GetWindowFlags(s->win) & SDL_WINDOW_FULLSCREEN_DESKTOP) ? 0 : SDL_WINDOW_FULLSCREEN_DESKTOP);

@@ -44,7 +44,14 @@ typedef struct mdrt_platform {
     int (*wait)(void *user);
     /* the buttons held on pads 1 and 2 (MDRT_PAD_*) for the frame starting (NULL: as they are) */
     void (*input)(void *user, uint16_t buttons[2]);
+    /* the player's requests to the client (MDRT_REQUEST_*): SAVE and LOAD once for each press since
+     * the last call, REWIND while it is held (NULL: none) */
+    unsigned (*requests)(void *user);
 } mdrt_platform;
+
+/* requests from the person playing, which the client carries out where it can (a state saved at
+ * a point the game can be resumed from, loaded, or stepped back through) */
+enum { MDRT_REQUEST_SAVE = 1, MDRT_REQUEST_LOAD = 2, MDRT_REQUEST_REWIND = 4 };
 
 typedef struct mdrt_config {
     int pal;                    /* a PAL console: its master clock, 313 lines, the version bit */
@@ -89,5 +96,34 @@ void mdrt_set_pad_source(mdrt *m, mdrt_pad_fn fn, void *user);
  * Nonzero: the platform is closing and the game should stop. */
 int mdrt_wait_vblank(mdrt *m);
 void mdrt_vblank_end(mdrt *m);
+/* the requests the last handshake brought (MDRT_REQUEST_*) */
+unsigned mdrt_requests(const mdrt *m);
+
+/* ---- the whole console's state, as a value ------------------------------------------------
+ * Everything that decides what the game will see and hear from here on: the VDP (ports and
+ * caches too), the PSG, the FM chip (its core's own state: a state loads only into a build with
+ * the same FM core), the mixer, the sound written for times still to come, the I/O chip and the
+ * pads, save RAM, the frame count and the HV beam, and the parts the client adds (its work RAM,
+ * its sound processor, whatever it keeps outside them). The bytes are the same on every host for
+ * a given build. Take a state between handshakes, at a point the client can resume from (the
+ * client's position in its own code is not in it: see docs/API.md, "States").
+ *
+ * mdrt_get_state writes the state into buf and returns its size, or only the size when buf is
+ * NULL or too small (size it with mdrt_get_state(m, NULL, 0)); mdrt_set_state loads one and
+ * returns 0, or -1 when the bytes are not a state of this console (another version, model, FM
+ * core, part list or size): then nothing has changed. A state with another audio rate loads,
+ * with the mixer started afresh (it is presentation only). */
+size_t mdrt_get_state(mdrt *m, void *buf, size_t size);
+int mdrt_set_state(mdrt *m, const void *buf, size_t size);
+/* a part of the client's in every state, under a tag of four characters: save writes it and
+ * returns its size (out NULL: only the size, which may differ from one state to the next); load
+ * reads it back and returns 0, or -1 when it cannot, and then the whole state is refused and
+ * the console put back as it was. Returns 0, or -1 when the tag is taken or there are already
+ * 16 parts. */
+typedef size_t (*mdrt_part_save_fn)(void *user, uint8_t *out);
+typedef int (*mdrt_part_load_fn)(void *user, const uint8_t *in, size_t size);
+int mdrt_add_state_part(mdrt *m, const char *tag, mdrt_part_save_fn save, mdrt_part_load_fn load, void *user);
+/* the same for a block of memory of a fixed size */
+int mdrt_add_state_memory(mdrt *m, const char *tag, void *data, size_t size);
 
 #endif

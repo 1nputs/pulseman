@@ -8,6 +8,7 @@
  * state through the functions (mdrt_vdp_reg, mdrt_vdp_get_state). */
 #ifndef MDRT_VDP_H
 #define MDRT_VDP_H
+#include <stddef.h>
 #include <stdint.h>
 
 /* the state a game can observe, and a snapshot carries */
@@ -70,6 +71,11 @@ uint8_t mdrt_vdp_reg(const mdrt_vdp *v, int n);
 /* snapshots: get copies the observable state out; set loads it and resets the port state */
 void mdrt_vdp_get_state(const mdrt_vdp *v, mdrt_vdp_state *out);
 void mdrt_vdp_set_state(mdrt_vdp *v, const mdrt_vdp_state *in);
+
+/* the whole VDP, ports and caches included, as bytes (the same on every host): save returns the
+ * size (out NULL: only that); load returns 0, or -1 for the wrong size (then nothing changed) */
+size_t mdrt_vdp_save(const mdrt_vdp *v, uint8_t *out);
+int mdrt_vdp_load(mdrt_vdp *v, const uint8_t *in, size_t size);
 
 /* the frame layer: the vertical blank flag in the status word */
 void mdrt_vdp_set_vblank(mdrt_vdp *v, int on);

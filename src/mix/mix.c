@@ -4,6 +4,7 @@
 #include "mdrt/mix.h"
 #include "mdrt/mdrt.h"
 #include "kernel.h"
+#include "../state.h"
 
 #define IN_MCLKS 1008u                                    /* master clocks an input sample */
 /* the DC blocker: y = x - x' + a y', a = 1 - 2 pi 10 Hz / 53267 Hz in 1/65536ths (a 10 Hz high-pass) */
@@ -50,4 +51,29 @@ int mdrt_mix_run(mdrt_mix *m, const int16_t *fm, const int16_t *psg, int n, int1
         }
     }
     return made;
+}
+
+size_t mdrt_mix_save(const mdrt_mix *m, uint8_t *out)
+{
+    st_out o = { out, 0 };
+    st_u32(&o, m->rate); st_u32(&o, m->clock);
+    st_u32(&o, (uint32_t)m->fm_gain); st_u32(&o, (uint32_t)m->psg_gain);
+    st_u64(&o, m->in); st_u64(&o, m->out);
+    st_u32s(&o, m->hist[0], 64); st_u32s(&o, m->hist[1], 64);
+    st_u32s(&o, m->dc_x, 2);
+    st_u64(&o, (uint64_t)m->dc_y[0]); st_u64(&o, (uint64_t)m->dc_y[1]);
+    return o.n;
+}
+
+int mdrt_mix_load(mdrt_mix *m, const uint8_t *in, size_t size)
+{
+    if (size != mdrt_mix_save(m, NULL)) return -1;
+    st_in i = { in, 0, size, 0 };
+    m->rate = st_g32(&i); m->clock = st_g32(&i);
+    m->fm_gain = (int32_t)st_g32(&i); m->psg_gain = (int32_t)st_g32(&i);
+    m->in = st_g64(&i); m->out = st_g64(&i);
+    st_g32s(&i, m->hist[0], 64); st_g32s(&i, m->hist[1], 64);
+    st_g32s(&i, m->dc_x, 2);
+    m->dc_y[0] = (int64_t)st_g64(&i); m->dc_y[1] = (int64_t)st_g64(&i);
+    return 0;
 }

@@ -66,6 +66,13 @@ this README carries the status).
   `mdrt_config`; sound events kept in time order as they arrive (no sort per chunk);
   `MDRT_REQUIRE_VECTORS`; the vector formats in `docs/VECTORS.md`; Clang checked. The first
   client's golden runs (its picture, sound and state, frame by frame) are unchanged.
+- 2026-10-16, the whole console's state as a value (`mdrt_get_state`, `mdrt_set_state`, parts
+  the client adds; `docs/API.md`, "States"): every module saves and loads itself as bytes, ymfm
+  through its own save format; Nuked-OPN2's chip type is now per chip. Loads are all or nothing.
+  `tests/state_test.c`: a state taken mid-note gives the same 60 frames of pictures, VDP state
+  and sound again, in the same console and a new one. The player's requests (save, load, rewind)
+  come through the platform (`mdrt_requests`; F5, F9, Backspace in SDL2). The first client saves,
+  loads and rewinds with it; its states go on bit for bit for thousands of frames.
 
 `make check` (GCC, sanitizers); `CC=clang make MODE=release check` for Clang (checked on
 2026-10-16 with Zig's Clang 22: `pip install ziglang`, `CC="python -m ziglang cc"`); `make

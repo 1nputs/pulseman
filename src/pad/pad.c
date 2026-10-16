@@ -7,6 +7,7 @@
  *   following TH 1 gives ?1CBMXYZ and the TH 0 after it D3-D0 all 1. */
 #include <string.h>
 #include "mdrt/pad.h"
+#include "../state.h"
 
 void mdrt_pads_init(mdrt_pads *p, int overseas, int pal)
 {
@@ -73,4 +74,25 @@ void mdrt_pad_write(mdrt_pads *p, uint32_t addr, uint8_t value)
         return;
     }
     p->reg[r & 15] = value;
+}
+
+size_t mdrt_pads_save(const mdrt_pads *p, uint8_t *out)
+{
+    st_out o = { out, 0 };
+    st_put(&o, p->reg, 16);
+    st_u16s(&o, p->buttons, 2);
+    st_put(&o, p->type, 2);
+    st_put(&o, p->steps, 2);
+    return o.n;
+}
+
+int mdrt_pads_load(mdrt_pads *p, const uint8_t *in, size_t size)
+{
+    if (size != mdrt_pads_save(p, NULL)) return -1;
+    st_in i = { in, 0, size, 0 };
+    st_get(&i, p->reg, 16);
+    st_g16s(&i, p->buttons, 2);
+    st_get(&i, p->type, 2);
+    st_get(&i, p->steps, 2);
+    return 0;
 }

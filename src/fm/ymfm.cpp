@@ -1,7 +1,9 @@
 // The FM core: ymfm's YM2612 (third_party/ymfm, BSD-3), for `make FM_CORE=ymfm`. ymfm makes a
 // whole sample at a time, so the clock that ends a sample brings all of it and the other 23 bring
 // nothing; its level is brought to Nuked-OPN2's (fm.c sums Nuked's 24 clocks).
+#include <cstring>
 #include <new>
+#include <vector>
 #include "core.h"
 #include "ymfm_opn.h"
 
@@ -41,5 +43,29 @@ void fm_core_clock(fm_core *c, int32_t out[2])
 }
 
 const char *fm_core_name(void) { return "ymfm"; }
+
+// ymfm's own save format (ymfm_saved_state: the chip's fields one after another), after the
+// clock count into the sample
+size_t fm_core_save(fm_core *c, uint8_t *out)
+{
+    std::vector<uint8_t> buf;
+    ymfm::ymfm_saved_state st(buf, true);
+    c->chip.save_restore(st);
+    if (out) {
+        for (int i = 0; i < 4; i++) out[i] = uint8_t(uint32_t(c->cycle) >> (8 * i));
+        std::memcpy(out + 4, buf.data(), buf.size());
+    }
+    return buf.size() + 4;
+}
+
+int fm_core_load(fm_core *c, const uint8_t *in, size_t size)
+{
+    if (size != fm_core_save(c, nullptr)) return -1;
+    std::vector<uint8_t> buf(in + 4, in + size);
+    ymfm::ymfm_saved_state st(buf, false);
+    c->chip.save_restore(st);
+    c->cycle = int(uint32_t(in[0]) | uint32_t(in[1]) << 8 | uint32_t(in[2]) << 16 | uint32_t(in[3]) << 24);
+    return 0;
+}
 
 }

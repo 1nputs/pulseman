@@ -20,3 +20,17 @@ void mdrt_sram_write8(mdrt_sram *s, uint32_t off, uint8_t v)
     if (s->bytes[off >> 1] != v) s->dirty = 1;
     s->bytes[off >> 1] = v;
 }
+
+size_t mdrt_sram_save(const mdrt_sram *s, uint8_t *out)
+{
+    if (out) memcpy(out, s->bytes, s->size);
+    return s->size;
+}
+
+int mdrt_sram_load(mdrt_sram *s, const uint8_t *in, size_t size)
+{
+    if (size != s->size) return -1;
+    if (memcmp(s->bytes, in, size)) s->dirty = 1;
+    memcpy(s->bytes, in, size);
+    return 0;
+}

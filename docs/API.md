@@ -49,9 +49,10 @@ public so they can be embedded, but their fields are not API and may change: rea
 | $200000 save RAM | `mdrt_sram_read8/write8(mdrt_get_sram(m), off, ...)` (odd offsets) |
 | waiting for the vertical blank | `mdrt_wait_vblank(m)`: nonzero means stop |
 
-The VDP state can be set whole (`mdrt_vdp_set_state`) to start from a snapshot; the sound
-chips cannot yet (a whole-console state is the next work), so a client starting from a
-recording writes their registers back.
+The VDP state can be set whole (`mdrt_vdp_set_state`) to start from another emulator's
+snapshot; the sound chips cannot be (another emulator's FM core has other internals), so a client
+starting from such a recording writes their registers back. The runtime's own states (below)
+hold everything.
 
 The status word shows the vertical blank (bit 3, also while the display is off), the vertical
 interrupt pending (bit 7), FIFO empty (bit 9, always) and PAL (bit 0). DMA busy (bit 1) is never
@@ -86,6 +87,35 @@ game polls. NHL '94: `src/z80.c` (the relay), 56 master clocks a Z80-bus access.
 waits for its go (the SDL2 platform paces by the sound queue), and reads the pads. On return the
 VDP is in its vertical blank (status bit 3): run the vblank interrupt's code, then call
 `mdrt_vblank_end(m)`.
+
+## States
+
+`mdrt_get_state(m, buf, size)` writes the whole console as bytes and `mdrt_set_state(m, buf,
+size)` loads them: the VDP with its ports and caches, the PSG, the FM chip and its core's own
+state, the mixer, the sound written for times still to come, the I/O chip and the pads, save RAM,
+the frame count and the HV beam. Size a buffer with `mdrt_get_state(m, NULL, 0)`. The format is
+in `mdrt.h` (sections under four-character tags); the bytes are the same on every host for a
+given build, so a state is a value: save states, rewind, rollback, golden tests.
+
+The client adds what it keeps itself: `mdrt_add_state_memory(m, "RAM ", ram, 0x10000)` for a
+block, `mdrt_add_state_part(m, tag, save, load, user)` for anything else (its sound processor,
+registers it keeps in C globals). Every state then carries them, in the order added.
+
+A load is all or nothing: a state from another version, another model (PAL), another FM core or
+with another list of parts is refused (-1) and the console is as it was. A state from a console
+with another audio rate loads, with the mixer started afresh, since the mixer only shapes the
+sound the player hears.
+
+What a state does not hold is where the client's code is. A blocking client is somewhere deep
+in its own C stack when it waits; a state is only useful at a point the client knows how to go
+on from with nothing on that stack (NHL '94: the game loop's wait, the point its lockstep already
+restarts at). Take it there, and on loading, restart the client there. A client run as a
+coroutine on its own stack could keep that stack too; nothing here needs it yet.
+
+The player's requests reach the client through the platform: `mdrt_platform.requests` returns
+MDRT_REQUEST_SAVE and MDRT_REQUEST_LOAD once for each press and MDRT_REQUEST_REWIND while it is
+held; `mdrt_requests(m)` gives the client what the last handshake brought (the SDL2 platform:
+F5, F9, Backspace). The client decides what to do and when.
 
 ## Lockstep
 

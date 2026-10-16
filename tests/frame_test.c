@@ -107,7 +107,7 @@ static void play(run *r)
     r->all = calloc((size_t)r->cap * 2, sizeof *r->all);
     mdrt_config c = { 0 };
     c.audio_rate = RATE;
-    c.platform = (mdrt_platform){ r, present, audio, NULL, NULL };
+    c.platform = (mdrt_platform){ .user = r, .present = present, .audio = audio };
     mdrt *m = mdrt_new(&c);
     game(m);
     mdrt_free(m);

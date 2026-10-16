@@ -7,6 +7,7 @@
  * See docs/HARDWARE.md for the sources. */
 #ifndef MDRT_PSG_H
 #define MDRT_PSG_H
+#include <stddef.h>
 #include <stdint.h>
 
 #define MDRT_PSG_STEP_MCLKS   240     /* an internal clock: master / 15 / 16 */
@@ -35,5 +36,9 @@ void mdrt_psg_init(mdrt_psg *p);
 void mdrt_psg_write(mdrt_psg *p, uint8_t value);
 /* the next n samples (mono) */
 void mdrt_psg_render(mdrt_psg *p, int16_t *out, int n);
+/* the whole chip as bytes (the same on every host): save returns the size (out NULL: only that);
+ * load returns 0, or -1 for the wrong size (then nothing changed) */
+size_t mdrt_psg_save(const mdrt_psg *p, uint8_t *out);
+int mdrt_psg_load(mdrt_psg *p, const uint8_t *in, size_t size);
 
 #endif

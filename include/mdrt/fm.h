@@ -5,6 +5,7 @@
  * timers are not modelled (the client sequences its music on the 68k). */
 #ifndef MDRT_FM_H
 #define MDRT_FM_H
+#include <stddef.h>
 #include <stdint.h>
 
 #define MDRT_FM_CYCLE_MCLKS  42       /* an internal clock: 6 of the 68k's */
@@ -27,5 +28,10 @@ int mdrt_fm_run(mdrt_fm *f, uint32_t mclk, int16_t *out, int max);
 uint8_t mdrt_fm_reg(const mdrt_fm *f, int part, uint8_t reg);
 /* the core's name ("nuked" or "ymfm") */
 const char *mdrt_fm_core(void);
+/* the chip and its core as bytes: save returns the size (out NULL: only that); load returns 0, or
+ * -1 for bytes of another size or another core (then nothing changed). A state names its core:
+ * it loads only into a build with the same one. */
+size_t mdrt_fm_save(const mdrt_fm *f, uint8_t *out);
+int mdrt_fm_load(mdrt_fm *f, const uint8_t *in, size_t size);
 
 #endif

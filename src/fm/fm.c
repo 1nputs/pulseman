@@ -5,6 +5,7 @@
 #include <string.h>
 #include "mdrt/fm.h"
 #include "core.h"
+#include "../state.h"
 
 struct mdrt_fm {
     fm_core *core;
@@ -99,3 +100,45 @@ int mdrt_fm_run(mdrt_fm *f, uint32_t mclk, int16_t *out, int max)
 uint8_t mdrt_fm_reg(const mdrt_fm *f, int part, uint8_t reg) { return f->regs[part & 1][reg]; }
 
 const char *mdrt_fm_core(void) { return fm_core_name(); }
+
+/* the wrapper's fields, then the core's name (8 bytes) and its own state */
+static void save_wrapper(const mdrt_fm *f, st_out *o)
+{
+    st_u32(o, f->mclk); st_u32(o, f->owed);
+    st_u32(o, (uint32_t)f->cycle);
+    st_u32(o, (uint32_t)f->left); st_u32(o, (uint32_t)f->right);
+    st_u8(o, (uint8_t)f->written);
+    st_u16(o, (uint16_t)f->spare[0]); st_u16(o, (uint16_t)f->spare[1]);
+    st_u8(o, (uint8_t)f->spare_full);
+    st_put(o, f->addr, 2);
+    st_put(o, f->regs, sizeof f->regs);
+    char name[8] = { 0 };
+    strncpy(name, fm_core_name(), sizeof name - 1);
+    st_put(o, name, 8);
+}
+
+size_t mdrt_fm_save(const mdrt_fm *f, uint8_t *out)
+{
+    st_out o = { out, 0 };
+    save_wrapper(f, &o);
+    return o.n + fm_core_save(f->core, out ? out + o.n : NULL);
+}
+
+int mdrt_fm_load(mdrt_fm *f, const uint8_t *in, size_t size)
+{
+    st_out o = { NULL, 0 };
+    save_wrapper(f, &o);
+    char name[8] = { 0 };
+    strncpy(name, fm_core_name(), sizeof name - 1);
+    if (size < o.n || memcmp(in + o.n - 8, name, 8) || fm_core_load(f->core, in + o.n, size - o.n)) return -1;
+    st_in i = { in, 0, o.n, 0 };
+    f->mclk = st_g32(&i); f->owed = st_g32(&i);
+    f->cycle = (int)st_g32(&i);
+    f->left = (int32_t)st_g32(&i); f->right = (int32_t)st_g32(&i);
+    f->written = st_g8(&i);
+    f->spare[0] = (int16_t)st_g16(&i); f->spare[1] = (int16_t)st_g16(&i);
+    f->spare_full = st_g8(&i);
+    st_get(&i, f->addr, 2);
+    st_get(&i, f->regs, sizeof f->regs);
+    return 0;
+}
