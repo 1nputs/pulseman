@@ -66,17 +66,20 @@ line. A trace begins after the program's set-up and only once a whole frame was 
 tracing (`HARDWARE.md`, 2026-10-15). Version 1 (2026-10-15) had no times: its accesses all count as
 made in the vertical blank; readers take both.
 
-## `.padtrace` (MDPT, version 1)
+## `.padtrace` (MDPT, version 2)
 
 ```
-"MDPT", version u32 = 1, the I/O chip's 16 registers at the start ($A10001 + 2 n: version, data
-1-3, control 1-3, serial ...); then records: tag u8
-   1 FRAME   buttons u16 port 1, buttons u16 port 2: held from here on (bits: 0 up, 1 down,
-             2 left, 3 right, 4 B, 5 C, 6 A, 7 Start; mdrt/pad.h MDRT_PAD_*)
+"MDPT", version u32 = 2, device u8 (0 a pad in each port, 1 EA's 4 Way Play in both), 3 reserved
+bytes, the I/O chip's 16 registers at the start ($A10001 + 2 n: version, data 1-3, control 1-3,
+serial ...); then records: tag u8
+   1 FRAME   buttons u16 for pads 1-4 (3 and 4 only through the adaptor): held from here on
+             (bits: 0 up, 1 down, 2 left, 3 right, 4 B, 5 C, 6 A, 7 Start; mdrt/pad.h MDRT_PAD_*)
    2 WRITE   address u32, width u8, value u32   a write to $A10000-$A1001F
    3 READ    address u32, width u8, value u32   a read, and the value the oracle returned
    4 END
 ```
+
+Version 1 (still read): no device bytes, and FRAME holds pads 1 and 2 only.
 
 ## `.sndtrace` (MDST, version 3)
 

@@ -63,6 +63,13 @@ This README carries the status.
   1 dB a 100 ms window. `docs/API.md` describes the contract.
 - WP5 pads and save RAM: done. The game's pad port reads replay exactly (3600 / 3600 over 900
   frames of random input on both pads); 6-button sequence and save RAM checked by hand.
+- 2026-10-16, four players: EA's 4 Way Play in both ports (`mdrt_pads_set_adaptor`): port 2's
+  output lines choose which of four 3-button pads port 1 reads, or the adaptor's mark the game
+  looks for. Pads 1-4 through the platform's input and the pad source; `.padtrace` version 2
+  carries the device and four pads (version 1 still replays); a state from before loads.
+  NHL '94 from power on with the adaptor in the reference emulator, four pads pressing their own
+  buttons through the title and the setup screen, replays 17878 / 17878 reads (its
+  `four_way.padtrace`), the detection included.
 - 2026-10-16, the review's small findings: PAL's master clock (`MDRT_MASTER_CLOCK_PAL`,
   `mdrt_master_clock`) in the mixer and the platform; the default HV counter through the VDP's
   counter mapping; `mdrt_vdp_reg` and a rule for what in the structs is API; the mixer's gains in

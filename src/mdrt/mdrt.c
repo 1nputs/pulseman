@@ -407,11 +407,11 @@ int mdrt_wait_vblank(mdrt *m)
     if (p->present) p->present(p->user, m->picture, mdrt_vdp_width(&m->vdp), mdrt_vdp_height(&m->vdp), 320);
     if (p->audio) p->audio(p->user, m->audio, made);
     int stop = p->wait ? p->wait(p->user) : 0;
-    uint16_t buttons[2] = { m->pads.buttons[0], m->pads.buttons[1] };
+    uint16_t buttons[MDRT_PADS];
+    memcpy(buttons, m->pads.buttons, sizeof buttons);
     if (m->pad_src) m->pad_src(m->pad_user, buttons);
     else if (p->input) p->input(p->user, buttons);
-    mdrt_pad_set(&m->pads, 0, buttons[0]);
-    mdrt_pad_set(&m->pads, 1, buttons[1]);
+    for (int i = 0; i < MDRT_PADS; i++) mdrt_pad_set(&m->pads, i, buttons[i]);
     mdrt_pads_frame(&m->pads);
     rec_buttons(m);
     m->requests = p->requests ? p->requests(p->user) : 0;
@@ -716,8 +716,7 @@ static void rec_buttons(mdrt *m)
 {
     if (!m->rec[MDRT_TRACE_PADS].sink) return;
     put8(m, MDRT_TRACE_PADS, 1);
-    put16(m, MDRT_TRACE_PADS, m->pads.buttons[0]);
-    put16(m, MDRT_TRACE_PADS, m->pads.buttons[1]);
+    for (int i = 0; i < MDRT_PADS; i++) put16(m, MDRT_TRACE_PADS, m->pads.buttons[i]);
 }
 
 void mdrt_record(mdrt *m, int trace, mdrt_sink_fn sink, void *user)
@@ -744,7 +743,9 @@ void mdrt_record(mdrt *m, int trace, mdrt_sink_fn sink, void *user)
         mdrt_vdp_set_observer(&m->vdp, vdp_seen, m);
     } else if (trace == MDRT_TRACE_PADS) {
         put(m, trace, "MDPT", 4);
-        put32(m, trace, 1);
+        put32(m, trace, 2);
+        uint8_t device[4] = { m->pads.adaptor, 0, 0, 0 };
+        put(m, trace, device, 4);
         put(m, trace, m->pads.reg, 16);
         mdrt_pads_set_observer(&m->pads, pads_seen, m);
     } else {

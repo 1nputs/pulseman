@@ -42,8 +42,9 @@ typedef struct mdrt_platform {
     void (*audio)(void *user, const int16_t *samples, int frames);
     /* block until the next frame may start (NULL: go on at once); nonzero: the game should stop */
     int (*wait)(void *user);
-    /* the buttons held on pads 1 and 2 (MDRT_PAD_*) for the frame starting (NULL: as they are) */
-    void (*input)(void *user, uint16_t buttons[2]);
+    /* the buttons held on pads 1-4 (MDRT_PAD_*; 3 and 4 only through an adaptor:
+     * mdrt_pads_set_adaptor) for the frame starting (NULL: as they are) */
+    void (*input)(void *user, uint16_t buttons[MDRT_PADS]);
     /* the player's requests to the client (MDRT_REQUEST_*): SAVE and LOAD once for each press since
      * the last call, REWIND while it is held (NULL: none) */
     unsigned (*requests)(void *user);
@@ -119,7 +120,8 @@ void mdrt_bus_write32(mdrt *m, uint32_t addr, uint32_t value);
  * The console writes the trace formats the oracle's exporter writes (docs/VECTORS.md) to the
  * client's sink, from now on: MDRT_TRACE_VDP a .vdptrace (version 2: every VDP port access with its
  * time, the DMA sources, the state and picture at each handshake once a whole frame is in it),
- * MDRT_TRACE_PADS a .padtrace (the I/O chip's accesses, the buttons each frame), MDRT_TRACE_SOUND a
+ * MDRT_TRACE_PADS a .padtrace (version 2: the adaptor, the I/O chip's accesses, the four pads'
+ * buttons each frame), MDRT_TRACE_SOUND a
  * .sndtrace (every sound write at its master clock as the chips take it, and the console's own
  * audio; flags bit 2 says so, bit 1 that the FM core was Nuked-OPN2, bit 0 that the recording began
  * at the first frame). pulseman's tests replay them as they replay the oracle's, so a run of a
@@ -130,7 +132,7 @@ void mdrt_record(mdrt *m, int trace, mdrt_sink_fn sink, void *user);
 
 /* lockstep: what the game reads that depends on time or the player, from recorded values */
 void mdrt_set_hv_source(mdrt *m, mdrt_hv_fn fn, void *user);
-typedef void (*mdrt_pad_fn)(void *user, uint16_t buttons[2]);
+typedef void (*mdrt_pad_fn)(void *user, uint16_t buttons[MDRT_PADS]);
 void mdrt_set_pad_source(mdrt *m, mdrt_pad_fn fn, void *user);
 
 /* ---- time inside a frame -----------------------------------------------------------------

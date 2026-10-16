@@ -4,7 +4,8 @@
  *   the others read the pad's lines.
  *   3-button pad: TH 1: ?1CBRLDU, TH 0: ?0SA00DU (active low).
  *   6-button pad: counting TH low-to-high transitions, the third TH 0 read gives D3-D0 all 0, the
- *   following TH 1 gives ?1CBMXYZ and the TH 0 after it D3-D0 all 1. */
+ *   following TH 1 gives ?1CBMXYZ and the TH 0 after it D3-D0 all 1.
+ *   EA's 4 Way Play: in both ports; port 2's lines choose what port 1 reads (mdrt/pad.h). */
 #include <string.h>
 #include "mdrt/pad.h"
 #include "../state.h"
@@ -20,7 +21,8 @@ void mdrt_pads_init(mdrt_pads *p, int overseas, int pal)
 }
 
 void mdrt_pad_set_type(mdrt_pads *p, int port, int type) { if (port >= 0 && port < 2) p->type[port] = (uint8_t)type; }
-void mdrt_pad_set(mdrt_pads *p, int port, uint16_t buttons) { if (port >= 0 && port < 2) p->buttons[port] = buttons; }
+void mdrt_pad_set(mdrt_pads *p, int pad, uint16_t buttons) { if (pad >= 0 && pad < MDRT_PADS) p->buttons[pad] = buttons; }
+void mdrt_pads_set_adaptor(mdrt_pads *p, int adaptor) { p->adaptor = (uint8_t)(adaptor == MDRT_ADAPTOR_EA4WAY ? adaptor : MDRT_ADAPTOR_NONE); }
 void mdrt_pads_frame(mdrt_pads *p) { p->steps[0] = p->steps[1] = 0; }
 
 /* the TH level: the written value when TH is an output, else pulled high */
@@ -29,10 +31,24 @@ static int th(const mdrt_pads *p, int port)
     return (p->reg[4 + port] & 0x40) ? (p->reg[1 + port] >> 6) & 1 : 1;
 }
 
+/* a 3-button pad's lines under TH t (active low) */
+static uint8_t lines3(uint16_t b, int t)
+{
+    uint8_t d = (uint8_t)((t << 6) | 0x3F);
+    if (t) return (uint8_t)(d & ~(b & 0x3F));                                          /* ?1CBRLDU */
+    return (uint8_t)(d & ~(((b >> 2) & 0x30) | (b & 0x03) | 0x0C));                    /* ?0SA00DU */
+}
+
 /* the lines a pad drives: D6 is TH, D5-D0 the buttons for the TH level (active low) */
 static uint8_t pad_lines(const mdrt_pads *p, int port)
 {
     int t = th(p, port);
+    if (p->adaptor == MDRT_ADAPTOR_EA4WAY) {             /* port 2 chooses what port 1 shows */
+        if (port == 1) return 0x7F;
+        uint8_t sel = p->reg[2] & p->reg[5];              /* (port 2's outputs: a line it does not drive is 0) */
+        if (sel & 0x40) return (uint8_t)((t << 6) | 0x3C);   /* the adaptor's mark: D1-D0 low */
+        return lines3(p->buttons[(sel >> 4) & 3], t);
+    }
     uint8_t d = (uint8_t)((t << 6) | 0x3F);
     uint16_t b = p->buttons[port];
     if (p->type[port] == MDRT_PAD_NONE) return 0x7F;
@@ -42,8 +58,7 @@ static uint8_t pad_lines(const mdrt_pads *p, int port)
         if (t && s == 3) return (uint8_t)(d & ~((b & 0x30) | ((b >> 8) & 0x0F)));     /* ?1CBMXYZ */
         if (!t && s == 3) return (uint8_t)(d & ~((b >> 2) & 0x30));                   /* ?0SA1111 */
     }
-    if (t) return (uint8_t)(d & ~(b & 0x3F));                                          /* ?1CBRLDU */
-    return (uint8_t)(d & ~(((b >> 2) & 0x30) | (b & 0x03) | 0x0C));                    /* ?0SA00DU */
+    return lines3(b, t);
 }
 
 void mdrt_pads_set_observer(mdrt_pads *p, mdrt_pads_access_fn fn, void *user) { p->observe = fn; p->observe_user = user; }
@@ -97,19 +112,26 @@ size_t mdrt_pads_save(const mdrt_pads *p, uint8_t *out)
 {
     st_out o = { out, 0 };
     st_put(&o, p->reg, 16);
-    st_u16s(&o, p->buttons, 2);
+    st_u16s(&o, p->buttons, MDRT_PADS);
     st_put(&o, p->type, 2);
     st_put(&o, p->steps, 2);
+    st_put(&o, &p->adaptor, 1);
     return o.n;
 }
 
+#define OLD_SIZE (16 + 2 * 2 + 2 + 2)                     /* (before the adaptor: two pads) */
+
 int mdrt_pads_load(mdrt_pads *p, const uint8_t *in, size_t size)
 {
-    if (size != mdrt_pads_save(p, NULL)) return -1;
+    int pads = size == OLD_SIZE ? 2 : MDRT_PADS;
+    if (size != OLD_SIZE && size != mdrt_pads_save(p, NULL)) return -1;
     st_in i = { in, 0, size, 0 };
     st_get(&i, p->reg, 16);
-    st_g16s(&i, p->buttons, 2);
+    memset(p->buttons, 0, sizeof p->buttons);
+    st_g16s(&i, p->buttons, pads);
     st_get(&i, p->type, 2);
     st_get(&i, p->steps, 2);
+    p->adaptor = MDRT_ADAPTOR_NONE;
+    if (pads == MDRT_PADS) st_get(&i, &p->adaptor, 1);
     return 0;
 }

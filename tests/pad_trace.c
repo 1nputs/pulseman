@@ -1,6 +1,7 @@
 /* WP5: replay every .padtrace in $MDRT_VECTORS: the buttons each frame, the game's writes to the
- * I/O ports, and every read must return what the oracle returned. Format:
- * docs/VECTORS.md ("MDPT"). Also the 6-button sequence and save RAM by hand. */
+ * I/O ports, and every read must return what the oracle returned (version 1: two pads; 2: four,
+ * and what is in the ports, EA's 4 Way Play among them). Format: docs/VECTORS.md ("MDPT"). Also
+ * the 6-button sequence, the 4 Way Play's protocol, old states and save RAM by hand. */
 #include <dirent.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,19 +17,23 @@ static void replay(const char *path)
     size_t len = fread(buf, 1, sizeof buf, f);
     fclose(f);
     if (len < 24 || memcmp(buf, "MDPT", 4) != 0) { printf("  %s: not a padtrace\n", path); check_failures++; return; }
+    uint32_t version = (uint32_t)(buf[4] | buf[5] << 8 | buf[6] << 16 | (uint32_t)buf[7] << 24);
+    if (version != 1 && version != 2) { printf("  %s: padtrace version %u (this reader knows 1 and 2)\n", path, version); check_failures++; return; }
+    int pads = version == 1 ? 2 : MDRT_PADS;
+    size_t o = version == 1 ? 8 : 12;
     mdrt_pads p;
     mdrt_pads_init(&p, 1, 0);
-    memcpy(p.reg, buf + 8, 16);
-    size_t o = 24;
+    if (version == 2) mdrt_pads_set_adaptor(&p, buf[8]);
+    memcpy(p.reg, buf + o, 16);
+    o += 16;
     int frames = 0, reads = 0, bad = 0;
     char first[160] = "";
     while (o < len) {
         uint8_t t = buf[o++];
         if (t == 1) {
             mdrt_pads_frame(&p);
-            mdrt_pad_set(&p, 0, (uint16_t)(buf[o] | buf[o + 1] << 8));
-            mdrt_pad_set(&p, 1, (uint16_t)(buf[o + 2] | buf[o + 3] << 8));
-            o += 4;
+            for (int i = 0; i < pads; i++) mdrt_pad_set(&p, i, (uint16_t)(buf[o + 2 * i] | buf[o + 2 * i + 1] << 8));
+            o += 2u * (unsigned)pads;
             frames++;
         } else if (t == 2 || t == 3) {
             uint32_t a = (uint32_t)(buf[o] | buf[o + 1] << 8 | buf[o + 2] << 16 | (uint32_t)buf[o + 3] << 24);
@@ -45,7 +50,8 @@ static void replay(const char *path)
         } else break;
     }
     const char *name = strrchr(path, '/') ? strrchr(path, '/') + 1 : path;
-    printf("  %-20s %4d frames: %d / %d reads%s%s\n", name, frames, reads - bad, reads, bad ? "; first: " : "", first);
+    printf("  %-20s %4d frames: %d / %d reads%s%s%s\n", name, frames, reads - bad, reads, p.adaptor ? " (4 Way Play)" : "",
+           bad ? "; first: " : "", first);
     check_count++;
     if (bad) check_failures++;
 }
@@ -77,6 +83,44 @@ static void six_button(void)
     CHECK_EQ(mdrt_pad_read(&p, 0xA10003) & 0xC0, 0xC0);
 }
 
+/* EA's 4 Way Play as NHL '94 drives it: found with $7C on port 2, then each pad chosen in turn */
+static void four_way(void)
+{
+    mdrt_pads p;
+    mdrt_pads_init(&p, 1, 0);
+    mdrt_pad_write(&p, 0xA10009, 0x40);                   /* port 1: TH an output */
+    mdrt_pad_write(&p, 0xA1000B, 0x7F);
+    mdrt_pad_write(&p, 0xA10005, 0x7C);
+    CHECK_EQ(mdrt_pad_read(&p, 0xA10003) & 3, 3);         /* no adaptor: a pad's up and down, not held */
+    mdrt_pads_set_adaptor(&p, MDRT_ADAPTOR_EA4WAY);
+    CHECK_EQ(mdrt_pad_read(&p, 0xA10003) & 3, 0);         /* the adaptor's mark */
+    static const uint16_t held[4] = { MDRT_PAD_UP, MDRT_PAD_B | MDRT_PAD_DOWN, MDRT_PAD_START | MDRT_PAD_A, MDRT_PAD_C | MDRT_PAD_RIGHT };
+    for (int i = 0; i < 4; i++) mdrt_pad_set(&p, i, held[i]);
+    for (int i = 0; i < 4; i++) {
+        mdrt_pad_write(&p, 0xA10005, (uint8_t)(0x0C | i << 4));
+        mdrt_pad_write(&p, 0xA10003, 0x00);
+        uint8_t lo = mdrt_pad_read(&p, 0xA10003) & 0x3F;
+        mdrt_pad_write(&p, 0xA10003, 0x40);
+        uint8_t hi = mdrt_pad_read(&p, 0xA10003) & 0x3F;
+        CHECK_EQ(hi, 0x3F & ~(held[i] & 0x3F));           /* ?1CBRLDU */
+        CHECK_EQ(lo, 0x33 & ~(((held[i] >> 2) & 0x30) | (held[i] & 3)));   /* ?0SA00DU */
+    }
+    CHECK_EQ(mdrt_pad_read(&p, 0xA10005) & 0x3F, 0x3C);   /* port 2: its own outputs only */
+    /* a state from before the adaptor (two pads) loads, without it */
+    uint8_t old[24] = { 0 }, now[64];
+    old[16] = 0x41;                                       /* pad 1: up and A */
+    CHECK_EQ(mdrt_pads_load(&p, old, sizeof old), 0);
+    CHECK(p.buttons[0] == 0x41 && p.buttons[2] == 0 && p.adaptor == MDRT_ADAPTOR_NONE);
+    mdrt_pads_set_adaptor(&p, MDRT_ADAPTOR_EA4WAY);
+    mdrt_pad_set(&p, 3, MDRT_PAD_C);
+    size_t n = mdrt_pads_save(&p, now);
+    mdrt_pads q;
+    mdrt_pads_init(&q, 1, 0);
+    CHECK_EQ(mdrt_pads_load(&q, now, n), 0);
+    CHECK(q.adaptor == MDRT_ADAPTOR_EA4WAY && q.buttons[3] == MDRT_PAD_C);
+    CHECK_EQ(mdrt_pads_load(&q, now, n - 1), -1);
+}
+
 static void sram(void)
 {
     static mdrt_sram s;
@@ -95,6 +139,7 @@ static void sram(void)
 int main(void)
 {
     six_button();
+    four_way();
     sram();
     const char *dir = check_vectors();
     if (!dir) { check_skip("pad_trace", "no vectors (MDRT_VECTORS) for the replays"); return check_done("pad_trace"); }
