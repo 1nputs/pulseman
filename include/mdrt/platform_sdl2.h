@@ -16,9 +16,9 @@
  * name: A, F1, Up, Return, Space, Left Shift, Keypad 8, the sign of , . - = ...):
  *   pad 1  arrows, Z / X / C = A / B / C, Enter = Start
  *   pad 2  I J K L, Q / W / E = A / B / C, Tab = Start
- *   F1 mute, F2 / F3 volume down / up, F4 held to step back (mdrt_requests), F5 slow motion,
- *   F6 held fast-forward, F7 / F8 ask the game to save / load a state, F9 one frame while paused,
- *   F10 pause, F11 or Alt+Enter full screen, F12 a screenshot, Esc the menu
+ *   F1 mute, F2 / F3 volume down / up, F4 held to step back (mdrt_requests); F5 pause, F6 held
+ *   fast-forward, F7 slow motion, F8 one frame while paused; F9 / F10 ask the game to save /
+ *   load a state, F11 or Alt+Enter full screen, F12 a screenshot; Esc the menu
  * The first two game controllers are pads 1 and 2 (X / A / B = A / B / C, Start). A change shows
  * for a moment in the window's title.
  *

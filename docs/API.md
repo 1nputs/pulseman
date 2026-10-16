@@ -167,7 +167,7 @@ coroutine on its own stack could keep that stack too; nothing here needs it yet.
 The player's requests reach the client through the platform: `mdrt_platform.requests` returns
 MDRT_REQUEST_SAVE and MDRT_REQUEST_LOAD once for each press and MDRT_REQUEST_REWIND while it is
 held; `mdrt_requests(m)` gives the client what the last handshake brought (the SDL2 platform:
-F7, F8, F4 by default). The client decides what to do and when. Fast-forward, slow motion,
+F9, F10, F4 by default). The client decides what to do and when. Fast-forward, slow motion,
 pause and the frame step are the platform's alone: they change when its `wait` lets the next frame
 go (and fast-forward and slow motion queue no sound), so the client sees only ordinary frames.
 

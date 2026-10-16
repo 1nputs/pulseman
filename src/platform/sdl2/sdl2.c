@@ -28,14 +28,16 @@
 
 /* ---- the keys: what each does, its setting and its default ------------------------------------ */
 
-enum { K_MUTE, K_VOL_DOWN, K_VOL_UP, K_REWIND, K_SLOW, K_FAST, K_SAVE, K_LOAD, K_STEP, K_PAUSE,
+/* the controls on the function keys, in the keyboard's groups of four: the sound and rewind;
+ * time (pause, fast-forward, slow motion, a frame); states, the window and screenshots */
+enum { K_MUTE, K_VOL_DOWN, K_VOL_UP, K_REWIND, K_PAUSE, K_FAST, K_SLOW, K_STEP, K_SAVE, K_LOAD,
        K_FULLSCREEN, K_SHOT, K_MENU, K_COUNT };
-static const char *const key_setting[K_COUNT][3] = {     /* (the controls on the function keys, in order) */
+static const char *const key_setting[K_COUNT][3] = {
     { "key.mute", "F1", "Mute" }, { "key.volume_down", "F2", "Volume down" }, { "key.volume_up", "F3", "Volume up" },
-    { "key.rewind", "F4", "Rewind (held)" }, { "key.slow_motion", "F5", "Slow motion" },
-    { "key.fast_forward", "F6", "Fast-forward (held)" }, { "key.save_state", "F7", "Save a state" },
-    { "key.load_state", "F8", "Load the state" }, { "key.frame_step", "F9", "A frame, while paused" },
-    { "key.pause", "F10", "Pause" }, { "key.fullscreen", "F11", "Full screen" }, { "key.screenshot", "F12", "Screenshot" },
+    { "key.rewind", "F4", "Rewind (held)" }, { "key.pause", "F5", "Pause" },
+    { "key.fast_forward", "F6", "Fast-forward (held)" }, { "key.slow_motion", "F7", "Slow motion" },
+    { "key.frame_step", "F8", "A frame, while paused" }, { "key.save_state", "F9", "Save a state" },
+    { "key.load_state", "F10", "Load the state" }, { "key.fullscreen", "F11", "Full screen" }, { "key.screenshot", "F12", "Screenshot" },
     { "key.menu", "Escape", "Menu" },
 };
 enum { BUTTONS = 12 };

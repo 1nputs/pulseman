@@ -92,9 +92,9 @@ static int player(void *user)
     key(SDL_SCANCODE_F6, 1);
     double fast = rate(500);
     key(SDL_SCANCODE_F6, 0);
-    press(SDL_SCANCODE_F5);
+    press(SDL_SCANCODE_F7);
     double slow = rate(1000);
-    press(SDL_SCANCODE_F5);
+    press(SDL_SCANCODE_F7);
     printf("  frames a second: %.1f, fast-forward %.1f, slow motion %.1f\n", normal, fast, slow);
     CHECK(normal > 50 && normal < 70);
 #ifndef __SANITIZE_ADDRESS__                             /* (the sanitizers' build runs no faster than about 65) */
@@ -106,18 +106,18 @@ static int player(void *user)
     press(SDL_SCANCODE_F2);
     SDL_Delay(1000);
     /* pause, two frames stepped, on again */
-    press(SDL_SCANCODE_F10);
+    press(SDL_SCANCODE_F5);
     SDL_Delay(300);
     int c0 = SDL_AtomicGet(&frame);
     SDL_Delay(300);
     CHECK_EQ(SDL_AtomicGet(&frame), c0);
-    press(SDL_SCANCODE_F9);
+    press(SDL_SCANCODE_F8);
     SDL_Delay(200);
     CHECK_EQ(SDL_AtomicGet(&frame), c0 + 1);
-    press(SDL_SCANCODE_F9);
+    press(SDL_SCANCODE_F8);
     SDL_Delay(200);
     CHECK_EQ(SDL_AtomicGet(&frame), c0 + 2);
-    press(SDL_SCANCODE_F10);
+    press(SDL_SCANCODE_F5);
     CHECK(rate(300) > 40);
     /* the window loses focus with fast-forward held: paused, and the key let go */
     key(SDL_SCANCODE_F6, 1);
@@ -349,7 +349,7 @@ static void check_settings(void)
     static const char *const want[] = {
         "# the test's own comment\n", "mystery.key = kept\n", "general.screenshots = shots\n", "general.fast_forward = 4\n",
         "audio.volume = 80\n", "audio.mute = 1\n", "video.scale = integer\n", "video.aspect = square\n",
-        "pad1.start = Return\n", "pad2.a = Q\n", "key.screenshot = F12\n", "key.slow_motion = F5\n", "key.mute = F1\n",
+        "pad1.start = Return\n", "pad2.a = Q\n", "key.screenshot = F12\n", "key.slow_motion = F7\n", "key.pause = F5\n", "key.save_state = F9\n", "key.mute = F1\n",
         "key.menu = Escape\n", "game.rom =\n",
     };
     for (size_t i = 0; i < sizeof want / sizeof *want; i++)

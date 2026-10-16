@@ -74,7 +74,7 @@ This README carries the status.
   through its own save format; Nuked-OPN2's chip type is now per chip. Loads are all or nothing.
   `tests/state_test.c`: a state taken mid-note gives the same 60 frames of pictures, VDP state
   and sound again, in the same console and a new one. The player's requests (save, load, rewind)
-  come through the platform (`mdrt_requests`; F7, F8, F4 in SDL2). The first client saves,
+  come through the platform (`mdrt_requests`; F9, F10, F4 in SDL2). The first client saves,
   loads and rewinds with it; its states go on bit for bit for thousands of frames.
 - 2026-10-16, time inside a frame: a position in the frame only the client moves
   (`mdrt_now`, `mdrt_run_until`, `mdrt_charge`, `mdrt_wait_line`), the picture drawn a line at
