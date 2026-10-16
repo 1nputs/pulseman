@@ -41,8 +41,9 @@ must then start from scratch, as at power on, whatever it kept in its own static
 The pieces with no SDL in them are there for another platform (a browser's) to use:
 `mdrt/settings.h` (the file's text, read and written back with its comments and unknown keys),
 `mdrt/view.h` (where the picture goes in a window for each scaling), `mdrt/png.h` (a
-screenshot's PNG, in memory) and `mdrt/menu.h` (the menu's pages, inputs and drawing, with
-pulseman's own font).
+screenshot's PNG, in memory), `mdrt/menu.h` (the menu's pages, inputs and drawing, with
+pulseman's own font) and `mdrt/upscale.h` (Scale2x, Scale3x and MMPX: the picture magnified as
+pixel art, before the window's scaling).
 
 Without a window, fill `c.platform` (present, audio, wait, input: any may be NULL), create the
 console with `mdrt_new(&c)` and call the game yourself.

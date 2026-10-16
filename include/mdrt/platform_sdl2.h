@@ -7,7 +7,8 @@
  *
  * The menu (Esc, or a controller's Back or Guide button; the game waits while it is open): the
  * game's ROM (a file browser; the client checks each one), a reset, a state saved or loaded, the
- * video (scaling, aspect, full screen), the sound (volume, mute, the FM core and chip, changed as
+ * video (a pixel-art upscaler for the game's frames: mdrt/upscale.h; scaling, aspect, full
+ * screen), the sound (volume, mute, the FM core and chip, changed as
  * the game plays), options (pausing when the window loses focus, fast-forward's speed) and every
  * key, each changed by pressing the new one. Arrows and Enter work it, or a controller's d-pad, A
  * and B. It is drawn over the picture at the console's resolution (mdrt/menu.h).
@@ -25,7 +26,7 @@
  * The settings file (settings.ini in the directory the game runs in, beside its saves and
  * screenshots) is written with every setting the first time and whenever one changes; edit it
  * while the game is closed. It keeps the ROM chosen last, the window's size, place and full
- * screen, the scaling (sharp, integer, fit) and aspect (square, 4:3), the volume and mute, the
+ * screen, the upscaler, the scaling (sharp, integer, fit) and aspect (square, 4:3), the volume and mute, the
  * sound device and how many frames of sound are queued (latency), the FM core and chip, pausing
  * when the window loses focus, fast-forward's speed, the screenshots' directory and every key. */
 #ifndef MDRT_PLATFORM_SDL2_H

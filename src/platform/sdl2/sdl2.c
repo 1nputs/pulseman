@@ -24,6 +24,7 @@
 #include "mdrt/platform_sdl2.h"
 #include "mdrt/png.h"
 #include "mdrt/settings.h"
+#include "mdrt/upscale.h"
 #include "mdrt/view.h"
 
 /* ---- the keys: what each does, its setting and its default ------------------------------------ */
@@ -67,7 +68,7 @@ static const char *const fast_label[6] = { "2x", "3x", "4x", "6x", "8x", "as fas
 /* the menu's pages and items */
 enum { PAGE_MAIN, PAGE_VIDEO, PAGE_SOUND, PAGE_OPTIONS, PAGE_KEYS, PAGE_ROM };
 enum { I_RESUME = 1, I_ROM, I_RESET, I_SAVE, I_LOAD, I_VIDEO, I_SOUND, I_OPTIONS, I_KEYS, I_QUIT, I_BACK,
-       I_SCALE, I_ASPECT, I_FULL, I_VOLUME, I_MUTE, I_FM_CORE, I_FM_CHIP, I_FOCUS, I_FAST, I_UP,
+       I_UPSCALE, I_SCALE, I_ASPECT, I_FULL, I_VOLUME, I_MUTE, I_FM_CORE, I_FM_CHIP, I_FOCUS, I_FAST, I_UP,
        I_PAD = 1000,             /* + pad * BUTTONS + button */
        I_CONTROL = 2000,         /* + K_ */
        I_ENTRY = 10000 };        /* + a directory entry's index */
@@ -107,6 +108,11 @@ typedef struct sdl {
     uint8_t down[SDL_NUM_SCANCODES];
     uint16_t pad_ignore[2];     /* controller buttons held when the menu closed, until let go */
     int scale, aspect, focus_pause, auto_paused;
+    int upscale;                /* MDRT_UPSCALE_: the game's frames through it, before the scaling */
+    uint32_t *frame, *big, *big_scratch;   /* the frame taken from the game thread; it upscaled; mmpx4x's halfway */
+    SDL_Texture *big_tex;       /* the upscaled frame, big_f times the picture's texture */
+    int big_f;
+    const char *upscale_label[MDRT_UPSCALE_COUNT];
     char title[200];
     uint32_t notice_until;
     uint8_t *rom;               /* the game's ROM (given to the client by rom_use) */
@@ -398,7 +404,8 @@ static void settings_load(sdl *s)
             "# it is closed. Keys are SDL's key names, empty for none: A, 1, F1, Up, Return, Space, Tab,\n"
             "# Backspace, Escape, Left Shift, Right Ctrl, Keypad 8, PageUp, or the key's own sign (, . - =).\n"
             "# On a Mac the function keys need Fn held, unless they are set to act as F1, F2 ...\n"
-            "# video.scale: sharp, integer or fit. video.aspect: square or 4:3. audio.volume: 0-100.\n"
+            "# video.upscaler: off, scale2x, scale3x, mmpx2x or mmpx4x (pixel-art magnification, before the\n"
+            "# scaling). video.scale: sharp, integer or fit. video.aspect: square or 4:3. audio.volume: 0-100.\n"
             "# audio.device: empty for the default. audio.latency: frames of sound queued (1-10).\n"
             "# audio.fm_core: nuked or ymfm. audio.fm_chip: YM2612 or YM3438.\n"
             "# general.fast_forward: times the speed while it is held (0: as fast as it goes).\n";
@@ -407,7 +414,7 @@ static void settings_load(sdl *s)
     const char *defaults[][2] = {
         { "game.rom", "" },
         { "window.width", "960" }, { "window.height", "672" }, { "window.fullscreen", "0" },
-        { "video.scale", "sharp" }, { "video.aspect", "square" },
+        { "video.upscaler", "off" }, { "video.scale", "sharp" }, { "video.aspect", "square" },
         { "audio.volume", "100" }, { "audio.mute", "0" }, { "audio.device", "" }, { "audio.latency", "3" },
         { "audio.fm_core", mdrt_fm_core() }, { "audio.fm_chip", "YM2612" },
         { "general.pause_on_focus_loss", "1" }, { "general.fast_forward", "4" }, { "general.screenshots", "screenshots" },
@@ -425,6 +432,11 @@ static void settings_load(sdl *s)
         s->key[i] = bound(mdrt_settings_get(s->set, key_setting[i][0]));
     }
     s->scale = named(mdrt_settings_get(s->set, "video.scale"), scale_name, 3, MDRT_SCALE_SHARP);
+    const char *up = mdrt_settings_get(s->set, "video.upscaler");
+    for (int i = 0; i < MDRT_UPSCALE_COUNT; i++) {
+        s->upscale_label[i] = mdrt_upscale_label(i);
+        if (up && !strcmp(up, mdrt_upscale_name(i))) s->upscale = i;
+    }
     s->aspect = o->aspect ? MDRT_ASPECT_4_3 : named(mdrt_settings_get(s->set, "video.aspect"), aspect_name, 2, MDRT_ASPECT_SQUARE);
     SDL_AtomicSet(&s->volume, clamp(mdrt_settings_get_int(s->set, "audio.volume", 100), 0, 100));
     SDL_AtomicSet(&s->mute, mdrt_settings_get_int(s->set, "audio.mute", 0) != 0);
@@ -640,6 +652,7 @@ static void build_page(sdl *s, int page, int select)
         break;
     case PAGE_VIDEO:
         mdrt_menu_page(m, "Video");
+        mdrt_menu_add_choice(m, I_UPSCALE, "Upscaler", s->upscale_label, MDRT_UPSCALE_COUNT, s->upscale);
         mdrt_menu_add_choice(m, I_SCALE, "Scaling", scale_name, 3, s->scale);
         mdrt_menu_add_choice(m, I_ASPECT, "Aspect", aspect_label, 2, s->aspect);
         mdrt_menu_add_choice(m, I_FULL, "Full screen", off_on, 2, is_fullscreen(s));
@@ -813,12 +826,16 @@ static void act(sdl *s, int id)
     case I_RESET: if (confirmed(s, id, "start the game again")) restart(s, NULL); return;
     case I_SAVE: SDL_AtomicAdd(&s->saves, 1); close_menu(s); return;
     case I_LOAD: SDL_AtomicAdd(&s->loads, 1); close_menu(s); return;
-    case I_VIDEO: build_page(s, PAGE_VIDEO, I_SCALE); return;
+    case I_VIDEO: build_page(s, PAGE_VIDEO, I_UPSCALE); return;
     case I_SOUND: build_page(s, PAGE_SOUND, I_VOLUME); return;
     case I_OPTIONS: build_page(s, PAGE_OPTIONS, I_FOCUS); return;
     case I_KEYS: build_page(s, PAGE_KEYS, I_PAD); return;
     case I_QUIT: if (!running || confirmed(s, id, "quit")) quit(s); return;
     case I_BACK: build_page(s, PAGE_MAIN, s->page == PAGE_VIDEO ? I_VIDEO : s->page == PAGE_SOUND ? I_SOUND : s->page == PAGE_OPTIONS ? I_OPTIONS : I_KEYS); return;
+    case I_UPSCALE:                                       /* (the frame is upscaled again when the menu closes) */
+        s->upscale = it->value;
+        mdrt_settings_set(s->set, "video.upscaler", mdrt_upscale_name(s->upscale));
+        return;
     case I_SCALE:
         s->scale = it->value;
         mdrt_settings_set(s->set, "video.scale", scale_name[s->scale]);
@@ -984,21 +1001,47 @@ static void read_buttons(sdl *s)
 
 /* ---- the picture ------------------------------------------------------------------------------- */
 
+/* room for the upscaled frame at factor f (the buffers once, at the largest; a texture for f) */
+static int big_ready(sdl *s, int f)
+{
+    if (!s->frame) s->frame = malloc(320 * 240 * sizeof *s->frame);
+    if (!s->big) s->big = malloc(320 * 240 * 16 * sizeof *s->big);
+    if (!s->big_scratch) s->big_scratch = malloc(320 * 240 * 4 * sizeof *s->big_scratch);
+    if (s->big_tex && s->big_f != f) { SDL_DestroyTexture(s->big_tex); s->big_tex = NULL; }
+    if (!s->big_tex) s->big_tex = SDL_CreateTexture(s->ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, 320 * f, 240 * f);
+    s->big_f = f;
+    return s->frame && s->big && s->big_scratch && s->big_tex;
+}
+
 static void draw(sdl *s)
 {
+    int method = s->menu_open ? MDRT_UPSCALE_OFF : s->upscale, f = mdrt_upscale_factor(method);
+    if (method && !big_ready(s, f)) { method = MDRT_UPSCALE_OFF; f = 1; }
     SDL_LockMutex(s->lock);
     int fresh = s->fresh, w = s->width, h = s->height;
     if (s->menu_open && (fresh || s->redraw)) {          /* the menu over the picture as it stands */
         if (!w) { w = 320; h = 224; memset(s->menu_px, 0, sizeof s->menu_px); }
         else for (int y = 0; y < h; y++) memcpy(s->menu_px + y * 320, s->picture + y * 320, (size_t)w * 4);
+    } else if (fresh && method) {                         /* (taken, then upscaled outside the lock) */
+        for (int y = 0; y < h; y++) memcpy(s->frame + y * 320, s->picture + y * 320, (size_t)w * 4);
     } else if (fresh) SDL_UpdateTexture(s->tex, NULL, s->picture, 320 * 4);
     s->fresh = 0;
     SDL_UnlockMutex(s->lock);
     if ((!fresh && !s->redraw) || (!w && !s->menu_open)) return;
+    SDL_Texture *tex = s->tex;
     if (s->menu_open) {
         if (!w) { w = 320; h = 224; }
         mdrt_menu_draw(&s->menu, s->menu_px, w, h, 320);
         SDL_UpdateTexture(s->tex, NULL, s->menu_px, 320 * 4);
+    } else if (method) {                                  /* the game's frame, magnified */
+        if (fresh) {
+            mdrt_upscale(method, s->frame, w, h, 320, s->big, w * f, s->big_scratch);
+            SDL_Rect r = { 0, 0, w * f, h * f };
+            SDL_UpdateTexture(s->big_tex, &r, s->big, w * f * 4);
+        }
+        tex = s->big_tex;
+        w *= f;
+        h *= f;
     }
     s->redraw = 0;
     int ww, wh;
@@ -1017,17 +1060,17 @@ static void draw(sdl *s)
             s->pre_h = ph;
         }
         if (s->pre) {
-            SDL_SetTextureScaleMode(s->tex, SDL_ScaleModeNearest);
+            SDL_SetTextureScaleMode(tex, SDL_ScaleModeNearest);
             SDL_SetRenderTarget(s->ren, s->pre);
-            SDL_RenderCopy(s->ren, s->tex, &src, NULL);
+            SDL_RenderCopy(s->ren, tex, &src, NULL);
             SDL_SetRenderTarget(s->ren, NULL);
             SDL_RenderCopy(s->ren, s->pre, NULL, &dst);
             SDL_RenderPresent(s->ren);
             return;
         }
     }
-    SDL_SetTextureScaleMode(s->tex, s->scale == MDRT_SCALE_SHARP ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
-    SDL_RenderCopy(s->ren, s->tex, &src, &dst);
+    SDL_SetTextureScaleMode(tex, s->scale == MDRT_SCALE_SHARP ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
+    SDL_RenderCopy(s->ren, tex, &src, &dst);
     SDL_RenderPresent(s->ren);
 }
 
@@ -1174,6 +1217,7 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
     mdrt_settings_free(s->set);
     mdrt_menu_free(&s->menu);
     free_entries(s);
+    free(s->frame); free(s->big); free(s->big_scratch);
     if (stopped) { mdrt_free(s->m); SDL_DestroyMutex(s->lock); free(s->loud); free(s->rom); free(s); }   /* (else the thread still has them) */
     SDL_Quit();
     return 0;

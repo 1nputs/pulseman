@@ -119,6 +119,15 @@ This README carries the status.
   works a page and draws it; `make sdl-check` works the menu as a player (a ROM turned down, one
   taken, the video and FM chip changed, a reset, another ROM in play, a key changed, the ROM found
   again on the next start).
+- 2026-10-16, pixel-art upscalers (`mdrt/upscale.h`, no SDL): Scale2x and Scale3x (EPX's rules as
+  scale2x.it publishes them) and MMPX 2x and 4x (McGuire and Gagiu, JCGT 2021, following the
+  authors' MIT-licensed C++). Each source pixel becomes a block of copies of its neighbours, so no
+  new colours appear. The SDL2 platform runs the game's frames through the one chosen in the
+  Video menu (`video.upscaler`) before its scaling, on the window's thread (a 320 x 224 frame:
+  0.3, 0.6, 2.1 and 8 ms), never the menu; screenshots stay at the console's resolution.
+  `platform_unit` checks hand-worked cases, Scale3x against a second formulation, and the outputs
+  on generated pixel art (noise, blocks and lines at every slope, text, a dither) against hashes
+  of the authors' own code; `make sdl-check` plays with MMPX 4x on.
 
 `make check` (GCC, sanitizers; both FM cores, each against the vectors); `make sdl-check` (the SDL2
 platform, about 15 s in real time; `MODE=release` to time fast-forward too); `CC=clang CXX=clang++
@@ -134,3 +143,7 @@ so with no LGPL code (for a release or browser build: review finding 1); a build
 `../ninety-four/out/vectors`; `docs/VECTORS.md`); `MDRT_REQUIRE_VECTORS=1` makes a missing vector a
 failure rather than a skip. The test ROM is assembled with `tests/rom/build.sh` (vasm; the
 default is the one built in `../ninety-four/ref/`).
+
+Third-party code: Nuked-OPN2 (LGPL-2.1) and ymfm (BSD-3) in `third_party/`; MMPX (MIT, Copyright
+2020 Morgan McGuire & Mara Gagiu) in `src/platform/upscale.c`, which follows their reference code
+and carries their notice. A binary that includes them ships their licences.

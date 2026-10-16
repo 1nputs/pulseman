@@ -2,7 +2,9 @@
  * back with its comments, order and unknown keys kept), where the picture goes in a window for
  * each scaling mode and aspect, and the PNG encoder (decoded back here: chunks, CRCs, the stored
  * deflate blocks, Adler-32, every pixel); and the menu: its moves and values, a long list's pages,
- * its drawing (MDRT_MENU_PNG=FILE writes a page as a PNG to look at). */
+ * its drawing (MDRT_MENU_PNG=FILE writes a page as a PNG to look at); and the upscalers: hand-worked
+ * cases, their outputs on generated pixel art against hashes of the MMPX authors' reference code's
+ * (MDRT_UPSCALE_DUMP=DIR writes the inputs for that code), Scale3x against a second formulation. */
 #include <stdlib.h>
 #include <string.h>
 #include "check.h"
@@ -10,6 +12,7 @@
 #include "mdrt/menu.h"
 #include "mdrt/png.h"
 #include "mdrt/settings.h"
+#include "mdrt/upscale.h"
 #include "mdrt/view.h"
 
 static void settings(void)
@@ -212,11 +215,134 @@ static void menu(void)
     mdrt_menu_free(&m);
 }
 
+/* ---- the upscalers ----------------------------------------------------------------------------- */
+
+static uint64_t fnv(const uint32_t *px, size_t n)
+{
+    uint64_t h = 0xCBF29CE484222325ull;
+    for (size_t i = 0; i < n; i++)
+        for (int k = 0; k < 4; k++) h = (h ^ (px[i] >> (8 * k) & 0xFF)) * 0x100000001B3ull;
+    return h;
+}
+
+static uint32_t lcg_state;
+static uint32_t lcg(void) { lcg_state = lcg_state * 1664525u + 1013904223u; return lcg_state >> 8; }
+
+/* the generated pictures: noise in 3 colours (one half transparent), blocks and lines at 1:1, 2:1
+ * and 1:2 in 6, text in the menu's font, and a dithered gradient */
+enum { IMAGES = 5, IW = 96, IH = 64 };
+static void image(int n, uint32_t *px)
+{
+    static const uint32_t pal[6] = { 0xFF102030, 0xFFF0E0D0, 0x80C04020, 0xFF2060C0, 0xFF000000, 0xFFFFFFFF };
+    lcg_state = 94u + (uint32_t)n;
+    for (int i = 0; i < IW * IH; i++) px[i] = pal[n == 0 ? lcg() % 3 : 1];
+    if (n == 1)
+        for (int r = 0; r < 40; r++) {                    /* rectangles, then lines */
+            int x = (int)(lcg() % IW), y = (int)(lcg() % IH), w = 1 + (int)(lcg() % 12), h = 1 + (int)(lcg() % 9);
+            uint32_t c = pal[lcg() % 6];
+            for (int yy = y; yy < y + h && yy < IH; yy++) for (int xx = x; xx < x + w && xx < IW; xx++) px[yy * IW + xx] = c;
+        }
+    if (n == 1 || n == 2)
+        for (int l = 0; l < 30; l++) {
+            int x = (int)(lcg() % IW), y = (int)(lcg() % IH), dx = (int)(lcg() % 3), dy = (int)(lcg() % 3), len = 4 + (int)(lcg() % 20);
+            uint32_t c = pal[lcg() % 6];
+            for (int k = 0; k < len; k++) {
+                int xx = x + k * (dx + 1) / 2, yy = y + k * (dy + 1) / 2;
+                if (xx < IW && yy < IH) px[yy * IW + xx] = c;
+            }
+        }
+    if (n == 3) {
+        static const char *const lines[] = { "NHL '94 Wings 3", "Penalty: hooking", "0:42 2nd period", "Shots 12 - 9", "@#%&*{}[]<>?" };
+        for (int i = 0; i < 5; i++) mdrt_menu_text(px, IW, IH, IW, 1, 2 + 12 * i, lines[i], pal[3 + i % 3]);
+    }
+    if (n == 4)
+        for (int y = 0; y < IH; y++) for (int x = 0; x < IW; x++) px[y * IW + x] = ((x + y) & 1) && x * 3 > y * 4 ? pal[0] : x > 70 ? pal[3] : pal[1];
+}
+
+static void upscalers(void)
+{
+    static uint32_t in[IW * IH], out[16 * IW * IH], again[16 * IW * IH], scratch[4 * IW * IH];
+    /* hand-worked: a staircase */
+    static const char stairs[4][5] = { "#...", "##..", ".##.", "..##" };
+    uint32_t s[16];
+    for (int i = 0; i < 16; i++) s[i] = stairs[i / 4][i % 4] == '#' ? 0xFF000000 : 0xFFFFFFFF;
+    mdrt_upscale(MDRT_UPSCALE_SCALE2X, s, 4, 4, 4, out, 8, NULL);
+    CHECK(out[1 * 8 + 2] == 0xFF000000);                  /* the inner corner of a step filled */
+    CHECK(out[2 * 8 + 3] == 0xFFFFFFFF);                  /* the outer one cut */
+    CHECK(out[0 * 8 + 2] == 0xFFFFFFFF && out[3 * 8 + 0] == 0xFF000000);   /* (the rest as they were) */
+    CHECK_EQ(mdrt_upscale_factor(MDRT_UPSCALE_SCALE3X), 3);
+    CHECK_EQ(mdrt_upscale_factor(MDRT_UPSCALE_MMPX4X), 4);
+    CHECK(!strcmp(mdrt_upscale_name(MDRT_UPSCALE_MMPX2X), "mmpx2x") && !strcmp(mdrt_upscale_name(99), "off"));
+    /* a flat picture stays flat, every method */
+    for (int i = 0; i < IW * IH; i++) in[i] = 0xFF336699;
+    for (int m = 1; m < MDRT_UPSCALE_COUNT; m++) {
+        int f = mdrt_upscale_factor(m), same = 1;
+        mdrt_upscale(m, in, IW, IH, IW, out, IW * f, scratch);
+        for (int i = 0; i < IW * IH * f * f; i++) same &= out[i] == 0xFF336699;
+        CHECK(same);
+    }
+    /* the generated pictures: no colour that was not there; the hashes of the authors' code */
+    static const uint64_t want[IMAGES][3] = {                /* scale2x (their EPX), mmpx2x, mmpx4x */
+        { 0x2b13fcac46704f58ull, 0x2aa42d9dfd9fe295ull, 0x9319d8ebf2fdaaf8ull },
+        { 0x040cd8b577c5fb29ull, 0x251865b5524215a8ull, 0xf7c14985e6db3dacull },
+        { 0x510f56d233e4340dull, 0x24e328c09d89f7d0ull, 0x46b2903ab5090684ull },
+        { 0x727826909a67f425ull, 0xa54766a81bbe16fdull, 0x10d1dfd99f3ab775ull },
+        { 0x49b0dfe7688a56a5ull, 0x6be0f93a0f595725ull, 0x1e18832213921ee5ull },
+    };
+    const char *dump = getenv("MDRT_UPSCALE_DUMP");
+    for (int n = 0; n < IMAGES; n++) {
+        image(n, in);
+        if (dump) {
+            char path[512];
+            snprintf(path, sizeof path, "%s/image%d.raw", dump, n);
+            FILE *f = fopen(path, "wb");
+            if (f) { fwrite(in, 4, IW * IH, f); fclose(f); }
+        }
+        static const int ms[3] = { MDRT_UPSCALE_SCALE2X, MDRT_UPSCALE_MMPX2X, MDRT_UPSCALE_MMPX4X };
+        for (int k = 0; k < 3; k++) {
+            int f = mdrt_upscale_factor(ms[k]), foreign = 0;
+            mdrt_upscale(ms[k], in, IW, IH, IW, out, IW * f, scratch);
+            for (int i = 0; i < IW * IH * f * f; i++) {
+                int found = 0;
+                for (int j = 0; j < IW * IH && !found; j++) found = out[i] == in[j];
+                foreign += !found;
+            }
+            CHECK_EQ(foreign, 0);
+            uint64_t h = fnv(out, (size_t)IW * IH * f * f);
+            if (h != want[n][k]) printf("  upscale: image %d, %s: %016llx, the authors' code %016llx\n", n, mdrt_upscale_name(ms[k]),
+                                        (unsigned long long)h, (unsigned long long)want[n][k]);
+            CHECK(h == want[n][k]);
+        }
+        /* Scale3x against its other formulation (scale2x.it's "E0 = D == B ? D : E ..." when B != H and D != F) */
+        mdrt_upscale(MDRT_UPSCALE_SCALE3X, in, IW, IH, IW, out, IW * 3, NULL);
+        for (int y = 0; y < IH; y++)
+            for (int x = 0; x < IW; x++) {
+                #define P(dx, dy) in[(y + (dy) < 0 ? 0 : y + (dy) >= IH ? IH - 1 : y + (dy)) * IW + (x + (dx) < 0 ? 0 : x + (dx) >= IW ? IW - 1 : x + (dx))]
+                uint32_t A = P(-1, -1), B = P(0, -1), C = P(1, -1), D = P(-1, 0), E = P(0, 0), F = P(1, 0), G = P(-1, 1), H = P(0, 1), I = P(1, 1);
+                #undef P
+                uint32_t e[9] = { E, E, E, E, E, E, E, E, E };
+                if (B != H && D != F) {
+                    e[0] = D == B ? D : E;
+                    e[1] = (D == B && E != C) || (B == F && E != A) ? B : E;
+                    e[2] = B == F ? F : E;
+                    e[3] = (D == B && E != G) || (D == H && E != A) ? D : E;
+                    e[5] = (B == F && E != I) || (H == F && E != C) ? F : E;
+                    e[6] = D == H ? D : E;
+                    e[7] = (D == H && E != I) || (H == F && E != G) ? H : E;
+                    e[8] = H == F ? F : E;
+                }
+                for (int k = 0; k < 9; k++) again[(3 * y + k / 3) * IW * 3 + 3 * x + k % 3] = e[k];
+            }
+        CHECK(!memcmp(out, again, (size_t)IW * IH * 9 * 4));
+    }
+}
+
 int main(void)
 {
     settings();
     views();
     png();
     menu();
+    upscalers();
     return check_done("platform_unit");
 }
