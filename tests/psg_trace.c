@@ -1,5 +1,5 @@
 /* WP3: the PSG writes of every sound trace in $MDRT_VECTORS recorded from power on with the FM chip
- * left out of the oracle's audio (fm_preamp 0: ../nhl95/tools/oracle/sndtrace.py --fm-preamp 0),
+ * left out of the oracle's audio (fm_preamp 0: ../ninety-four/tools/oracle/sndtrace.py --fm-preamp 0),
  * replayed through the model, compared with the oracle's audio (tests/spectrum.h): the loudness
  * within 1 dB, each window's spectrum within 3 dB and its centre within 1/3 octave, each in 99% of
  * the windows, and the whole trace's spectrum within 1 dB in every band. Printed: the gain, which

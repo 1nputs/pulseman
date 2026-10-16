@@ -3,7 +3,7 @@
 A client is a game reimplemented in C whose hardware accesses were 68k bus accesses. It links
 `build/release/libmdrt.a` (and `libmdrt_sdl2.a` for a window), includes `mdrt/mdrt.h` (and
 `mdrt/platform_sdl2.h`), and maps its hardware calls onto the runtime. The first client,
-NHL '94 (`../nhl95`), does it in `native/hal_native.c` (about a hundred lines) and
+NHL '94 (`../ninety-four`), does it in `native/hal_native.c` (about a hundred lines) and
 `native/main.c`; read those as the reference.
 
 ## Starting

@@ -8,7 +8,7 @@ never committed (they come from copyrighted programs, apart from the test ROM's)
 
 ## Where they live
 
-`make check` reads every vector in `$MDRT_VECTORS` (default `../nhl95/out/vectors`). With no
+`make check` reads every vector in `$MDRT_VECTORS` (default `../ninety-four/out/vectors`). With no
 directory, or no vector of a kind, the vector tests say so and are skipped; set
 `MDRT_REQUIRE_VECTORS=1` on a machine that has the vectors and a skip is a failure instead, so a
 wrong path cannot pass. The first client's `make runtime-check` sets both.
@@ -19,8 +19,8 @@ wrong path cannot pass. The first client's `make runtime-check` sets both.
 | `*.padtrace` | `tests/pad_trace.c` | the I/O chip's accesses and the buttons held |
 | `*.sndtrace` | `tests/psg_trace.c`, `fm_trace.c`, `mix_trace.c`, `examples/trace-player.c` | every sound chip write at its master clock, and the oracle's audio |
 
-The exporters today are the first client's (`../nhl95/tools/oracle/vdptrace.py`, `padtrace.py`,
-`sndtrace.py` over its oracle hook, `../nhl95/tools/hybrid/oracle_shim.c`); its
+The exporters today are the first client's (`../ninety-four/tools/oracle/vdptrace.py`, `padtrace.py`,
+`sndtrace.py` over its oracle hook, `../ninety-four/tools/hybrid/oracle_shim.c`); its
 `tools/oracle/vectors.py` holds the recipe of each vector it records. The test ROM's own vector
 (`vdptest.vdptrace`) is recorded from `build/vdptest.bin` (`tests/rom/build.sh`) the same way.
 

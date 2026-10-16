@@ -3,7 +3,7 @@
 A small, permissively licensed, modular Mega Drive / Genesis hardware runtime in C11: the VDP
 (state machine and renderer), PSG, YM2612 interface, controller ports and save RAM, with an
 SDL2 platform layer for Linux. A WebAssembly build for the browser is planned (WP8, not started).
-It is the runtime for games reimplemented in C, first the NHL '94 port in the sibling `nhl95`
+It is the runtime for games reimplemented in C, first the NHL '94 port in the sibling `ninety-four`
 repository, and is meant to be reused by later ports and other projects.
 
 No 68k or Z80 emulation: the game logic is C, and the game's own sound relay drives the sound
@@ -53,7 +53,7 @@ This README carries the status.
   disk audio, 5.00 s of sound) and `trace-player` (a client's .vdptrace pictures and .sndtrace
   sound live; NHL '94's 100 s game trace plays in real time at 42% of a core, release build).
   Under the sanitizers SDL2 reports a 768-byte leak of its own (`ASAN_OPTIONS=detect_leaks=0`).
-- WP9 client integration: NHL '94 runs on the runtime with sound (`../nhl95`, `make nhl94`):
+- WP9 client integration: NHL '94 runs on the runtime with sound (`../ninety-four`, `make nhl94`):
   its `native/hal_native.c` maps the game's hardware calls, its Z80 relay port feeds the FM chip
   through the sound tick, and the first two seconds of its sound match the oracle's within about
   1 dB a 100 ms window. `docs/API.md` describes the contract.
@@ -102,6 +102,6 @@ back into warnings for a compiler that is newer than these. `FM_CORES` picks the
 (`mdrt_config.fm_core`): "nuked ymfm" by default; `make FM_CORES=ymfm` builds without Nuked-OPN2,
 so with no LGPL code (for a release or browser build: review finding 1); a build with ymfm links
 `-lstdc++`. Vectors come from `$MDRT_VECTORS` (default
-`../nhl95/out/vectors`; `docs/VECTORS.md`); `MDRT_REQUIRE_VECTORS=1` makes a missing vector a
+`../ninety-four/out/vectors`; `docs/VECTORS.md`); `MDRT_REQUIRE_VECTORS=1` makes a missing vector a
 failure rather than a skip. The test ROM is assembled with `tests/rom/build.sh` (vasm; the
-default is the one built in `../nhl95/ref/`).
+default is the one built in `../ninety-four/ref/`).

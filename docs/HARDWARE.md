@@ -15,13 +15,13 @@ and a document disagree the vector wins, and the disagreement is written down he
 
 ## Vectors
 
-The formats are in `VECTORS.md`. Recorded by `../nhl95/tools/oracle/vdptrace.py` into
-`$MDRT_VECTORS` (default `../nhl95/out/vectors`): `boot` (EA logo), `title`, `setup`,
+The formats are in `VECTORS.md`. Recorded by `../ninety-four/tools/oracle/vdptrace.py` into
+`$MDRT_VECTORS` (default `../ninety-four/out/vectors`): `boot` (EA logo), `title`, `setup`,
 `matchup`, `pregame` (front-end screens, from power on with Start presses), `faceoff`, `play`
 (CPU against CPU), `pause` (the pause menu), and `vdptest` (the test ROM). Each is 90-250
 frames.
 
-Sound traces (`*.sndtrace`, `../nhl95/tools/oracle/sndtrace.py`, version 3): `game` (6000 frames from power on: EA logo,
+Sound traces (`*.sndtrace`, `../ninety-four/tools/oracle/sndtrace.py`, version 3): `game` (6000 frames from power on: EA logo,
 title, menus, the faceoff, 40 s of play), `game_psg` and `game_fm` (the same with the FM chip,
 or the PSG, left out of the oracle's audio: preamp 0), `game_fm_nuked` (`game_fm` with the oracle
 on Nuked-OPN2 too), `boot` (3000 frames from power on),
