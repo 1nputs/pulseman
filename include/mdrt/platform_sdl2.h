@@ -9,19 +9,18 @@
  * Return, Space, Left Shift, Keypad 8, the sign of , . - = ...):
  *   pad 1  arrows, Z / X / C = A / B / C, Enter = Start
  *   pad 2  I J K L, Q / W / E = A / B / C, Tab = Start
- *   Esc quit, P pause, F11 or Alt+Enter full screen, F5 / F9 ask the game to save / load a state,
- *   Backspace held to step back (mdrt_requests), Space held fast-forward, "," slow motion,
- *   "." one frame while paused, F12 a screenshot, "-" / "=" volume, M mute, F6 the scaling
- *   (sharp, integer, fit), F7 the aspect (square pixels, 4:3)
+ *   F1 mute, F2 / F3 volume down / up, F4 held to step back (mdrt_requests), F5 slow motion,
+ *   F6 held fast-forward, F7 / F8 ask the game to save / load a state, F9 one frame while paused,
+ *   F10 pause, F11 or Alt+Enter full screen, F12 a screenshot, Esc quit
  * The first two game controllers are pads 1 and 2 (X / A / B = A / B / C, Start). A change shows
  * for a moment in the window's title.
  *
- * The settings file (settings.ini in SDL's per-user directory for the app: ~/.local/share/pulseman/
- * APP/ on Linux, %APPDATA%\pulseman\APP\ on Windows, ~/Library/Application Support/pulseman/APP/ on
- * macOS) is written with every setting the first time and whenever one changes; edit it while
- * the game is closed. It keeps the window's size, place and full screen, the scaling and aspect,
- * the volume and mute, the sound device and how many frames of sound are queued (latency),
- * pausing when the window loses focus, the screenshots' directory and every key. */
+ * The settings file (settings.ini in the directory the game runs in, beside its saves and
+ * screenshots) is written with every setting the first time and whenever one changes; edit it
+ * while the game is closed. It keeps the window's size, place and full screen, the scaling
+ * (sharp, integer, fit) and aspect (square, 4:3), the volume and mute, the sound device and how
+ * many frames of sound are queued (latency), pausing when the window loses focus, fast-forward's
+ * speed, the screenshots' directory and every key. */
 #ifndef MDRT_PLATFORM_SDL2_H
 #define MDRT_PLATFORM_SDL2_H
 #include "mdrt/mdrt.h"
@@ -31,8 +30,8 @@ typedef struct mdrt_sdl_options {
     int scale;                  /* window size in multiples of the picture (0: the settings', or 3) */
     int aspect;                 /* 1: 4:3 for this run (0: the settings' aspect) */
     const char *sram_path;      /* the save RAM's file (NULL: not kept) */
-    const char *app;            /* the name of its settings' directory (NULL: "game") */
-    const char *settings_path;  /* the settings file (NULL: settings.ini in the per-user directory) */
+    const char *app;            /* the name screenshots begin with (NULL: "screenshot") */
+    const char *settings_path;  /* the settings file (NULL: settings.ini in the working directory) */
 } mdrt_sdl_options;
 
 /* the client's game: runs on the game thread with the console made from the configuration; when

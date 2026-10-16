@@ -20,14 +20,14 @@
 
 /* ---- the keys: what each does, its setting and its default ------------------------------------ */
 
-enum { K_QUIT, K_PAUSE, K_FULLSCREEN, K_SAVE, K_LOAD, K_REWIND, K_FAST, K_SLOW, K_STEP, K_SHOT,
-       K_VOL_DOWN, K_VOL_UP, K_MUTE, K_SCALE, K_ASPECT, K_COUNT };
-static const char *const key_setting[K_COUNT][2] = {
-    { "key.quit", "Escape" }, { "key.pause", "P" }, { "key.fullscreen", "F11" },
-    { "key.save_state", "F5" }, { "key.load_state", "F9" }, { "key.rewind", "Backspace" },
-    { "key.fast_forward", "Space" }, { "key.slow_motion", "," }, { "key.frame_step", "." },
-    { "key.screenshot", "F12" }, { "key.volume_down", "-" }, { "key.volume_up", "=" },
-    { "key.mute", "M" }, { "key.scale", "F6" }, { "key.aspect", "F7" },
+enum { K_MUTE, K_VOL_DOWN, K_VOL_UP, K_REWIND, K_SLOW, K_FAST, K_SAVE, K_LOAD, K_STEP, K_PAUSE,
+       K_FULLSCREEN, K_SHOT, K_QUIT, K_COUNT };
+static const char *const key_setting[K_COUNT][2] = {   /* (the controls on the function keys, in order) */
+    { "key.mute", "F1" }, { "key.volume_down", "F2" }, { "key.volume_up", "F3" },
+    { "key.rewind", "F4" }, { "key.slow_motion", "F5" }, { "key.fast_forward", "F6" },
+    { "key.save_state", "F7" }, { "key.load_state", "F8" }, { "key.frame_step", "F9" },
+    { "key.pause", "F10" }, { "key.fullscreen", "F11" }, { "key.screenshot", "F12" },
+    { "key.quit", "Escape" },
 };
 enum { BUTTONS = 12 };
 static const char *const button_name[BUTTONS] = { "up", "down", "left", "right", "a", "b", "c", "start", "x", "y", "z", "mode" };
@@ -69,7 +69,7 @@ typedef struct sdl {
     size_t loud_cap;
     /* the main thread's */
     mdrt_settings *set;
-    char *set_path;
+    const char *set_path;
     uint32_t set_saved;         /* SDL_GetTicks of the last write */
     SDL_Scancode key[K_COUNT], button_key[2][BUTTONS];
     uint8_t down[SDL_NUM_SCANCODES];
@@ -194,7 +194,7 @@ static int game_thread(void *user)
 
 static void settings_write(sdl *s)
 {
-    if (!s->set_path || !mdrt_settings_dirty(s->set)) return;
+    if (!mdrt_settings_dirty(s->set)) return;
     size_t n = mdrt_settings_format(s->set, NULL, 0);
     char *text = malloc(n);
     FILE *f = text ? fopen(s->set_path, "wb") : NULL;
@@ -227,15 +227,8 @@ static void settings_load(sdl *s)
 {
     const mdrt_sdl_options *o = s->o;
     s->set = mdrt_settings_new();
-    const char *path = o->settings_path;
-    char *dir = path ? NULL : SDL_GetPrefPath("pulseman", o->app ? o->app : "game");
-    if (dir || path) {
-        size_t n = (path ? strlen(path) : strlen(dir) + 12) + 1;
-        s->set_path = malloc(n);
-        if (s->set_path) snprintf(s->set_path, n, "%s%s", path ? path : dir, path ? "" : "settings.ini");
-    }
-    SDL_free(dir);
-    FILE *f = s->set_path ? fopen(s->set_path, "rb") : NULL;
+    s->set_path = o->settings_path ? o->settings_path : "settings.ini";   /* (in the directory the game runs in) */
+    FILE *f = fopen(s->set_path, "rb");
     if (f) {
         fseek(f, 0, SEEK_END);
         long n = ftell(f);
@@ -249,6 +242,7 @@ static void settings_load(sdl *s)
             "# pulseman's settings for this game, kept by the game: edit them while it is closed.\n"
             "# Keys are SDL's key names, empty for none: A, 1, F1, Up, Return, Space, Tab, Backspace,\n"
             "# Escape, Left Shift, Right Ctrl, Keypad 8, PageUp, or the key's own sign (, . - = ; [).\n"
+            "# On a Mac the function keys need Fn held, unless they are set to act as F1, F2 ...\n"
             "# video.scale: sharp, integer or fit. video.aspect: square or 4:3. audio.volume: 0-100.\n"
             "# audio.device: empty for the default. audio.latency: frames of sound queued (1-10).\n"
             "# general.fast_forward: times the speed while it is held (0: as fast as it goes).\n";
@@ -386,20 +380,6 @@ static void key_pressed(sdl *s, SDL_Scancode k, SDL_Keymod mod)
         mdrt_settings_set_int(s->set, "audio.mute", SDL_AtomicGet(&s->mute));
         volume_notice(s);
         break;
-    case K_SCALE: case K_ASPECT: {
-        char msg[48];
-        if (a == K_SCALE) {
-            s->scale = (s->scale + 1) % 3;
-            mdrt_settings_set(s->set, "video.scale", scale_name[s->scale]);
-        } else {
-            s->aspect = !s->aspect;
-            mdrt_settings_set(s->set, "video.aspect", aspect_name[s->aspect]);
-        }
-        snprintf(msg, sizeof msg, "%s scaling, %s", scale_name[s->scale], s->aspect ? "4:3" : "square pixels");
-        notice(s, msg);
-        s->redraw = 1;
-        break;
-    }
     default: break;
     }
 }
@@ -599,7 +579,6 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
     if (s->dev) SDL_CloseAudioDevice(s->dev);
     int stopped = SDL_AtomicGet(&s->done);
     mdrt_settings_free(s->set);
-    free(s->set_path);
     if (stopped) { mdrt_free(s->m); SDL_DestroyMutex(s->lock); free(s->loud); free(s); }   /* (else the thread still has them) */
     SDL_Quit();
     return 0;

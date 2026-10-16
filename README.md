@@ -74,7 +74,7 @@ This README carries the status.
   through its own save format; Nuked-OPN2's chip type is now per chip. Loads are all or nothing.
   `tests/state_test.c`: a state taken mid-note gives the same 60 frames of pictures, VDP state
   and sound again, in the same console and a new one. The player's requests (save, load, rewind)
-  come through the platform (`mdrt_requests`; F5, F9, Backspace in SDL2). The first client saves,
+  come through the platform (`mdrt_requests`; F7, F8, F4 in SDL2). The first client saves,
   loads and rewinds with it; its states go on bit for bit for thousands of frames.
 - 2026-10-16, time inside a frame: a position in the frame only the client moves
   (`mdrt_now`, `mdrt_run_until`, `mdrt_charge`, `mdrt_wait_line`), the picture drawn a line at
@@ -96,8 +96,9 @@ This README carries the status.
   reads, the sound sample for sample); the first client's own 600-frame recording replays the same
   way (its `make runtime-selfcheck`). (RUNTIME-DIRECTION 5, 9, 8.)
 - 2026-10-16, the player's controls in the SDL2 platform: a settings file the player can edit
-  (`mdrt/settings.h`: comments, order and unknown keys kept) with every key rebindable (both
-  pads' twelve buttons, the controls), the window's size, place and full screen remembered;
+  (`mdrt/settings.h`: comments, order and unknown keys kept; `settings.ini` where the game runs)
+  with every key rebindable (both pads' twelve buttons, the controls, on F1-F12 by default), the
+  window's size, place and full screen remembered;
   volume and mute, the sound device and latency; fast-forward held (4 times by default), slow
   motion, a frame at a time while paused, pausing when the window loses focus (the keys let go);
   screenshots as PNG at the console's resolution (`mdrt/png.h`); sharp (whole multiple, then
