@@ -1,5 +1,5 @@
 /* md-runtime: the composition of the hardware modules and the timing constants.
- * See docs/WORKPLAN.md. */
+ * See docs/API.md. */
 #ifndef MDRT_MDRT_H
 #define MDRT_MDRT_H
 #include <stdint.h>

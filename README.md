@@ -10,9 +10,8 @@ No 68k or Z80 emulation: the game logic is C, and the game's own sound relay dri
 chips directly.
 
 Documents: `docs/API.md` (using the runtime from a client), `docs/VECTORS.md` (the test vectors
-and their formats), `docs/HARDWARE.md` (the behaviour modelled and where each piece comes from),
-`docs/WORKPLAN.md` (the original brief: the decisions, the work packages, how each is verified;
-this README carries the status).
+and their formats), `docs/HARDWARE.md` (the behaviour modelled and where each piece comes from).
+This README carries the status.
 
 ## Status
 

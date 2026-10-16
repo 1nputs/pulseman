@@ -1,7 +1,7 @@
 # Hardware notes
 
 Behaviour the runtime implements, each with where it comes from: a document below, or a test
-vector (the oracle, Genesis Plus GX running the real game; see WORKPLAN section 3). When a vector
+vector (the oracle, Genesis Plus GX running the real game; see `VECTORS.md`). When a vector
 and a document disagree the vector wins, and the disagreement is written down here.
 
 ## References

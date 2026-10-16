@@ -13,3 +13,5 @@
 # ROMs
 *.gen
 *.smd
+# working notes, kept outside the repository
+/docs/WORKPLAN.md
