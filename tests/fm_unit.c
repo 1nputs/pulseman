@@ -60,12 +60,22 @@ static double rms(int side, int from, int n)
     return sqrt(a / n);
 }
 
-int main(void)
+/* the mean of the left side over n samples: the DAC's offset in silence */
+static double mean(int from, int n)
 {
-    printf("  FM core: %s\n", mdrt_fm_core());
-    mdrt_fm *f = mdrt_fm_new();
+    double m = 0;
+    for (int i = from; i < from + n; i++) m += buf[2 * i];
+    return m / n;
+}
+
+static void core_checks(const char *core, int model)
+{
+    printf("  FM core %s, %s:\n", core, model == MDRT_FM_YM3438 ? "YM3438" : "YM2612");
+    mdrt_fm *f = mdrt_fm_new_core(core, model);
     CHECK(f != NULL);
-    if (!f) return check_done("fm_unit");
+    if (!f) return;
+    CHECK(!strcmp(mdrt_fm_core_of(f), core));
+    CHECK_EQ(mdrt_fm_model(f), model);
 
     /* silent after power on */
     got = mdrt_fm_run(f, 1000 * MDRT_FM_SAMPLE_MCLKS, buf, N);
@@ -119,5 +129,32 @@ int main(void)
     CHECK(hi - lo > 2 * 0.85 * 4608 * 112 / 128);         /* $F0 and $10: +-112 of 128 */
     CHECK(fabs(frequency(0, 4000) - RATE / 200) < 2);
     mdrt_fm_free(f);
+}
+
+int main(void)
+{
+    printf("  cores: the default %s;", mdrt_fm_core());
+    int n = 0;
+    for (const char *c; (c = mdrt_fm_cores(n)); n++) printf(" %s", c);
+    printf("\n");
+    CHECK(n >= 1);
+    CHECK(mdrt_fm_new_core("none", MDRT_FM_YM2612) == NULL);
+    CHECK(mdrt_fm_new_core(mdrt_fm_core(), 7) == NULL);
+    for (int i = 0; i < n; i++)
+        for (int model = MDRT_FM_YM2612; model <= MDRT_FM_YM3438; model++) core_checks(mdrt_fm_cores(i), model);
+    /* the models: the YM2612's DAC "ladder" puts its idle output a step off zero, the YM3438's
+     * does not (Nuked-OPN2's models; ymfm's) */
+    for (int i = 0; i < n; i++) {
+        double off[2];
+        for (int model = 0; model < 2; model++) {
+            mdrt_fm *f = mdrt_fm_new_core(mdrt_fm_cores(i), model);
+            got = mdrt_fm_run(f, 1000 * MDRT_FM_SAMPLE_MCLKS, buf, N);
+            off[model] = mean(0, got);
+            mdrt_fm_free(f);
+        }
+        printf("  %s: the idle output's offset %.1f (YM2612), %.1f (YM3438)\n", mdrt_fm_cores(i), off[0], off[1]);
+        CHECK(off[0] > 100);
+        CHECK(fabs(off[1]) < 1);
+    }
     return check_done("fm_unit");
 }

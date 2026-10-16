@@ -55,6 +55,9 @@ enum { MDRT_REQUEST_SAVE = 1, MDRT_REQUEST_LOAD = 2, MDRT_REQUEST_REWIND = 4 };
 
 typedef struct mdrt_config {
     int pal;                    /* a PAL console: its master clock, 313 lines, the version bit */
+    int domestic;               /* a Japanese console: the version register's overseas bit clear */
+    const char *fm_core;        /* the FM core, "nuked" or "ymfm" (NULL: the build's default; mdrt_fm_cores) */
+    int fm_model;               /* MDRT_FM_YM2612 (0: the first consoles) or MDRT_FM_YM3438 (later ones) */
     uint32_t audio_rate;        /* output samples a second (0: 48000) */
     int32_t fm_gain, psg_gain;  /* the mixer's gains in 1/32768ths (0: MDRT_MIX_FM_GAIN / PSG_GAIN) */
     size_t sram_size;           /* save RAM bytes (0: none) */
@@ -63,11 +66,13 @@ typedef struct mdrt_config {
     mdrt_platform platform;
 } mdrt_config;
 
+/* NULL when out of memory or the build has not the FM core asked for */
 mdrt *mdrt_new(const mdrt_config *c);
 void mdrt_free(mdrt *m);
 mdrt_vdp *mdrt_get_vdp(mdrt *m);
 mdrt_pads *mdrt_get_pads(mdrt *m);
 mdrt_sram *mdrt_get_sram(mdrt *m);
+mdrt_fm *mdrt_get_fm(mdrt *m);                  /* (its core and model: mdrt_fm_core_of, mdrt_fm_model) */
 
 /* the master clock in Hz, the frame's length in master clocks (896040 NTSC, 1070460 PAL) and
  * frames completed */
@@ -84,6 +89,39 @@ void mdrt_psg_port(mdrt *m, uint32_t at, uint8_t value);
  * come in through mdrt_ym_write) */
 typedef void (*mdrt_sound_tick_fn)(void *user, uint32_t until);
 void mdrt_set_sound_tick(mdrt *m, mdrt_sound_tick_fn fn, void *user);
+
+/* ---- the 68k's bus by address --------------------------------------------------------------
+ * For what has no function of its own (a cartridge's EEPROM, a bank-switching mapper, a
+ * coprocessor) and for tools that work by address (a RAM watch, cheats, a script): the client
+ * maps a region to its own functions, and mdrt_bus_* reach the map, then the console's own ports:
+ * the VDP and PSG ($C00000-$C0001F, by the access's width, as the 68k's move.b / .w / .l), the I/O
+ * chip ($A10000-$A1001F), save RAM ($200000 up when it is configured), and the configuration's
+ * read68k for the rest (the client's ROM and work RAM; writes there go nowhere unless mapped).
+ * DMA from the 68k bus reads through the map too. A client that calls the modules directly, as a
+ * port of 68k code usually does, need not use it. Regions mapped later win where they overlap;
+ * at most 16. Returns 0, or -1 when full. */
+typedef uint8_t (*mdrt_bus_read_fn)(void *user, uint32_t addr);
+typedef void (*mdrt_bus_write_fn)(void *user, uint32_t addr, uint8_t value);
+int mdrt_bus_map(mdrt *m, uint32_t base, uint32_t size, mdrt_bus_read_fn read, mdrt_bus_write_fn write, void *user);
+uint8_t mdrt_bus_read8(mdrt *m, uint32_t addr);
+uint16_t mdrt_bus_read16(mdrt *m, uint32_t addr);
+uint32_t mdrt_bus_read32(mdrt *m, uint32_t addr);
+void mdrt_bus_write8(mdrt *m, uint32_t addr, uint8_t value);
+void mdrt_bus_write16(mdrt *m, uint32_t addr, uint16_t value);
+void mdrt_bus_write32(mdrt *m, uint32_t addr, uint32_t value);
+
+/* ---- the runtime as a recorder -------------------------------------------------------------
+ * The console writes the trace formats the oracle's exporter writes (docs/VECTORS.md) to the
+ * client's sink, from now on: MDRT_TRACE_VDP a .vdptrace (version 2: every VDP port access with its
+ * time, the DMA sources, the state and picture at each handshake once a whole frame is in it),
+ * MDRT_TRACE_PADS a .padtrace (the I/O chip's accesses, the buttons each frame), MDRT_TRACE_SOUND a
+ * .sndtrace (every sound write at its master clock as the chips take it, and the console's own
+ * audio; flags bit 2 says so, bit 1 that the FM core was Nuked-OPN2, bit 0 that the recording began
+ * at the first frame). md-runtime's tests replay them as they replay the oracle's, so a run of a
+ * release is a test of the next. A NULL sink ends the trace (its END tag) and stops. */
+enum { MDRT_TRACE_VDP, MDRT_TRACE_PADS, MDRT_TRACE_SOUND };
+typedef void (*mdrt_sink_fn)(void *user, const void *bytes, size_t n);
+void mdrt_record(mdrt *m, int trace, mdrt_sink_fn sink, void *user);
 
 /* lockstep: what the game reads that depends on time or the player, from recorded values */
 void mdrt_set_hv_source(mdrt *m, mdrt_hv_fn fn, void *user);

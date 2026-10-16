@@ -7,8 +7,20 @@
 #include "core.h"
 #include "../state.h"
 
+static const fm_core_ops *const cores[] = {
+#ifdef MDRT_HAVE_NUKED
+    &fm_core_nuked,
+#endif
+#ifdef MDRT_HAVE_YMFM
+    &fm_core_ymfm,
+#endif
+    NULL
+};
+
 struct mdrt_fm {
+    const fm_core_ops *ops;
     fm_core *core;
+    int model;
     uint32_t mclk;              /* master clocks toward the next internal clock */
     uint32_t owed;              /* master clocks of internal clocks run between writes, ahead of time */
     int cycle;                  /* internal clocks into the sample */
@@ -24,25 +36,35 @@ struct mdrt_fm {
  * other 18 clocks; x 6 keeps the loudest inside 16 bits */
 #define SCALE 6
 
-mdrt_fm *mdrt_fm_new(void)
+mdrt_fm *mdrt_fm_new_core(const char *core, int model)
 {
+    const fm_core_ops *ops = cores[0];
+    if (core) {
+        ops = NULL;
+        for (int i = 0; cores[i]; i++) if (!strcmp(cores[i]->name, core)) ops = cores[i];
+    }
+    if (!ops || (model != MDRT_FM_YM2612 && model != MDRT_FM_YM3438)) return NULL;
     mdrt_fm *f = calloc(1, sizeof *f);
     if (!f) return NULL;
-    f->core = fm_core_new();
+    f->ops = ops;
+    f->model = model;
+    f->core = ops->create(model);
     if (!f->core) { free(f); return NULL; }
     return f;
 }
 
+mdrt_fm *mdrt_fm_new(void) { return mdrt_fm_new_core(NULL, MDRT_FM_YM2612); }
+
 void mdrt_fm_free(mdrt_fm *f)
 {
     if (!f) return;
-    fm_core_free(f->core);
+    f->ops->destroy(f->core);
     free(f);
 }
 
 void mdrt_fm_reset(mdrt_fm *f)
 {
-    fm_core_reset(f->core);
+    f->ops->reset(f->core);
     f->cycle = 0;
     f->left = f->right = 0;
     f->written = 0;
@@ -55,7 +77,7 @@ void mdrt_fm_reset(mdrt_fm *f)
 static int clock_once(mdrt_fm *f, int16_t *out)
 {
     int32_t lr[2];
-    fm_core_clock(f->core, lr);
+    f->ops->clock(f->core, lr);
     f->left += lr[0];
     f->right += lr[1];
     f->written = 0;
@@ -75,7 +97,7 @@ void mdrt_fm_write(mdrt_fm *f, int port, uint8_t value)
         if (clock_once(f, f->spare)) f->spare_full = 1;
         f->owed += MDRT_FM_CYCLE_MCLKS;
     }
-    fm_core_write(f->core, port, value);
+    f->ops->write(f->core, port, value);
     f->written = 1;
     if (port & 1) f->regs[port >> 1][f->addr[port >> 1]] = value;
     else f->addr[port >> 1] = value;
@@ -99,7 +121,14 @@ int mdrt_fm_run(mdrt_fm *f, uint32_t mclk, int16_t *out, int max)
 
 uint8_t mdrt_fm_reg(const mdrt_fm *f, int part, uint8_t reg) { return f->regs[part & 1][reg]; }
 
-const char *mdrt_fm_core(void) { return fm_core_name(); }
+const char *mdrt_fm_core(void) { return cores[0] ? cores[0]->name : ""; }
+const char *mdrt_fm_core_of(const mdrt_fm *f) { return f->ops->name; }
+int mdrt_fm_model(const mdrt_fm *f) { return f->model; }
+const char *mdrt_fm_cores(int i)
+{
+    int n = (int)(sizeof cores / sizeof *cores) - 1;
+    return i >= 0 && i < n ? cores[i]->name : NULL;
+}
 
 /* the wrapper's fields, then the core's name (8 bytes) and its own state */
 static void save_wrapper(const mdrt_fm *f, st_out *o)
@@ -113,7 +142,7 @@ static void save_wrapper(const mdrt_fm *f, st_out *o)
     st_put(o, f->addr, 2);
     st_put(o, f->regs, sizeof f->regs);
     char name[8] = { 0 };
-    strncpy(name, fm_core_name(), sizeof name - 1);
+    strncpy(name, f->ops->name, sizeof name - 1);
     st_put(o, name, 8);
 }
 
@@ -121,7 +150,7 @@ size_t mdrt_fm_save(const mdrt_fm *f, uint8_t *out)
 {
     st_out o = { out, 0 };
     save_wrapper(f, &o);
-    return o.n + fm_core_save(f->core, out ? out + o.n : NULL);
+    return o.n + f->ops->save(f->core, out ? out + o.n : NULL);
 }
 
 int mdrt_fm_load(mdrt_fm *f, const uint8_t *in, size_t size)
@@ -129,8 +158,8 @@ int mdrt_fm_load(mdrt_fm *f, const uint8_t *in, size_t size)
     st_out o = { NULL, 0 };
     save_wrapper(f, &o);
     char name[8] = { 0 };
-    strncpy(name, fm_core_name(), sizeof name - 1);
-    if (size < o.n || memcmp(in + o.n - 8, name, 8) || fm_core_load(f->core, in + o.n, size - o.n)) return -1;
+    strncpy(name, f->ops->name, sizeof name - 1);
+    if (size < o.n || memcmp(in + o.n - 8, name, 8) || f->ops->load(f->core, in + o.n, size - o.n)) return -1;
     st_in i = { in, 0, o.n, 0 };
     f->mclk = st_g32(&i); f->owed = st_g32(&i);
     f->cycle = (int)st_g32(&i);

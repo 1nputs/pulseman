@@ -14,11 +14,16 @@ enum {
 };
 enum { MDRT_PAD_NONE, MDRT_PAD_3BUTTON, MDRT_PAD_6BUTTON };
 
+/* after each access (a recorder): a write (1) or read (0), the address and the value */
+typedef void (*mdrt_pads_access_fn)(void *user, int write, uint32_t addr, uint8_t value);
+
 typedef struct mdrt_pads {
     uint8_t reg[16];            /* the I/O registers by (address - $A10001) / 2 */
     uint16_t buttons[2];
     uint8_t type[2];
     uint8_t steps[2];           /* 6-button: TH transitions since the counter last reset */
+    mdrt_pads_access_fn observe;
+    void *observe_user;
 } mdrt_pads;
 
 /* version register: overseas (bit 7), PAL (bit 6) */
@@ -31,6 +36,7 @@ void mdrt_pad_write(mdrt_pads *p, uint32_t addr, uint8_t value);
 /* a frame boundary: the 6-button pad's TH counter times out (it resets after about 1.5 ms
  * without a transition, and games read the pads once a frame) */
 void mdrt_pads_frame(mdrt_pads *p);
+void mdrt_pads_set_observer(mdrt_pads *p, mdrt_pads_access_fn fn, void *user);
 /* the I/O chip and the pads as bytes: save returns the size (out NULL: only that); load returns
  * 0, or -1 for the wrong size (then nothing changed) */
 size_t mdrt_pads_save(const mdrt_pads *p, uint8_t *out);

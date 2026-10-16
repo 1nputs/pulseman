@@ -142,6 +142,34 @@ MDRT_REQUEST_SAVE and MDRT_REQUEST_LOAD once for each press and MDRT_REQUEST_REW
 held; `mdrt_requests(m)` gives the client what the last handshake brought (the SDL2 platform:
 F5, F9, Backspace). The client decides what to do and when.
 
+## The bus by address
+
+`mdrt_bus_read8/16/32` and `mdrt_bus_write8/16/32` reach the 68k's bus by address, with the
+access's width: the client's regions first (`mdrt_bus_map(m, base, size, read, write, user)`,
+for a cartridge's mapper, EEPROM or coprocessor), then the VDP and PSG ports, the I/O chip, save
+RAM, and the configuration's `read68k` for the rest. DMA from the 68k bus reads through it, so a
+banked ROM window is seen by DMA too. A port of 68k code calls the modules directly and need not
+use it; tools that work by address (a RAM watch, cheats, a script) do.
+
+## FM cores, models, region
+
+`mdrt_config.fm_core` picks the FM core by name (`mdrt_fm_cores(i)` lists the build's: "nuked"
+and "ymfm" by default) and `fm_model` the chip: `MDRT_FM_YM2612`, the discrete chip of the first
+consoles with its DAC's "ladder" distortion, or `MDRT_FM_YM3438`, the integrated one of later
+consoles. `mdrt_new` returns NULL for a core the build lacks. `domestic` makes a Japanese
+console (the version register's overseas bit clear), `pal` a PAL one. A state names its core and
+model and loads only into a console with the same.
+
+## Recording
+
+`mdrt_record(m, MDRT_TRACE_VDP / _PADS / _SOUND, sink, user)` has the console write the trace
+formats of `docs/VECTORS.md` to `sink(user, bytes, n)` from then on (the core touches no files:
+the client's sink does); a NULL sink ends one. md-runtime's tests replay them as they replay the
+oracle's: the pictures, VDP states and pad reads must come out the same and the sound sample for
+sample, so a run recorded with one build is a test of the next. Start the VDP trace after the
+client has set any state outside the ports (a snapshot), since the trace begins with the VDP's
+state as it is then.
+
 ## Lockstep
 
 `mdrt_set_hv_source(m, fn, user)` and `mdrt_set_pad_source(m, fn, user)` replace the HV counter

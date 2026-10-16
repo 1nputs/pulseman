@@ -1,8 +1,11 @@
 /* The YM2612 (FM): its four ports ($4000-$4003 from the Z80, $A04000-$A04003 from the 68k),
  * rendered at its own rate: a stereo sample every 24 of its internal clocks, which is 144 68k
- * clocks or 1008 master clocks (53267 Hz NTSC). The core is behind this interface: Nuked-OPN2
- * (third_party/nuked-opn2, LGPL-2.1) by default, ymfm (BSD-3) with `make FM_CORE=ymfm`. The
- * timers are not modelled (the client sequences its music on the 68k). */
+ * clocks or 1008 master clocks (53267 Hz NTSC). The core is behind this interface, chosen when the
+ * chip is made from those the build has: Nuked-OPN2 (third_party/nuked-opn2, LGPL-2.1) and ymfm
+ * (BSD-3), both by default (`make FM_CORES="nuked ymfm"`; a build with ymfm only has no LGPL
+ * code). The model: the YM2612 (the discrete chip of the first consoles, with its DAC's "ladder"
+ * distortion) or the YM3438 (the integrated one of later consoles). The timers are not modelled
+ * (the client sequences its music on the 68k). */
 #ifndef MDRT_FM_H
 #define MDRT_FM_H
 #include <stddef.h>
@@ -12,8 +15,12 @@
 #define MDRT_FM_SAMPLE_MCLKS 1008     /* a sample: 24 internal clocks */
 
 typedef struct mdrt_fm mdrt_fm;
+enum { MDRT_FM_YM2612, MDRT_FM_YM3438 };
 
+/* a chip with the default core (the first the build has: Nuked-OPN2 when it is there), a YM2612 */
 mdrt_fm *mdrt_fm_new(void);
+/* a chip with the core named (NULL: the default) and the model; NULL when the build has not that core */
+mdrt_fm *mdrt_fm_new_core(const char *core, int model);
 void mdrt_fm_free(mdrt_fm *f);
 /* the chip's reset line (the Mega Drive ties it to the Z80's) */
 void mdrt_fm_reset(mdrt_fm *f);
@@ -26,11 +33,15 @@ void mdrt_fm_write(mdrt_fm *f, int port, uint8_t value);
 int mdrt_fm_run(mdrt_fm *f, uint32_t mclk, int16_t *out, int max);
 /* the last value written to register reg of part 0 or 1 (for snapshots and tests) */
 uint8_t mdrt_fm_reg(const mdrt_fm *f, int part, uint8_t reg);
-/* the core's name ("nuked" or "ymfm") */
+/* the default core's name ("nuked" or "ymfm"); a chip's core and model; the build's cores, from 0
+ * (NULL past the last) */
 const char *mdrt_fm_core(void);
+const char *mdrt_fm_core_of(const mdrt_fm *f);
+int mdrt_fm_model(const mdrt_fm *f);
+const char *mdrt_fm_cores(int i);
 /* the chip and its core as bytes: save returns the size (out NULL: only that); load returns 0, or
- * -1 for bytes of another size or another core (then nothing changed). A state names its core:
- * it loads only into a build with the same one. */
+ * -1 for bytes of another size, core or model (then nothing changed). A state names its core: it
+ * loads only into a chip with the same one. */
 size_t mdrt_fm_save(const mdrt_fm *f, uint8_t *out);
 int mdrt_fm_load(mdrt_fm *f, const uint8_t *in, size_t size);
 

@@ -105,3 +105,6 @@ only the Z80 relay uses it). Times are master clocks modulo 2^32; readers unwrap
   screens write the VDP during the display (setup: 16,350 writes, pregame 17,413, matchup 14,514,
   pause 2,329) without changing what is drawn, which is why the frame-granular renderer was
   exact for them too.
+- 2026-10-16, the YM3438 model (`fm_model`): Nuked-OPN2's YM3438 mode and ymfm's `ym3438` leave
+  out the YM2612's DAC ladder; the idle output sits at 0 instead of 432 (`fm_unit`). No vector:
+  the oracle was recorded with the YM2612.

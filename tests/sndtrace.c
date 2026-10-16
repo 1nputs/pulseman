@@ -32,6 +32,7 @@ int sndtrace_load(sndtrace *t, const char *path)
     t->fm_preamp = u16(t->data + 12);
     t->psg_preamp = u16(t->data + 14);
     t->power_on = u32(t->data + 16) & 1;
+    t->flags = u32(t->data + 16);
     /* the audio, gathered */
     size_t cap = 1 << 20;
     t->audio = malloc(cap * 4);

@@ -12,6 +12,8 @@ void mdrt_vdp_init(mdrt_vdp *v, int pal)
 
 void mdrt_vdp_set_memory(mdrt_vdp *v, mdrt_read8_fn fn, void *user) { v->read8 = fn; v->read8_user = user; }
 void mdrt_vdp_set_write_hook(mdrt_vdp *v, mdrt_vdp_write_fn fn, void *user) { v->write_hook = fn; v->write_user = user; }
+void mdrt_vdp_set_observer(mdrt_vdp *v, mdrt_vdp_access_fn fn, void *user) { v->observe = fn; v->observe_user = user; }
+static void seen(const mdrt_vdp *v, int access, uint32_t value) { if (v->observe) v->observe(v->observe_user, access, value); }
 void mdrt_vdp_set_hv_source(mdrt_vdp *v, mdrt_hv_fn fn, void *user) { v->hv = fn; v->hv_user = user; }
 void mdrt_vdp_set_position(mdrt_vdp *v, uint16_t line, uint16_t hpos) { v->line = line; v->hpos = hpos; }
 void mdrt_vdp_set_vblank(mdrt_vdp *v, int on) { v->vblank = on ? 1 : 0; }
@@ -135,7 +137,7 @@ static void reg_write(mdrt_vdp *v, uint16_t w)
     if (v->write_hook) v->write_hook(v->write_user, r, changed);
 }
 
-void mdrt_vdp_ctrl16(mdrt_vdp *v, uint16_t w)
+static void ctrl16(mdrt_vdp *v, uint16_t w)
 {
     if (!v->pending) {
         /* the first command word (CD1-CD0, A13-A0), or a register write, which also loads them */
@@ -159,9 +161,10 @@ void mdrt_vdp_ctrl16(mdrt_vdp *v, uint16_t w)
     }
 }
 
-void mdrt_vdp_ctrl32(mdrt_vdp *v, uint32_t l) { mdrt_vdp_ctrl16(v, (uint16_t)(l >> 16)); mdrt_vdp_ctrl16(v, (uint16_t)l); }
+void mdrt_vdp_ctrl16(mdrt_vdp *v, uint16_t w) { ctrl16(v, w); seen(v, MDRT_VDP_CTRL16, w); }
+void mdrt_vdp_ctrl32(mdrt_vdp *v, uint32_t l) { ctrl16(v, (uint16_t)(l >> 16)); ctrl16(v, (uint16_t)l); seen(v, MDRT_VDP_CTRL32, l); }
 
-void mdrt_vdp_data16(mdrt_vdp *v, uint16_t w)
+static void data16(mdrt_vdp *v, uint16_t w)
 {
     v->pending = 0;
     bus_write(v, w);
@@ -171,7 +174,8 @@ void mdrt_vdp_data16(mdrt_vdp *v, uint16_t w)
     }
 }
 
-void mdrt_vdp_data32(mdrt_vdp *v, uint32_t l) { mdrt_vdp_data16(v, (uint16_t)(l >> 16)); mdrt_vdp_data16(v, (uint16_t)l); }
+void mdrt_vdp_data16(mdrt_vdp *v, uint16_t w) { data16(v, w); seen(v, MDRT_VDP_DATA16, w); }
+void mdrt_vdp_data32(mdrt_vdp *v, uint32_t l) { data16(v, (uint16_t)(l >> 16)); data16(v, (uint16_t)l); seen(v, MDRT_VDP_DATA32, l); }
 
 /* data port reads (CD0 clear): VRAM words, VSRAM (11 bits) and CRAM (9 bits) with the bits they do
  * not drive taken from the next FIFO entry */
@@ -196,6 +200,7 @@ uint16_t mdrt_vdp_read16(mdrt_vdp *v)
         break;
     }
     v->addr = (uint16_t)(v->addr + v->s.reg[15]);
+    seen(v, MDRT_VDP_READ16, w);
     return w;
 }
 
@@ -207,6 +212,7 @@ uint16_t mdrt_vdp_status(mdrt_vdp *v)
     uint16_t s = 0x3400 | 0x0200 | v->pal;
     if (v->vblank || !(v->s.reg[1] & 0x40)) s |= 0x0008;
     if (v->vint_pending) s |= 0x0080;
+    seen(v, MDRT_VDP_STATUS, s);
     return s;
 }
 
@@ -233,16 +239,25 @@ uint16_t mdrt_vdp_hv_at(const mdrt_vdp *v, unsigned line, unsigned hpos)
     return (uint16_t)(v_counter(v, line) << 8 | h_counter(v, hpos));
 }
 
-uint16_t mdrt_vdp_hv16(mdrt_vdp *v)
+static uint16_t hv16(mdrt_vdp *v)
 {
     if (v->hv) return v->hv(v->hv_user);
     return mdrt_vdp_hv_at(v, v->line, v->hpos);
 }
 
+uint16_t mdrt_vdp_hv16(mdrt_vdp *v)
+{
+    uint16_t hv = hv16(v);
+    seen(v, MDRT_VDP_HV16, hv);
+    return hv;
+}
+
 uint8_t mdrt_vdp_hv8(mdrt_vdp *v, int odd)
 {
-    uint16_t hv = mdrt_vdp_hv16(v);
-    return (uint8_t)(odd ? hv : hv >> 8);
+    uint16_t hv = hv16(v);
+    uint8_t b = (uint8_t)(odd ? hv : hv >> 8);
+    seen(v, MDRT_VDP_HV8, (uint32_t)(odd ? 9 : 8) << 8 | b);
+    return b;
 }
 
 uint8_t mdrt_vdp_reg(const mdrt_vdp *v, int n) { return n >= 0 && n < 24 ? v->s.reg[n] : 0; }

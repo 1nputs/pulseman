@@ -20,6 +20,7 @@ typedef struct sndtrace {
     uint32_t rate;              /* the oracle's audio rate (Hz) */
     unsigned fm_preamp, psg_preamp;   /* percent; 0: that chip is not in the audio */
     int power_on;               /* recorded from power on: every chip write is in the trace */
+    uint32_t flags;             /* bit 1: the FM core was Nuked-OPN2; bit 2: recorded by md-runtime (its own audio) */
     uint64_t high;              /* the times' wraps (they are stored modulo 2^32) */
     uint32_t last;
     int16_t *audio;             /* all of its audio: stereo frames */

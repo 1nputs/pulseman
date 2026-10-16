@@ -46,7 +46,24 @@ static uint8_t pad_lines(const mdrt_pads *p, int port)
     return (uint8_t)(d & ~(((b >> 2) & 0x30) | (b & 0x03) | 0x0C));                    /* ?0SA00DU */
 }
 
+void mdrt_pads_set_observer(mdrt_pads *p, mdrt_pads_access_fn fn, void *user) { p->observe = fn; p->observe_user = user; }
+
+static uint8_t pad_read(mdrt_pads *p, uint32_t addr);
 uint8_t mdrt_pad_read(mdrt_pads *p, uint32_t addr)
+{
+    uint8_t v = pad_read(p, addr);
+    if (p->observe) p->observe(p->observe_user, 0, addr, v);
+    return v;
+}
+
+static void pad_write(mdrt_pads *p, uint32_t addr, uint8_t value);
+void mdrt_pad_write(mdrt_pads *p, uint32_t addr, uint8_t value)
+{
+    pad_write(p, addr, value);
+    if (p->observe) p->observe(p->observe_user, 1, addr, value);
+}
+
+static uint8_t pad_read(mdrt_pads *p, uint32_t addr)
 {
     int r = (int)((addr & 0x1F) >> 1);
     if (r >= 1 && r <= 3) {
@@ -57,7 +74,7 @@ uint8_t mdrt_pad_read(mdrt_pads *p, uint32_t addr)
     return p->reg[r & 15];
 }
 
-void mdrt_pad_write(mdrt_pads *p, uint32_t addr, uint8_t value)
+static void pad_write(mdrt_pads *p, uint32_t addr, uint8_t value)
 {
     int r = (int)((addr & 0x1F) >> 1);
     if (r == 0) return;                                   /* the version register is read-only */

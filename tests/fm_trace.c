@@ -17,14 +17,14 @@
 #include "sndtrace.h"
 #include "spectrum.h"
 
-static int replay(const char *path, const char *name)
+static int replay(const char *path, const char *name, const char *core)
 {
     sndtrace t;
     if (!sndtrace_load(&t, path)) { printf("  %s: not a version 3 sndtrace\n", name); check_failures++; return 0; }
     if (t.psg_preamp != 0 || t.fm_preamp == 0 || !t.power_on) { sndtrace_free(&t); return 0; }
     size_t n = (size_t)(t.end / MDRT_FM_SAMPLE_MCLKS) + 2, done = 0;
     int16_t *ours = calloc(2 * n, sizeof *ours);
-    mdrt_fm *f = mdrt_fm_new();
+    mdrt_fm *f = mdrt_fm_new_core(core, MDRT_FM_YM2612);
     uint64_t now = 0;
     int in_reset = 1;
     long writes = 0;
@@ -49,9 +49,9 @@ static int replay(const char *path, const char *name)
     for (int side = 0; side < 2; side++) {
         audio_cmp r;
         audio_compare(t.audio + side, t.frames, 2, t.rate, ours + side, done, 2, rate, &r, getenv("FM_DEBUG") != NULL);
-        printf("  %s %s: %ld port writes, %d windows of 50 ms with sound; gain %.4f (%.1f dB); loudness within 1 dB in %d, "
+        printf("  %s, %s, %s: %ld port writes, %d windows of 50 ms with sound; gain %.4f (%.1f dB); loudness within 1 dB in %d, "
                "spectrum within 3 dB in %d (mean %.2f dB), centre within 1/3 octave in %d; the whole trace's spectrum "
-               "within %.2f dB in every band\n", name, side ? "right" : "left", writes, r.windows, r.gain, 20 * log10(r.gain),
+               "within %.2f dB in every band\n", name, core, side ? "right" : "left", writes, r.windows, r.gain, 20 * log10(r.gain),
                r.loud_ok, r.spec_ok, r.spec_mean, r.centre_ok, r.trace_worst);
         CHECK(r.windows > 100);
         CHECK(r.loud_ok >= r.windows * 0.99);
@@ -77,7 +77,7 @@ int main(void)
         size_t l = strlen(ent->d_name);
         if (l < 9 || strcmp(ent->d_name + l - 9, ".sndtrace")) continue;
         snprintf(path, sizeof path, "%s/%s", dir, ent->d_name);
-        traces += replay(path, ent->d_name);
+        for (int i = 0; mdrt_fm_cores(i); i++) traces += replay(path, ent->d_name, mdrt_fm_cores(i));
     }
     if (d) closedir(d);
     if (!traces) check_skip("fm_trace", "no trace from power on without the PSG (sndtrace.py --psg-preamp 0)");

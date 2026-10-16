@@ -26,6 +26,11 @@ typedef uint16_t (*mdrt_hv_fn)(void *user);
 /* after a write that can change a line being drawn: a register (what 0-23; changed: the bits that
  * changed) or a CRAM colour (what 64 + the colour; changed nonzero when its value changed) */
 typedef void (*mdrt_vdp_write_fn)(void *user, int what, unsigned changed);
+/* after each port access (a recorder): what it was, as the .vdptrace's tags, and its value (HV8:
+ * the address's low byte << 8 | the value) */
+enum { MDRT_VDP_CTRL16 = 1, MDRT_VDP_CTRL32, MDRT_VDP_DATA16, MDRT_VDP_DATA32, MDRT_VDP_READ16, MDRT_VDP_STATUS,
+       MDRT_VDP_HV8, MDRT_VDP_HV16 };
+typedef void (*mdrt_vdp_access_fn)(void *user, int access, uint32_t value);
 
 typedef struct mdrt_vdp {
     mdrt_vdp_state s;
@@ -47,11 +52,14 @@ typedef struct mdrt_vdp {
     void *hv_user;
     mdrt_vdp_write_fn write_hook;
     void *write_user;
+    mdrt_vdp_access_fn observe;
+    void *observe_user;
 } mdrt_vdp;
 
 void mdrt_vdp_init(mdrt_vdp *v, int pal);
 void mdrt_vdp_set_memory(mdrt_vdp *v, mdrt_read8_fn fn, void *user);
 void mdrt_vdp_set_write_hook(mdrt_vdp *v, mdrt_vdp_write_fn fn, void *user);
+void mdrt_vdp_set_observer(mdrt_vdp *v, mdrt_vdp_access_fn fn, void *user);
 /* replace the HV counter model (lockstep: the recorded values); NULL restores the model */
 void mdrt_vdp_set_hv_source(mdrt_vdp *v, mdrt_hv_fn fn, void *user);
 /* the beam position the HV counter model reports: line 0-261 (312 PAL), hpos 0-341 (H32) or

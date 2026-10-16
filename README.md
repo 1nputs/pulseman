@@ -82,10 +82,24 @@ this README carries the status).
   traces replay pixel-exact; `tests/clock_test.c` checks the hooks. A client that moves no clock
   gets the frame drawn whole at the handshake, as before (the first client's golden runs are
   unchanged).
+- 2026-10-16, the bus map, run-time FM cores, the recorder. `mdrt_bus_map` and `mdrt_bus_*`: the
+  68k's bus by address, the client's regions (a mapper, an EEPROM) before the console's ports, DMA
+  through it (`tests/bus_test.c`: a mapper's banked window read by DMA). Both FM cores in one
+  build, chosen by `mdrt_config.fm_core`, and the chip by `fm_model`: the YM2612 or the YM3438
+  (no DAC ladder); a Japanese console by `domestic` (`fm_unit` runs every core and model,
+  `fm_trace` and `mix_trace` every core against the oracle). `mdrt_record`: the console writes
+  `.vdptrace`, `.padtrace` and `.sndtrace` itself to the client's sink; `tests/record_test.c`
+  records a test game and `make check` replays its traces exactly (pictures, VDP state, pad
+  reads, the sound sample for sample); the first client's own 600-frame recording replays the same
+  way (its `make runtime-selfcheck`). (RUNTIME-DIRECTION 5, 9, 8.)
 
-`make check` (GCC, sanitizers); `CC=clang make MODE=release check` for Clang (checked on
-2026-10-16 with Zig's Clang 22: `pip install ziglang`, `CC="python -m ziglang cc"`); `make
-FM_CORE=ymfm check` for the other FM core. Vectors come from `$MDRT_VECTORS` (default
+`make check` (GCC, sanitizers; both FM cores, each against the vectors); `CC=clang CXX=clang++
+make MODE=release check` for Clang (checked on 2026-10-16 with Zig's Clang 22: `pip install
+ziglang`, `CC="python -m ziglang cc" CXX="python -m ziglang c++" LDLIBS=-lc++`, ymfm then linking
+Zig's libc++). `FM_CORES` picks the FM cores a build has, chosen at run time
+(`mdrt_config.fm_core`): "nuked ymfm" by default; `make FM_CORES=ymfm` builds without Nuked-OPN2,
+so with no LGPL code (for a release or browser build: review finding 1); a build with ymfm links
+`-lstdc++`. Vectors come from `$MDRT_VECTORS` (default
 `../nhl95/out/vectors`; `docs/VECTORS.md`); `MDRT_REQUIRE_VECTORS=1` makes a missing vector a
 failure rather than a skip. The test ROM is assembled with `tests/rom/build.sh` (vasm; the
 default is the one built in `../nhl95/ref/`).

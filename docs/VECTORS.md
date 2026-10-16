@@ -103,3 +103,13 @@ The YM2612 writes are the Z80's and the 68k's together; the Z80 fields are for a
 ports its Z80 program (the first client checks its relay against every write's time). The
 runtime's chip tests take the writes and compare their audio with the oracle's by loudness and
 spectrum in 50 ms windows, since the cores are different emulations.
+
+## Recorded by md-runtime
+
+`mdrt_record` writes the same three formats (`docs/API.md`, "Recording"): the VDP trace with each
+access's time on the composition's clock, the pad trace with byte accesses, the sound trace with
+every chip write at the time the chips took it (the FM chip's reset as the Z80's reset line held
+and let go), the console's own audio at its output rate, preamps 100 and 150, flags bit 2 (the
+console's own audio: `mix_trace` replays it with the same core, bit 1 Nuked-OPN2 or else ymfm,
+and requires every sample), and no Z80 (its RAM and registers zeros). `make check` records
+`tests/record_test.c`'s game into `build/record/` and replays it there.

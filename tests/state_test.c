@@ -64,9 +64,12 @@ static void tick(void *user, uint32_t until)
     }
 }
 
+static const char *core;               /* the FM core of this run */
+
 static mdrt *console(seen *s, game *g, uint32_t rate, int extra_part)
 {
     mdrt_config c = { 0 };
+    c.fm_core = core;
     c.audio_rate = rate;
     c.sram_size = 0x100;
     c.platform = (mdrt_platform){ .user = s, .present = present, .audio = audio };
@@ -152,9 +155,10 @@ static uint8_t *take(mdrt *m, size_t *n)
     return b;
 }
 
-int main(void)
+static void run(void)
 {
     static seen a, b;
+    memset(&a, 0, sizeof a);
     game ga;
     mdrt *m = console(&a, &ga, 48000, 0);
     run_to(&a, &ga, AT);
@@ -162,7 +166,7 @@ int main(void)
     uint8_t *st = take(m, &n);
     CHECK_EQ(mdrt_get_state(m, st, n - 1), n);           /* (too small: only the size) */
     run_to(&a, &ga, FRAMES);
-    printf("  a state of %zu bytes at frame %d\n", n, AT);
+    printf("  %s: a state of %zu bytes at frame %d\n", core, n, AT);
 
     /* the state again, into the same console after it ran on, and into a new one */
     memcpy(&b, &a, sizeof b);
@@ -177,6 +181,7 @@ int main(void)
     CHECK(a.snd[FRAMES] != a.snd[FRAMES - 1] && a.pic[FRAMES] != a.pic[FRAMES - 1]);   /* (it was changing) */
 
     static seen c;
+    memset(&c, 0, sizeof c);
     game gc;
     mdrt *m2 = console(&c, &gc, 48000, 0);
     CHECK_EQ(mdrt_set_state(m2, st, n), 0);
@@ -196,10 +201,9 @@ int main(void)
     CHECK_EQ(mdrt_set_state(m2, st, n - 1), -1);
     CHECK_EQ(mdrt_set_state(m2, NULL, 0), -1);
     memcpy(bad, st, n);
-    uint8_t *core = find(bad, n, "nuked");
-    if (!core) core = find(bad, n, "ymfm");
-    CHECK(core != NULL);
-    if (core) core[0] ^= 0x20;                            /* another FM core's state */
+    uint8_t *name = find(bad, n, core);
+    CHECK(name != NULL);
+    if (name) name[0] ^= 0x20;                            /* another FM core's state */
     CHECK_EQ(mdrt_set_state(m2, bad, n), -1);
     size_t n3;
     uint8_t *now = take(m2, &n3);
@@ -222,5 +226,28 @@ int main(void)
 
     free(st); free(bad); free(after); free(now);
     mdrt_free(m); mdrt_free(m2); mdrt_free(m3); mdrt_free(m4);
+}
+
+int main(void)
+{
+    for (int i = 0; (core = mdrt_fm_cores(i)); i++) run();
+    /* a state from one core does not load into a console with another */
+    if (mdrt_fm_cores(1)) {
+        mdrt_config c = { 0 };
+        c.fm_core = mdrt_fm_cores(0);
+        mdrt *x = mdrt_new(&c);
+        c.fm_core = mdrt_fm_cores(1);
+        mdrt *y = mdrt_new(&c);
+        size_t n = mdrt_get_state(x, NULL, 0);
+        uint8_t *b = malloc(n);
+        mdrt_get_state(x, b, n);
+        CHECK_EQ(mdrt_set_state(y, b, n), -1);
+        c.fm_core = mdrt_fm_cores(0);
+        c.fm_model = MDRT_FM_YM3438;                      /* nor into another model */
+        mdrt *z = mdrt_new(&c);
+        CHECK_EQ(mdrt_set_state(z, b, n), -1);
+        CHECK_EQ(mdrt_set_state(x, b, n), 0);
+        free(b); mdrt_free(x); mdrt_free(y); mdrt_free(z);
+    }
     return check_done("state_test");
 }

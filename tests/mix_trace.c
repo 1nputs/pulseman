@@ -30,14 +30,16 @@ static void wav(const char *path, const int16_t *s, size_t frames, uint32_t rate
     fclose(f);
 }
 
-static int replay(const char *path, const char *name)
+static int replay(const char *path, const char *name, const char *core)
 {
     sndtrace t;
     if (!sndtrace_load(&t, path)) { printf("  %s: not a version 3 sndtrace\n", name); check_failures++; return 0; }
     if (t.psg_preamp == 0 || t.fm_preamp == 0 || !t.power_on) { sndtrace_free(&t); return 0; }
+    int own = (t.flags & 4) != 0;                         /* md-runtime's own recording: its core only, sample for sample */
+    if (own && strcmp(core, (t.flags & 2) ? "nuked" : "ymfm")) { sndtrace_free(&t); return 0; }
     size_t cap = (size_t)((double)t.end / MDRT_MASTER_CLOCK_NTSC * t.rate) + 64, made = 0;
     int16_t *ours = calloc(2 * cap, sizeof *ours);
-    mdrt_fm *f = mdrt_fm_new();
+    mdrt_fm *f = mdrt_fm_new_core(core, MDRT_FM_YM2612);
     mdrt_psg p;
     mdrt_psg_init(&p);
     mdrt_mix m;
@@ -72,12 +74,20 @@ static int replay(const char *path, const char *name)
         if (abs(ours[i]) > peak) peak = abs(ours[i]);
     }
     if (getenv("MIX_WAV")) wav(getenv("MIX_WAV"), ours, made, t.rate);
-    for (int side = 0; side < 2; side++) {
+    if (own) {
+        size_t n = made < t.frames ? made : t.frames, same = 0;
+        for (size_t i = 0; i < 2 * n; i++) same += ours[i] == t.audio[i];
+        printf("  %s, %s: md-runtime's own recording: %zu of %zu samples the same (%zu made, %zu recorded)\n",
+               name, core, same, 2 * n, made, t.frames);
+        CHECK_EQ(made, t.frames);
+        CHECK_EQ(same, 2 * n);
+    }
+    for (int side = 0; side < 2 && !own; side++) {
         audio_cmp r;
         audio_compare(t.audio + side, t.frames, 2, t.rate, ours + side, made, 2, t.rate, &r, getenv("MIX_DEBUG") != NULL);
-        printf("  %s %s: %d windows of 50 ms with sound; gain %.4f (%.1f dB); loudness within 1 dB in %d, spectrum within 3 dB "
+        printf("  %s, %s, %s: %d windows of 50 ms with sound; gain %.4f (%.1f dB); loudness within 1 dB in %d, spectrum within 3 dB "
                "in %d (mean %.2f dB), centre within 1/3 octave in %d; the whole trace's spectrum within %.2f dB in every band\n",
-               name, side ? "right" : "left", r.windows, r.gain, 20 * log10(r.gain), r.loud_ok, r.spec_ok, r.spec_mean,
+               name, core, side ? "right" : "left", r.windows, r.gain, 20 * log10(r.gain), r.loud_ok, r.spec_ok, r.spec_mean,
                r.centre_ok, r.trace_worst);
         CHECK(r.windows > 100);
         CHECK(r.loud_ok >= r.windows * 0.99);
@@ -85,7 +95,7 @@ static int replay(const char *path, const char *name)
         CHECK(r.centre_ok >= r.windows * 0.99);
         CHECK(r.trace_worst < 1.0);
     }
-    printf("  %s: %zu samples at %u Hz, peak %d, %zu clipped\n", name, made, t.rate, peak, clipped);
+    printf("  %s, %s: %zu samples at %u Hz, peak %d, %zu clipped\n", name, core, made, t.rate, peak, clipped);
     CHECK_EQ(clipped, 0);
     mdrt_fm_free(f);
     free(ours);
@@ -105,7 +115,7 @@ int main(void)
         size_t l = strlen(ent->d_name);
         if (l < 9 || strcmp(ent->d_name + l - 9, ".sndtrace")) continue;
         snprintf(path, sizeof path, "%s/%s", dir, ent->d_name);
-        traces += replay(path, ent->d_name);
+        for (int i = 0; mdrt_fm_cores(i); i++) traces += replay(path, ent->d_name, mdrt_fm_cores(i));
     }
     if (d) closedir(d);
     if (!traces) check_skip("mix_trace", "no trace from power on with both chips");

@@ -9,6 +9,9 @@ typedef struct event { uint64_t at; uint8_t kind, port, value; } event;
 
 #define CHUNK (16 * MDRT_FM_SAMPLE_MCLKS)                 /* the sound is made a chunk at a time */
 
+#define MAX_MAPS 16
+typedef struct bus_map { uint32_t base, size; mdrt_bus_read_fn read; mdrt_bus_write_fn write; void *user; } bus_map;
+
 #define MAX_PARTS 16
 typedef struct part {
     char tag[4];
@@ -49,9 +52,24 @@ struct mdrt {
     unsigned requests;          /* the player's, from the last handshake */
     part parts[MAX_PARTS];      /* the client's parts of a state */
     int nparts;
+    bus_map maps[MAX_MAPS];     /* the client's regions of the 68k's bus */
+    int nmaps;
+    struct { mdrt_sink_fn sink; void *user; } rec[3];   /* the traces being recorded */
+    int vdp_whole;              /* the VDP trace has a whole frame: FRAMEs from here */
+    uint64_t snd_base;          /* the frame the sound trace began at */
+    uint8_t *dma;               /* the DMA source bytes read since the last VDP access, for the trace */
+    size_t ndma, dma_cap;
 };
 
 static uint8_t no_memory(void *user, uint32_t addr) { (void)user; (void)addr; return 0; }
+static void dma_note(mdrt *m, uint8_t b);
+static uint8_t dma_read(void *user, uint32_t addr)
+{
+    mdrt *m = user;
+    uint8_t b = mdrt_bus_read8(m, addr);
+    if (m->rec[MDRT_TRACE_VDP].sink) dma_note(m, b);
+    return b;
+}
 
 /* the default HV counter: the beam at the client's position in the frame, nudged on at each read
  * as time passes in the game's code even when the client moves no clock (the game reads it as a
@@ -78,14 +96,15 @@ mdrt *mdrt_new(const mdrt_config *c)
     if (!m->cfg.audio_rate) m->cfg.audio_rate = 48000;
     m->frame = (c->pal ? MDRT_LINES_PAL : MDRT_LINES_NTSC) * MDRT_LINE_MCLKS;
     mdrt_vdp_init(&m->vdp, c->pal);
-    mdrt_vdp_set_memory(&m->vdp, c->read68k ? c->read68k : no_memory, c->read68k_user);
+    if (!m->cfg.read68k) m->cfg.read68k = no_memory;
+    mdrt_vdp_set_memory(&m->vdp, dma_read, m);            /* (DMA from the 68k bus: through the map) */
     mdrt_vdp_set_hv_source(&m->vdp, beam_hv, m);
     mdrt_psg_init(&m->psg);
-    m->fm = mdrt_fm_new();
+    m->fm = mdrt_fm_new_core(c->fm_core, c->fm_model);
     mdrt_mix_init(&m->mix, m->cfg.audio_rate);
     mdrt_mix_set_clock(&m->mix, master_clock(m));
     mdrt_mix_set_gains(&m->mix, c->fm_gain ? c->fm_gain : MDRT_MIX_FM_GAIN, c->psg_gain ? c->psg_gain : MDRT_MIX_PSG_GAIN);
-    mdrt_pads_init(&m->pads, 1, c->pal);
+    mdrt_pads_init(&m->pads, !c->domestic, c->pal);
     mdrt_sram_init(&m->sram, c->sram_size);
     size_t samples = m->frame / MDRT_FM_SAMPLE_MCLKS + 4;
     m->picture = calloc(320 * 240, sizeof *m->picture);
@@ -103,13 +122,14 @@ void mdrt_free(mdrt *m)
 {
     if (!m) return;
     mdrt_fm_free(m->fm);
-    free(m->picture); free(m->fm_buf); free(m->psg_buf); free(m->audio); free(m->ev);
+    free(m->picture); free(m->fm_buf); free(m->psg_buf); free(m->audio); free(m->ev); free(m->dma);
     free(m);
 }
 
 mdrt_vdp *mdrt_get_vdp(mdrt *m) { return &m->vdp; }
 mdrt_pads *mdrt_get_pads(mdrt *m) { return &m->pads; }
 mdrt_sram *mdrt_get_sram(mdrt *m) { return &m->sram; }
+mdrt_fm *mdrt_get_fm(mdrt *m) { return m->fm; }
 uint32_t mdrt_master_clock(const mdrt *m) { return master_clock(m); }
 uint32_t mdrt_frame_mclks(const mdrt *m) { return m->frame; }
 uint64_t mdrt_frame_count(const mdrt *m) { return m->frames; }
@@ -149,6 +169,7 @@ static int run_chips(mdrt *m, uint32_t mclk, int made)
 }
 
 /* the frame's sound: the client's processor through the tick, the writes at their times */
+static void snd_event(mdrt *m, const event *e, uint32_t t);
 static int make_sound(mdrt *m)
 {
     int made = 0;
@@ -160,6 +181,7 @@ static int make_sound(mdrt *m)
         while (m->next < m->nev && m->ev[m->next].at < until) {
             event *e = &m->ev[m->next++];
             if (e->at > t) { made = run_chips(m, (uint32_t)e->at - t, made); t = (uint32_t)e->at; }
+            if (m->rec[MDRT_TRACE_SOUND].sink) snd_event(m, e, t);
             if (e->kind == EV_YM) mdrt_fm_write(m->fm, e->port, e->value);
             else if (e->kind == EV_YM_RESET) mdrt_fm_reset(m->fm);
             else mdrt_psg_write(&m->psg, e->value);
@@ -176,6 +198,111 @@ static int make_sound(mdrt *m)
     m->nev = keep;
     m->next = 0;
     return made;
+}
+
+/* ---- the 68k's bus by address ---------------------------------------------------------------- */
+
+int mdrt_bus_map(mdrt *m, uint32_t base, uint32_t size, mdrt_bus_read_fn read, mdrt_bus_write_fn write, void *user)
+{
+    if (m->nmaps == MAX_MAPS) return -1;
+    m->maps[m->nmaps++] = (bus_map){ base & 0xFFFFFF, size, read, write, user };
+    return 0;
+}
+
+static const bus_map *mapped(const mdrt *m, uint32_t a)
+{
+    for (int i = m->nmaps - 1; i >= 0; i--)
+        if (a - m->maps[i].base < m->maps[i].size) return &m->maps[i];
+    return NULL;
+}
+
+enum { AT_MEMORY, AT_VDP, AT_IO, AT_SRAM };
+static int area(const mdrt *m, uint32_t a)
+{
+    if (a >= 0xC00000 && a < 0xC00020) return AT_VDP;
+    if (a >= 0xA10000 && a < 0xA10020) return AT_IO;
+    if (m->sram.size && a >= 0x200000 && a < 0x400000) return AT_SRAM;
+    return AT_MEMORY;
+}
+
+/* a word of the VDP's ports: data ($00-$03), control ($04-$07), HV counter ($08-$0F); the PSG is
+ * write only */
+static uint16_t vdp_read16(mdrt *m, uint32_t a)
+{
+    a &= 0x1E;
+    if (a < 4) return mdrt_vdp_read16(&m->vdp);
+    if (a < 8) return mdrt_vdp_status(&m->vdp);
+    if (a < 0x10) return mdrt_vdp_hv16(&m->vdp);
+    return 0xFFFF;
+}
+static void vdp_write16(mdrt *m, uint32_t a, uint16_t v)
+{
+    a &= 0x1E;
+    if (a < 4) mdrt_vdp_data16(&m->vdp, v);
+    else if (a < 8) mdrt_vdp_ctrl16(&m->vdp, v);
+    else if (a >= 0x10 && a < 0x18) mdrt_psg_port(m, m->now, (uint8_t)v);
+}
+
+uint8_t mdrt_bus_read8(mdrt *m, uint32_t addr)
+{
+    uint32_t a = addr & 0xFFFFFF;
+    const bus_map *b = mapped(m, a);
+    if (b) return b->read ? b->read(b->user, a) : 0xFF;
+    switch (area(m, a)) {
+    case AT_VDP:
+        if ((a & 0x1E) == 8 || (a & 0x1E) == 0xA || (a & 0x1E) == 0xC || (a & 0x1E) == 0xE) return mdrt_vdp_hv8(&m->vdp, (int)(a & 1));
+        return (uint8_t)(vdp_read16(m, a) >> ((a & 1) ? 0 : 8));
+    case AT_IO: return mdrt_pad_read(&m->pads, a);
+    case AT_SRAM: return mdrt_sram_read8(&m->sram, a - 0x200000);
+    default: return m->cfg.read68k(m->cfg.read68k_user, a);
+    }
+}
+
+uint16_t mdrt_bus_read16(mdrt *m, uint32_t addr)
+{
+    uint32_t a = addr & 0xFFFFFE;
+    if (!mapped(m, a) && area(m, a) == AT_VDP) return vdp_read16(m, a);
+    if (!mapped(m, a) && area(m, a) == AT_IO) { uint8_t v = mdrt_pad_read(&m->pads, a | 1); return (uint16_t)(v << 8 | v); }
+    return (uint16_t)(mdrt_bus_read8(m, a) << 8 | mdrt_bus_read8(m, a + 1));
+}
+
+uint32_t mdrt_bus_read32(mdrt *m, uint32_t addr) { return (uint32_t)mdrt_bus_read16(m, addr) << 16 | mdrt_bus_read16(m, addr + 2); }
+
+void mdrt_bus_write8(mdrt *m, uint32_t addr, uint8_t value)
+{
+    uint32_t a = addr & 0xFFFFFF;
+    const bus_map *b = mapped(m, a);
+    if (b) { if (b->write) b->write(b->user, a, value); return; }
+    switch (area(m, a)) {
+    case AT_VDP:                                          /* a byte to the VDP's ports: on both halves */
+        if ((a & 0x18) == 0x10) { if (a & 1) mdrt_psg_port(m, m->now, value); }
+        else vdp_write16(m, a, (uint16_t)(value << 8 | value));
+        break;
+    case AT_IO: mdrt_pad_write(&m->pads, a, value); break;
+    case AT_SRAM: mdrt_sram_write8(&m->sram, a - 0x200000, value); break;
+    default: break;
+    }
+}
+
+void mdrt_bus_write16(mdrt *m, uint32_t addr, uint16_t value)
+{
+    uint32_t a = addr & 0xFFFFFE;
+    if (!mapped(m, a) && area(m, a) == AT_VDP) { vdp_write16(m, a, value); return; }
+    if (!mapped(m, a) && area(m, a) != AT_MEMORY) { mdrt_bus_write8(m, a | 1, (uint8_t)value); return; }
+    mdrt_bus_write8(m, a, (uint8_t)(value >> 8));
+    mdrt_bus_write8(m, a + 1, (uint8_t)value);
+}
+
+void mdrt_bus_write32(mdrt *m, uint32_t addr, uint32_t value)
+{
+    uint32_t a = addr & 0xFFFFFE;
+    if (!mapped(m, a) && area(m, a) == AT_VDP && (a & 0x1E) < 8) {   /* a move.l to the data or control port */
+        if ((a & 0x1E) < 4) mdrt_vdp_data32(&m->vdp, value);
+        else mdrt_vdp_ctrl32(&m->vdp, value);
+        return;
+    }
+    mdrt_bus_write16(m, a, (uint16_t)(value >> 16));
+    mdrt_bus_write16(m, a + 2, (uint16_t)value);
 }
 
 /* ---- the clock: lines drawn and H-interrupts as it passes them ------------------------------- */
@@ -235,10 +362,14 @@ int mdrt_wait_line(mdrt *m, int line)
 }
 void mdrt_set_hint(mdrt *m, mdrt_hint_fn fn, void *user) { m->hint = fn; m->hint_user = user; }
 
+static void rec_frame(mdrt *m, int made);
+static void rec_buttons(mdrt *m);
+
 int mdrt_wait_vblank(mdrt *m)
 {
     advance(m, m->frame);                                 /* the rest of the picture */
     int made = make_sound(m);
+    rec_frame(m, made);
     const mdrt_platform *p = &m->cfg.platform;
     if (p->present) p->present(p->user, m->picture, mdrt_vdp_width(&m->vdp), mdrt_vdp_height(&m->vdp), 320);
     if (p->audio) p->audio(p->user, m->audio, made);
@@ -249,6 +380,7 @@ int mdrt_wait_vblank(mdrt *m)
     mdrt_pad_set(&m->pads, 0, buttons[0]);
     mdrt_pad_set(&m->pads, 1, buttons[1]);
     mdrt_pads_frame(&m->pads);
+    rec_buttons(m);
     m->requests = p->requests ? p->requests(p->user) : 0;
     m->frames++;
     m->nudge = 0;
@@ -257,6 +389,7 @@ int mdrt_wait_vblank(mdrt *m)
     m->reloaded = 0;
     mdrt_vdp_set_position(&m->vdp, 224, 0);
     mdrt_vdp_set_vblank(&m->vdp, 1);
+    if (m->rec[MDRT_TRACE_VDP].sink) m->vdp_whole = 1;
     if (m->hcount == 0) hint_now(m);                      /* (the oracle checks the counter as the frame begins too) */
     return stop;
 }
@@ -449,4 +582,147 @@ int mdrt_set_state(mdrt *m, const void *buf, size_t size)
     }
     free(was);
     return bad ? -1 : 0;
+}
+
+/* ---- the recorder ------------------------------------------------------------------------------ */
+
+static void put(mdrt *m, int trace, const void *b, size_t n) { m->rec[trace].sink(m->rec[trace].user, b, n); }
+static void put8(mdrt *m, int trace, uint8_t v) { put(m, trace, &v, 1); }
+static void put16(mdrt *m, int trace, uint16_t v) { uint8_t b[2] = { (uint8_t)v, (uint8_t)(v >> 8) }; put(m, trace, b, 2); }
+static void put32(mdrt *m, int trace, uint32_t v) { uint8_t b[4] = { (uint8_t)v, (uint8_t)(v >> 8), (uint8_t)(v >> 16), (uint8_t)(v >> 24) }; put(m, trace, b, 4); }
+
+static void dma_note(mdrt *m, uint8_t b)
+{
+    if (m->ndma == m->dma_cap) {
+        uint8_t *d = realloc(m->dma, m->dma_cap ? 2 * m->dma_cap : 4096);
+        if (!d) return;
+        m->dma = d;
+        m->dma_cap = m->dma_cap ? 2 * m->dma_cap : 4096;
+    }
+    m->dma[m->ndma++] = b;
+}
+
+/* the VDP's state as the trace has it: registers, VRAM, CRAM and VSRAM big-endian */
+static void vdp_state(mdrt *m)
+{
+    mdrt_vdp_state s;
+    mdrt_vdp_get_state(&m->vdp, &s);
+    put(m, MDRT_TRACE_VDP, s.reg, 24);
+    put(m, MDRT_TRACE_VDP, s.vram, sizeof s.vram);
+    uint8_t w[128];
+    for (int i = 0; i < 64; i++) { w[2 * i] = (uint8_t)(s.cram[i] >> 8); w[2 * i + 1] = (uint8_t)s.cram[i]; }
+    put(m, MDRT_TRACE_VDP, w, 128);
+    for (int i = 0; i < 40; i++) { w[2 * i] = (uint8_t)(s.vsram[i] >> 8); w[2 * i + 1] = (uint8_t)s.vsram[i]; }
+    put(m, MDRT_TRACE_VDP, w, 80);
+}
+
+/* a port access: the DMA source it read first (the trace puts DMASRC before the access that starts
+ * the DMA), then the access at its time */
+static void vdp_seen(void *user, int access, uint32_t value)
+{
+    mdrt *m = user;
+    if (m->ndma) {
+        put8(m, MDRT_TRACE_VDP, 9);
+        put32(m, MDRT_TRACE_VDP, (uint32_t)m->ndma);
+        put(m, MDRT_TRACE_VDP, m->dma, m->ndma);
+        m->ndma = 0;
+    }
+    put8(m, MDRT_TRACE_VDP, (uint8_t)access);
+    put32(m, MDRT_TRACE_VDP, m->now);
+    if (access == MDRT_VDP_CTRL32 || access == MDRT_VDP_DATA32) put32(m, MDRT_TRACE_VDP, value);
+    else if (access == MDRT_VDP_HV8) { put8(m, MDRT_TRACE_VDP, (uint8_t)(value >> 8)); put8(m, MDRT_TRACE_VDP, (uint8_t)value); }
+    else put16(m, MDRT_TRACE_VDP, (uint16_t)value);
+}
+
+static void pads_seen(void *user, int write, uint32_t addr, uint8_t value)
+{
+    mdrt *m = user;
+    put8(m, MDRT_TRACE_PADS, write ? 2 : 3);
+    put32(m, MDRT_TRACE_PADS, addr);
+    put8(m, MDRT_TRACE_PADS, 1);
+    put32(m, MDRT_TRACE_PADS, value);
+}
+
+static uint32_t snd_time(const mdrt *m, uint64_t at) { return (uint32_t)((m->frames - m->snd_base) * m->frame + at); }
+
+static void snd_event(mdrt *m, const event *e, uint32_t t)
+{
+    if (e->kind == EV_YM) {
+        put8(m, MDRT_TRACE_SOUND, 1); put32(m, MDRT_TRACE_SOUND, snd_time(m, t));
+        put8(m, MDRT_TRACE_SOUND, e->port); put8(m, MDRT_TRACE_SOUND, e->value);
+    } else if (e->kind == EV_PSG) {
+        put8(m, MDRT_TRACE_SOUND, 2); put32(m, MDRT_TRACE_SOUND, snd_time(m, t));
+        put8(m, MDRT_TRACE_SOUND, e->value);
+    } else {                                              /* the reset: as the Z80's reset line, held and let go */
+        put8(m, MDRT_TRACE_SOUND, 5); put32(m, MDRT_TRACE_SOUND, snd_time(m, t)); put16(m, MDRT_TRACE_SOUND, 0);
+        put8(m, MDRT_TRACE_SOUND, 5); put32(m, MDRT_TRACE_SOUND, snd_time(m, t)); put16(m, MDRT_TRACE_SOUND, 0x100);
+    }
+}
+
+/* the handshake: the frame's picture and state, its audio */
+static void rec_frame(mdrt *m, int made)
+{
+    if (m->rec[MDRT_TRACE_VDP].sink && m->vdp_whole) {
+        int w = mdrt_vdp_width(&m->vdp), h = mdrt_vdp_height(&m->vdp);
+        put8(m, MDRT_TRACE_VDP, 10);
+        vdp_state(m);
+        put16(m, MDRT_TRACE_VDP, (uint16_t)w);
+        put16(m, MDRT_TRACE_VDP, (uint16_t)h);
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) put16(m, MDRT_TRACE_VDP, m->picture[y * 320 + x]);
+    }
+    if (m->rec[MDRT_TRACE_SOUND].sink) {
+        put8(m, MDRT_TRACE_SOUND, 6);
+        put32(m, MDRT_TRACE_SOUND, snd_time(m, m->frame));
+        put32(m, MDRT_TRACE_SOUND, (uint32_t)made);
+        for (int i = 0; i < 2 * made; i++) put16(m, MDRT_TRACE_SOUND, (uint16_t)m->audio[i]);
+    }
+}
+
+static void rec_buttons(mdrt *m)
+{
+    if (!m->rec[MDRT_TRACE_PADS].sink) return;
+    put8(m, MDRT_TRACE_PADS, 1);
+    put16(m, MDRT_TRACE_PADS, m->pads.buttons[0]);
+    put16(m, MDRT_TRACE_PADS, m->pads.buttons[1]);
+}
+
+void mdrt_record(mdrt *m, int trace, mdrt_sink_fn sink, void *user)
+{
+    if (trace < 0 || trace > MDRT_TRACE_SOUND) return;
+    if (m->rec[trace].sink) {                             /* the one being recorded ends */
+        static const uint8_t end[3] = { 11, 4, 7 };
+        put8(m, trace, end[trace]);
+        m->rec[trace].sink = NULL;
+        if (trace == MDRT_TRACE_VDP) mdrt_vdp_set_observer(&m->vdp, NULL, NULL);
+        if (trace == MDRT_TRACE_PADS) mdrt_pads_set_observer(&m->pads, NULL, NULL);
+    }
+    if (!sink) return;
+    m->rec[trace].sink = sink;
+    m->rec[trace].user = user;
+    if (trace == MDRT_TRACE_VDP) {
+        put(m, trace, "MDVT", 4);
+        put32(m, trace, 2);
+        uint8_t region[4] = { (uint8_t)(m->cfg.pal ? 1 : 0), 0, 0, 0 };
+        put(m, trace, region, 4);
+        vdp_state(m);
+        m->ndma = 0;
+        m->vdp_whole = m->now == 0 && m->lines.drawn == 0;   /* (at a frame's start: this frame is whole) */
+        mdrt_vdp_set_observer(&m->vdp, vdp_seen, m);
+    } else if (trace == MDRT_TRACE_PADS) {
+        put(m, trace, "MDPT", 4);
+        put32(m, trace, 1);
+        put(m, trace, m->pads.reg, 16);
+        mdrt_pads_set_observer(&m->pads, pads_seen, m);
+    } else {
+        put(m, trace, "MDST", 4);
+        put32(m, trace, 3);
+        put32(m, trace, m->cfg.audio_rate);
+        put16(m, trace, 100);                             /* (both chips in the audio) */
+        put16(m, trace, 150);
+        put32(m, trace, (m->frames == 0 ? 1u : 0u) | (strcmp(mdrt_fm_core_of(m->fm), "nuked") ? 0u : 2u) | 4u);
+        static const uint8_t none[0x2000 + 12];          /* (no Z80: its RAM and registers as zeros) */
+        put(m, trace, none, sizeof none);
+        m->snd_base = m->frames;
+    }
 }
