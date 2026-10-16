@@ -1,4 +1,4 @@
-/* A minimal PNG writer (RGB, stored deflate blocks) for test output: no zlib needed. */
+/* PNG files for test output (the library's encoder, mdrt/png.h). */
 #ifndef MDRT_TESTS_PNG_H
 #define MDRT_TESTS_PNG_H
 #include <stdint.h>

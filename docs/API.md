@@ -13,9 +13,22 @@ mdrt_config c = { 0 };
 c.audio_rate = 48000;                 /* output rate */
 c.sram_size = 0x2000;                 /* cartridge save RAM bytes */
 c.read68k = read68k;                  /* the byte at a 68k address, for DMA (ROM, work RAM) */
-mdrt_sdl_options o = { "Title", 3, 0, "save.srm" };
+mdrt_sdl_options o = { .title = "Title", .app = "title", .sram_path = "save.srm" };
 return mdrt_sdl_run(&c, &o, game, NULL);   /* game(m, user) runs on the game thread */
 ```
+
+`app` names the player's settings file (`settings.ini` in SDL's per-user directory,
+`~/.local/share/pulseman/APP/` on Linux; `settings_path` puts it elsewhere). The platform writes it
+with every setting the first time and whenever the player changes one: the window's size, place
+and full screen, the scaling (sharp, integer, fit) and aspect (square pixels, 4:3), the volume,
+mute, sound device and latency, pausing when the window loses focus, fast-forward's speed, the
+screenshots' directory and every key of both pads and of the player's controls (fast-forward,
+slow motion, frame step, screenshot, volume, scaling ... : `include/mdrt/platform_sdl2.h` lists
+them). `scale` (a window of N times the picture) and `aspect` (4:3) set this run's window over the
+settings'. The pieces with no SDL in them are there for another platform (a browser's) to use:
+`mdrt/settings.h` (the file's text, read and written back with its comments and unknown keys),
+`mdrt/view.h` (where the picture goes in a window for each scaling) and `mdrt/png.h` (a
+screenshot's PNG, in memory).
 
 Without a window, fill `c.platform` (present, audio, wait, input: any may be NULL), create the
 console with `mdrt_new(&c)` and call the game yourself.
@@ -140,7 +153,9 @@ coroutine on its own stack could keep that stack too; nothing here needs it yet.
 The player's requests reach the client through the platform: `mdrt_platform.requests` returns
 MDRT_REQUEST_SAVE and MDRT_REQUEST_LOAD once for each press and MDRT_REQUEST_REWIND while it is
 held; `mdrt_requests(m)` gives the client what the last handshake brought (the SDL2 platform:
-F5, F9, Backspace). The client decides what to do and when.
+F5, F9, Backspace by default). The client decides what to do and when. Fast-forward, slow motion,
+pause and the frame step are the platform's alone: they change when its `wait` lets the next frame
+go (and fast-forward and slow motion queue no sound), so the client sees only ordinary frames.
 
 ## The bus by address
 

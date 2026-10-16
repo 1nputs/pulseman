@@ -26,7 +26,7 @@ MDRT_VECTORS ?= $(firstword $(wildcard ../ninety-four/out/vectors ../../out/vect
 export MDRT_VECTORS
 
 FM_CORES ?= $(if $(FM_CORE),$(FM_CORE),nuked ymfm)
-LIBSRC  := $(wildcard src/vdp/*.c src/psg/*.c src/fm/fm.c src/mix/*.c src/pad/*.c src/sram/*.c src/mdrt/*.c)
+LIBSRC  := $(wildcard src/vdp/*.c src/psg/*.c src/fm/fm.c src/mix/*.c src/pad/*.c src/sram/*.c src/mdrt/*.c src/platform/*.c)
 ifneq ($(filter nuked,$(FM_CORES)),)
 LIBSRC  += src/fm/nuked.c third_party/nuked-opn2/ym3438.c
 CFLAGS  += -DMDRT_HAVE_NUKED
@@ -80,6 +80,14 @@ $(B)/examples/%: examples/%.c $(B)/libmdrt_sdl2.a $(B)/libmdrt.a
 	$(CC) $(CFLAGS) $(SDLCFLAGS) -o $@ $< $(B)/libmdrt_sdl2.a $(B)/libmdrt.a $(LDFLAGS) $(LDLIBS) $(SDLLIBS) -lm
 sdl: $(B)/libmdrt_sdl2.a $(EXAMPLES)
 
+# the platform played by a test thread under SDL's dummy video and disk sound (real time, ~10 s)
+$(B)/tests/sdl/%: tests/sdl/%.c tests/check.c $(B)/libmdrt_sdl2.a $(B)/libmdrt.a
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(SDLCFLAGS) -Itests -o $@ $< tests/check.c $(B)/libmdrt_sdl2.a $(B)/libmdrt.a $(LDFLAGS) $(LDLIBS) $(SDLLIBS) -lm
+sdl-check: $(B)/tests/sdl/platform_test
+	@mkdir -p $(B)/sdltest
+	ASAN_OPTIONS=detect_leaks=0 $< $(B)/sdltest
+
 # (record_test records the runtime's own traces into build/record; they are replayed as vectors)
 check: all
 	@fail=0; for t in $(TESTS); do echo "== $$t"; $$t || fail=1; done; \
@@ -90,4 +98,4 @@ check: all
 clean:
 	rm -rf build
 
-.PHONY: all check clean sdl
+.PHONY: all check clean sdl sdl-check

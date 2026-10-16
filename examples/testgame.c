@@ -60,6 +60,6 @@ int main(int argc, char **argv)
 {
     if (argc > 1) frames = atol(argv[1]);
     mdrt_config c = { 0 };
-    mdrt_sdl_options o = { "pulseman test game", 3, 0, NULL };
+    mdrt_sdl_options o = { .title = "pulseman test game", .app = "testgame" };
     return mdrt_sdl_run(&c, &o, game, NULL);
 }

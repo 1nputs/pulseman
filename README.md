@@ -95,8 +95,20 @@ This README carries the status.
   records a test game and `make check` replays its traces exactly (pictures, VDP state, pad
   reads, the sound sample for sample); the first client's own 600-frame recording replays the same
   way (its `make runtime-selfcheck`). (RUNTIME-DIRECTION 5, 9, 8.)
+- 2026-10-16, the player's controls in the SDL2 platform: a settings file the player can edit
+  (`mdrt/settings.h`: comments, order and unknown keys kept) with every key rebindable (both
+  pads' twelve buttons, the controls), the window's size, place and full screen remembered;
+  volume and mute, the sound device and latency; fast-forward held (4 times by default), slow
+  motion, a frame at a time while paused, pausing when the window loses focus (the keys let go);
+  screenshots as PNG at the console's resolution (`mdrt/png.h`); sharp (whole multiple, then
+  smooth), integer and fit scaling, square or 4:3 (`mdrt/view.h`), hi-DPI. Changes show for a
+  moment in the window's title. `tests/platform_unit.c` checks the settings, the placements and
+  the PNG decoded back; `make sdl-check` plays the platform from a thread pressing keys under SDL's
+  dummy video and disk sound (frame rates, pause and step, focus, the screenshot, the volume and
+  mute in the sound written, the file, keys rebound by hand).
 
-`make check` (GCC, sanitizers; both FM cores, each against the vectors); `CC=clang CXX=clang++
+`make check` (GCC, sanitizers; both FM cores, each against the vectors); `make sdl-check` (the SDL2
+platform, about 15 s in real time; `MODE=release` to time fast-forward too); `CC=clang CXX=clang++
 make MODE=release check` for Clang (checked on 2026-10-16 with Zig's Clang 22: `pip install
 ziglang`, `CC="python -m ziglang cc" CXX="python -m ziglang c++" LDLIBS=-lc++`, ymfm then linking
 Zig's libc++). For Windows it cross-builds with MinGW-w64 GCC (`make CC=x86_64-w64-mingw32-gcc
