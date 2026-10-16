@@ -9,7 +9,8 @@
 # fail with MDRT_REQUIRE_VECTORS=1.
 CC      ?= cc
 MODE    ?= debug
-WARN    := -std=c11 -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes
+WERROR  ?= -Werror
+WARN    := -std=c11 -Wall -Wextra $(WERROR) -Wshadow -Wstrict-prototypes -Wmissing-prototypes
 SAN     := -fsanitize=address,undefined
 ifeq ($(MODE),release)
 OPT     := -O2 -DNDEBUG
@@ -58,7 +59,7 @@ $(B)/%.o: %.cpp $(wildcard src/fm/*.h)
 
 $(B)/libmdrt.a: $(LIBOBJ)
 	@mkdir -p $(dir $@)
-	ar rcs $@ $^
+	$(AR) rcs $@ $^
 
 $(B)/tests/%: tests/%.c $(TESTLIB) $(TESTLIB:.c=.h) $(B)/libmdrt.a
 	@mkdir -p $(dir $@)
@@ -66,13 +67,13 @@ $(B)/tests/%: tests/%.c $(TESTLIB) $(TESTLIB:.c=.h) $(B)/libmdrt.a
 
 # the SDL2 platform and the examples: make sdl
 SDLCFLAGS := $(shell pkg-config --cflags sdl2 2>/dev/null)
-SDLLIBS   := $(shell pkg-config --libs sdl2 2>/dev/null)
+SDLLIBS   := $(filter-out -mwindows,$(shell pkg-config --libs sdl2 2>/dev/null))   # (Windows: keep the console)
 EXAMPLES  := $(patsubst examples/%.c,$(B)/examples/%,$(wildcard examples/*.c))
 $(B)/src/platform/sdl2/%.o: src/platform/sdl2/%.c $(wildcard include/mdrt/*.h)
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(SDLCFLAGS) -c $< -o $@
 $(B)/libmdrt_sdl2.a: $(B)/src/platform/sdl2/sdl2.o
-	ar rcs $@ $^
+	$(AR) rcs $@ $^
 $(B)/examples/%: examples/%.c $(B)/libmdrt_sdl2.a $(B)/libmdrt.a
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(SDLCFLAGS) -o $@ $< $(B)/libmdrt_sdl2.a $(B)/libmdrt.a $(LDFLAGS) $(LDLIBS) $(SDLLIBS) -lm

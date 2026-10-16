@@ -27,4 +27,10 @@ typedef void (*mdrt_game_fn)(mdrt *m, void *user);
  * cfg->platform is filled in here. */
 int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game, void *user);
 
+/* Windows: SDL2's compile flags (pkg-config --cflags sdl2) rename the client's main to SDL_main,
+ * and SDL2main supplies the real entry point; this gives it its prototype there */
+#ifdef main
+int main(int argc, char *argv[]);
+#endif
+
 #endif

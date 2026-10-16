@@ -96,7 +96,10 @@ this README carries the status).
 `make check` (GCC, sanitizers; both FM cores, each against the vectors); `CC=clang CXX=clang++
 make MODE=release check` for Clang (checked on 2026-10-16 with Zig's Clang 22: `pip install
 ziglang`, `CC="python -m ziglang cc" CXX="python -m ziglang c++" LDLIBS=-lc++`, ymfm then linking
-Zig's libc++). `FM_CORES` picks the FM cores a build has, chosen at run time
+Zig's libc++). For Windows it cross-builds with MinGW-w64 GCC (`make CC=x86_64-w64-mingw32-gcc
+CXX=x86_64-w64-mingw32-g++ AR=x86_64-w64-mingw32-ar MODE=release B=build/win64 sdl`, with SDL2's
+MinGW package on `pkg-config`; checked on 2026-10-16) or builds in MSYS2; `WERROR=` turns warnings
+back into warnings for a compiler that is newer than these. `FM_CORES` picks the FM cores a build has, chosen at run time
 (`mdrt_config.fm_core`): "nuked ymfm" by default; `make FM_CORES=ymfm` builds without Nuked-OPN2,
 so with no LGPL code (for a release or browser build: review finding 1); a build with ymfm links
 `-lstdc++`. Vectors come from `$MDRT_VECTORS` (default
