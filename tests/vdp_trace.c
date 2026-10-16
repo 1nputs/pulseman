@@ -1,7 +1,10 @@
 /* WP1 / WP2: replay every .vdptrace in $MDRT_VECTORS. The port accesses are applied in order,
  * DMA reads come from the recorded source bytes, data port reads must return the oracle's value,
  * and at every FRAME the registers, VRAM, CRAM and VSRAM must match byte for byte and the
- * rendered picture pixel for pixel (9-bit colours). Format: docs/VECTORS.md. */
+ * rendered picture pixel for pixel (9-bit colours). Version 2 traces carry each access's time in
+ * the frame: the picture is drawn a line at a time as the replay passes each line's start
+ * (mdrt_vdp_line_start), as the composition draws it, so writes during the display land on the
+ * lines after them. Format: docs/VECTORS.md. */
 #include <dirent.h>
 #include <stdlib.h>
 #include <string.h>
@@ -48,6 +51,7 @@ static int state_diff(const mdrt_vdp_state *a, const mdrt_vdp_state *b, char *wh
 static mdrt_vdp vdp;
 static mdrt_vdp_state want;
 static uint16_t picture[320 * 240];
+static mdrt_vdp_beam beam;              /* the frame drawn a line at a time, as the composition draws it */
 static uint32_t panels[(320 * 3 + 8) * 240];
 
 /* framediff: the runtime's picture, the oracle's, and the differing pixels in red, side by side,
@@ -81,7 +85,9 @@ static void replay(const char *path)
     fclose(f);
     struct reader r = { buf, buf + len };
     if (len < 12 || memcmp(buf, "MDVT", 4) != 0) { printf("  %s: not a vdptrace\n", path); check_failures++; free(buf); return; }
-    r.p += 8;
+    r.p += 4;
+    uint32_t version = u32(&r);
+    if (version != 1 && version != 2) { printf("  %s: vdptrace version %u (this reads 1 and 2)\n", path, version); check_failures++; free(buf); return; }
     int pal = u8(&r);
     r.p += 3;
     mdrt_vdp_init(&vdp, pal);
@@ -89,10 +95,18 @@ static void replay(const char *path)
     mdrt_vdp_set_state(&vdp, &want);
     struct dmaq q = { NULL, 0, 0 };
     mdrt_vdp_set_memory(&vdp, dma_read, &q);
-    int frames = 0, state_bad = 0, pic_bad = 0, reads = 0, reads_bad = 0, ended = 0;
+    int frames = 0, state_bad = 0, pic_bad = 0, reads = 0, reads_bad = 0, ended = 0, mid = 0;
     char first[200] = "";
+    mdrt_vdp_beam_start(&beam, &vdp, picture, 320);
     while (more(&r, 1) && !ended) {
         uint8_t t = u8(&r);
+        if (version >= 2 && t >= T_CTRL16 && t <= T_HV16) {
+            int32_t at = (int32_t)u32(&r);
+            if (t <= T_DATA32) {
+                if (at >= (int64_t)mdrt_vdp_line_start(&vdp, 0) && at < (int64_t)mdrt_vdp_line_start(&vdp, mdrt_vdp_height(&vdp)) && (vdp.s.reg[1] & 0x40)) mid++;
+                mdrt_vdp_beam_to(&beam, at < 0 ? 0 : (uint32_t)at);
+            }
+        }
         switch (t) {
         case T_CTRL16: mdrt_vdp_ctrl16(&vdp, u16(&r)); break;
         case T_CTRL32: mdrt_vdp_ctrl32(&vdp, u32(&r)); break;
@@ -115,6 +129,7 @@ static void replay(const char *path)
             break;
         }
         case T_FRAME: {
+            mdrt_vdp_beam_to(&beam, UINT32_MAX);              /* the rest of the frame, before any reset below */
             read_state(&r, &want);
             int w = u16(&r), h = u16(&r);
             mdrt_vdp_state got;
@@ -127,7 +142,7 @@ static void replay(const char *path)
             if (w != mdrt_vdp_width(&vdp) || h != mdrt_vdp_height(&vdp)) {
                 if (!pic_bad++ && !first[0]) snprintf(first, sizeof first, "frame %d: %dx%d, expected %dx%d", frames, mdrt_vdp_width(&vdp), mdrt_vdp_height(&vdp), w, h);
             } else {
-                mdrt_vdp_render(&vdp, picture, 320);
+                mdrt_vdp_beam_to(&beam, UINT32_MAX);
                 int bad = 0;
                 for (int y = 0; y < h; y++)
                     for (int x = 0; x < w; x++) {
@@ -148,6 +163,7 @@ static void replay(const char *path)
             }
             r.p += (size_t)w * h * 2;
             frames++;
+            mdrt_vdp_beam_start(&beam, &vdp, picture, 320);
             break;
         }
         case T_END: ended = 1; break;
@@ -160,8 +176,8 @@ static void replay(const char *path)
     }
     if (q.over && !first[0]) snprintf(first, sizeof first, "a DMA read past its recorded bytes");
     const char *name = strrchr(path, '/') ? strrchr(path, '/') + 1 : path;
-    printf("  %-20s %3d frames: state %d bad, picture %d bad, %d / %d reads%s%s\n", name, frames, state_bad, pic_bad,
-           reads - reads_bad, reads, first[0] ? "; first: " : "", first);
+    printf("  %-20s %3d frames: state %d bad, picture %d bad, %d / %d reads, %d writes during the display%s%s\n", name, frames,
+           state_bad, pic_bad, reads - reads_bad, reads, mid, first[0] ? "; first: " : "", first);
     check_count++;
     if (state_bad || pic_bad || reads_bad || q.over || !ended) check_failures++;
     free(buf);

@@ -73,6 +73,15 @@ this README carries the status).
   and sound again, in the same console and a new one. The player's requests (save, load, rewind)
   come through the platform (`mdrt_requests`; F5, F9, Backspace in SDL2). The first client saves,
   loads and rewinds with it; its states go on bit for bit for thousands of frames.
+- 2026-10-16, time inside a frame: a position in the frame only the client moves
+  (`mdrt_now`, `mdrt_run_until`, `mdrt_charge`, `mdrt_wait_line`), the picture drawn a line at
+  a time as it passes them with the oracle's rules for writes in a line's horizontal blank
+  (`mdrt_vdp_beam`), the H-interrupt handler called on the lines register 10 picks
+  (`mdrt_set_hint`), the HV counter at the position. Vectors: `.vdptrace` version 2 carries each
+  access's time; `tests/rom/vdptest.s` phases 8 (H-interrupts) and 9 (HV polls) and all nine
+  traces replay pixel-exact; `tests/clock_test.c` checks the hooks. A client that moves no clock
+  gets the frame drawn whole at the handshake, as before (the first client's golden runs are
+  unchanged).
 
 `make check` (GCC, sanitizers); `CC=clang make MODE=release check` for Clang (checked on
 2026-10-16 with Zig's Clang 22: `pip install ziglang`, `CC="python -m ziglang cc"`); `make

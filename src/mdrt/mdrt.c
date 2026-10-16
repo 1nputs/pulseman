@@ -38,7 +38,14 @@ struct mdrt {
     void *pad_user;
     uint16_t *picture;          /* 320 x 240 */
     int16_t *fm_buf, *psg_buf, *audio;
-    uint32_t beam;              /* the default HV counter's beam, pixel clocks since the handshake */
+    uint32_t nudge;             /* the default HV counter's nudge, pixel clocks since the handshake */
+    uint32_t now;               /* the client's position in the frame, master clocks */
+    mdrt_vdp_beam lines;        /* the picture, drawn a line at a time as now passes them */
+    int reloaded;               /* the H-interrupt counter was reloaded this frame (the last blank line) */
+    int hcount;                 /* the H-interrupt counter */
+    int in_hint;
+    mdrt_hint_fn hint;
+    void *hint_user;
     unsigned requests;          /* the player's, from the last handshake */
     part parts[MAX_PARTS];      /* the client's parts of a state */
     int nparts;
@@ -46,16 +53,18 @@ struct mdrt {
 
 static uint8_t no_memory(void *user, uint32_t addr) { (void)user; (void)addr; return 0; }
 
-/* the default HV counter: the beam from the vertical blank's start, moved on at each read as time
- * passes in the game's code (the game reads it as a random source; lockstep replays recorded
- * values through mdrt_set_hv_source), shown as the hardware's counters show it */
+/* the default HV counter: the beam at the client's position in the frame, nudged on at each read
+ * as time passes in the game's code even when the client moves no clock (the game reads it as a
+ * random source; lockstep replays recorded values through mdrt_set_hv_source), shown as the
+ * hardware's counters show it */
 static uint16_t beam_hv(void *user)
 {
     mdrt *m = user;
     int width = mdrt_vdp_width(&m->vdp) == 320 ? 420 : 342;
     uint32_t lines = m->frame / MDRT_LINE_MCLKS;
-    m->beam += 97;
-    uint32_t line = (224 + m->beam / (uint32_t)width) % lines, h = m->beam % (uint32_t)width;
+    m->nudge += 97;
+    uint32_t px = m->nudge + (uint32_t)((uint64_t)m->now * (uint32_t)width / MDRT_LINE_MCLKS);
+    uint32_t line = ((uint32_t)mdrt_vdp_height(&m->vdp) + px / (uint32_t)width) % lines, h = px % (uint32_t)width;
     return mdrt_vdp_hv_at(&m->vdp, line, h);
 }
 
@@ -86,6 +95,7 @@ mdrt *mdrt_new(const mdrt_config *c)
     m->cap = 4096;
     m->ev = malloc(m->cap * sizeof *m->ev);
     if (!m->fm || !m->picture || !m->fm_buf || !m->psg_buf || !m->audio || !m->ev) { mdrt_free(m); return NULL; }
+    mdrt_vdp_beam_start(&m->lines, &m->vdp, m->picture, 320);
     return m;
 }
 
@@ -168,9 +178,66 @@ static int make_sound(mdrt *m)
     return made;
 }
 
+/* ---- the clock: lines drawn and H-interrupts as it passes them ------------------------------- */
+
+static void hint_now(mdrt *m)
+{
+    if (!m->hint || m->in_hint || !(mdrt_vdp_reg(&m->vdp, 0) & 0x10)) return;
+    m->in_hint = 1;
+    m->hint(m->hint_user);
+    m->in_hint = 0;
+}
+
+/* on to `to`: the counter's reload on the last line of the vertical blank, then each display line
+ * drawn at its start and the counter counted (an H-interrupt when it runs out, with the clock at
+ * that line's start) */
+static void advance(mdrt *m, uint32_t to)
+{
+    if (to > m->frame) to = m->frame;
+    int height = mdrt_vdp_height(&m->vdp);
+    for (;;) {
+        uint32_t at;
+        if (!m->reloaded) at = mdrt_vdp_line_start(&m->vdp, -1);
+        else if (m->lines.drawn < height) at = mdrt_vdp_line_start(&m->vdp, m->lines.drawn);
+        else break;
+        if (at > to) break;
+        if (at > m->now) m->now = at;
+        m->lines.now = m->now;
+        if (!m->reloaded) {
+            m->reloaded = 1;
+            m->hcount = mdrt_vdp_reg(&m->vdp, 10);
+            continue;
+        }
+        mdrt_vdp_beam_line(&m->lines);
+        if (m->hcount == 0) { m->hcount = mdrt_vdp_reg(&m->vdp, 10); hint_now(m); }
+        else m->hcount--;
+    }
+    if (to > m->now) m->now = to;
+    m->lines.now = m->now;
+}
+
+uint32_t mdrt_now(const mdrt *m) { return m->now; }
+void mdrt_run_until(mdrt *m, uint32_t mclk) { advance(m, mclk); }
+int mdrt_charge(mdrt *m, uint32_t cycles)
+{
+    uint64_t to = (uint64_t)m->now + (uint64_t)cycles * 7;
+    advance(m, to > m->frame ? m->frame : (uint32_t)to);
+    return m->now >= m->frame;
+}
+int mdrt_wait_line(mdrt *m, int line)
+{
+    int lines = mdrt_vdp_lines(&m->vdp), height = mdrt_vdp_height(&m->vdp);
+    if (line < 0 || line >= lines) return 1;
+    uint32_t at = line < height ? mdrt_vdp_line_start(&m->vdp, line) : (uint32_t)(line - height) * MDRT_LINE_MCLKS;
+    if (at < m->now) return 1;
+    advance(m, at);
+    return 0;
+}
+void mdrt_set_hint(mdrt *m, mdrt_hint_fn fn, void *user) { m->hint = fn; m->hint_user = user; }
+
 int mdrt_wait_vblank(mdrt *m)
 {
-    mdrt_vdp_render(&m->vdp, m->picture, 320);
+    advance(m, m->frame);                                 /* the rest of the picture */
     int made = make_sound(m);
     const mdrt_platform *p = &m->cfg.platform;
     if (p->present) p->present(p->user, m->picture, mdrt_vdp_width(&m->vdp), mdrt_vdp_height(&m->vdp), 320);
@@ -184,9 +251,13 @@ int mdrt_wait_vblank(mdrt *m)
     mdrt_pads_frame(&m->pads);
     m->requests = p->requests ? p->requests(p->user) : 0;
     m->frames++;
-    m->beam = 0;
+    m->nudge = 0;
+    m->now = 0;
+    mdrt_vdp_beam_start(&m->lines, &m->vdp, m->picture, 320);
+    m->reloaded = 0;
     mdrt_vdp_set_position(&m->vdp, 224, 0);
     mdrt_vdp_set_vblank(&m->vdp, 1);
+    if (m->hcount == 0) hint_now(m);                      /* (the oracle checks the counter as the frame begins too) */
     return stop;
 }
 
@@ -194,8 +265,10 @@ void mdrt_vblank_end(mdrt *m) { mdrt_vdp_set_vblank(&m->vdp, 0); }
 unsigned mdrt_requests(const mdrt *m) { return m->requests; }
 
 /* ---- states -------------------------------------------------------------------------------
- * "MDRS", version u32 = 1, then sections: tag[4], size u32, bytes. In this order: CONS (PAL u8,
- * the frame's length u32, frames u64, the beam u32), VDP, PSG, FM (the chip's wrapper, its core's
+ * "MDRS", version u32 = 2, then sections: tag[4], size u32, bytes. In this order: CONS (PAL u8,
+ * the frame's length u32, frames u64, the HV nudge u32; the clock: the position u32, the lines
+ * drawn u32, the counter reloaded u8, the H-interrupt counter u32, the last line's colours (320
+ * u8), then the lines drawn so far, 320 colours u16 each), VDP, PSG, FM (the chip's wrapper, its core's
  * name and the core's state), MIX, SND (the sound to come: count u32, then each at u64 (master
  * clocks into this frame), kind u8, port u8, value u8), PADS, SRAM, then the client's parts in the
  * order they were added. Integers little-endian. */
@@ -247,9 +320,12 @@ static size_t write_state(mdrt *m, uint8_t *out)
 {
     st_out o = { out, 0 };
     st_put(&o, "MDRS", 4);
-    st_u32(&o, 1);
+    st_u32(&o, 2);
     size_t at = begin(&o, "CONS");
-    st_u8(&o, (uint8_t)(m->cfg.pal ? 1 : 0)); st_u32(&o, m->frame); st_u64(&o, m->frames); st_u32(&o, m->beam);
+    st_u8(&o, (uint8_t)(m->cfg.pal ? 1 : 0)); st_u32(&o, m->frame); st_u64(&o, m->frames); st_u32(&o, m->nudge);
+    st_u32(&o, m->now); st_u32(&o, (uint32_t)m->lines.drawn); st_u8(&o, (uint8_t)m->reloaded); st_u32(&o, (uint32_t)m->hcount);
+    st_put(&o, m->lines.idx, 320);
+    st_u16s(&o, m->picture, (size_t)m->lines.drawn * 320);
     end(&o, at);
     at = begin(&o, "VDP "); o.n += mdrt_vdp_save(&m->vdp, here(&o)); end(&o, at);
     at = begin(&o, "PSG "); o.n += mdrt_psg_save(&m->psg, here(&o)); end(&o, at);
@@ -284,7 +360,7 @@ static int sections(const mdrt *m, const uint8_t *b, size_t size, const uint8_t 
     st_in in = { b, 0, size, 0 };
     char magic[4];
     st_get(&in, magic, 4);
-    if (memcmp(magic, "MDRS", 4) || st_g32(&in) != 1) return -1;
+    if (memcmp(magic, "MDRS", 4) || st_g32(&in) != 2) return -1;
     int n = 8 + m->nparts;
     for (int i = 0; i < n; i++) {
         char tag[4];
@@ -306,7 +382,12 @@ static int load_sections(mdrt *m, const uint8_t *data[], const size_t len[])
     uint32_t frame = st_g32(&c);
     uint64_t frames = st_g64(&c);
     uint32_t beam = st_g32(&c);
-    if (c.bad || c.n != len[0] || pal != (m->cfg.pal ? 1 : 0) || frame != m->frame) return -1;
+    uint32_t now = st_g32(&c), drawn = st_g32(&c);
+    int reloaded = st_g8(&c);
+    uint32_t hcount = st_g32(&c);
+    uint8_t idx[320];
+    st_get(&c, idx, 320);
+    if (c.bad || drawn > 240 || c.n + (size_t)drawn * 640 != len[0] || pal != (m->cfg.pal ? 1 : 0) || frame != m->frame || now > frame) return -1;
     st_in s = { data[5], 0, len[5], 0 };
     uint32_t nev = st_g32(&s);
     if (s.bad || (size_t)nev * 11 != len[5] - 4) return -1;
@@ -337,7 +418,14 @@ static int load_sections(mdrt *m, const uint8_t *data[], const size_t len[])
     }
     m->next = 0;
     m->frames = frames;
-    m->beam = beam;
+    m->nudge = beam;
+    m->now = now;
+    m->lines.now = now;
+    m->lines.drawn = (int)drawn;
+    memcpy(m->lines.idx, idx, 320);
+    m->reloaded = reloaded;
+    m->hcount = (int)hcount;
+    st_g16s(&c, m->picture, (size_t)drawn * 320);
     for (int i = 0; i < m->nparts; i++)
         if (m->parts[i].load(m->parts[i].user, data[8 + i], len[8 + i])) return -1;
     return 0;

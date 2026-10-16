@@ -11,10 +11,13 @@ void mdrt_vdp_init(mdrt_vdp *v, int pal)
 }
 
 void mdrt_vdp_set_memory(mdrt_vdp *v, mdrt_read8_fn fn, void *user) { v->read8 = fn; v->read8_user = user; }
+void mdrt_vdp_set_write_hook(mdrt_vdp *v, mdrt_vdp_write_fn fn, void *user) { v->write_hook = fn; v->write_user = user; }
 void mdrt_vdp_set_hv_source(mdrt_vdp *v, mdrt_hv_fn fn, void *user) { v->hv = fn; v->hv_user = user; }
 void mdrt_vdp_set_position(mdrt_vdp *v, uint16_t line, uint16_t hpos) { v->line = line; v->hpos = hpos; }
 void mdrt_vdp_set_vblank(mdrt_vdp *v, int on) { v->vblank = on ? 1 : 0; }
 
+int mdrt_vdp_lines(const mdrt_vdp *v) { return v->pal ? 313 : 262; }
+uint32_t mdrt_vdp_line_start(const mdrt_vdp *v, int n) { return (uint32_t)(mdrt_vdp_lines(v) - mdrt_vdp_height(v) + n) * 3420u; }
 int mdrt_vdp_width(const mdrt_vdp *v) { return (v->s.reg[12] & 0x81) ? 320 : 256; }   /* R12 RS0 / RS1 */
 int mdrt_vdp_height(const mdrt_vdp *v) { return (v->pal && (v->s.reg[1] & 8)) ? 240 : 224; }   /* R1 M2: V30 */
 
@@ -47,9 +50,13 @@ static void bus_write(mdrt_vdp *v, uint16_t w)
         vram_byte(v, (uint16_t)(a + 1), (uint8_t)w);
         break;
     }
-    case 0x03:                                            /* CRAM: 64 words of 9 bits */
-        v->s.cram[(v->addr >> 1) & 0x3F] = w & 0x0EEE;
+    case 0x03: {                                          /* CRAM: 64 words of 9 bits */
+        int i = (v->addr >> 1) & 0x3F;
+        unsigned changed = v->s.cram[i] ^ (w & 0x0EEE);
+        v->s.cram[i] = w & 0x0EEE;
+        if (v->write_hook) v->write_hook(v->write_user, 64 + i, changed);
         break;
+    }
     case 0x05:                                            /* VSRAM: 40 words of 11 bits; past them ignored */
         if ((v->addr & 0x7E) < 0x50) v->s.vsram[(v->addr & 0x7E) >> 1] = w & 0x07FF;
         break;
@@ -122,7 +129,10 @@ static void dma_fill(mdrt_vdp *v, uint16_t w)
 static void reg_write(mdrt_vdp *v, uint16_t w)
 {
     int r = (w >> 8) & 0x1F;
-    if (r < 24) v->s.reg[r] = (uint8_t)w;
+    if (r >= 24) return;
+    unsigned changed = v->s.reg[r] ^ (uint8_t)w;
+    v->s.reg[r] = (uint8_t)w;
+    if (v->write_hook) v->write_hook(v->write_user, r, changed);
 }
 
 void mdrt_vdp_ctrl16(mdrt_vdp *v, uint16_t w)

@@ -1,15 +1,20 @@
 ; vdptest: a Mega Drive program that exercises the VDP features the renderer must get right and
-; NHL '94 does not use, for the WP2 "second program" test vector. Eight phases of 30 frames:
-;   0 H40, 128x32 planes, full-screen scroll       4 window left / right of a column
-;   1 per-line horizontal scroll                    5 window above / below a row
-;   2 per-cell horizontal scroll                    6 H32, 64x64 planes, DMA fill of plane B
-;   3 per-2-cell-column vertical scroll             7 H40, 32x128 planes, VRAM copy of tiles
+; NHL '94 does not use, for the WP2 "second program" test vector. Ten phases of 30 frames:
+;   0 H40, 128x32 planes, full-screen scroll       5 window above / below a row
+;   1 per-line horizontal scroll                    6 H32, 64x64 planes, DMA fill of plane B
+;   2 per-cell horizontal scroll                    7 H40, 32x128 planes, VRAM copy of tiles
+;   3 per-2-cell-column vertical scroll             8 H-interrupt every 16 lines: the backdrop,
+;   4 window left / right of a column                 plane A's scroll and plane B's vertical scroll
+;                                                    change down the screen
+;                                                   9 the HV counter polled for lines 96 and 160:
+;                                                     the backdrop, a scroll and a colour changed there
 ; Always: 80 linked sprites of every size, flip, palette and priority, moving; 22 sprites on
 ; line 60 (the 20 per line limit) and a sprite at X 0 on line 150 that masks the ones after it.
 ; Assemble: vasmm68k_mot -Fbin -o vdptest.bin vdptest.s   (tests/rom/build.sh)
 
 VDP_DATA        equ     $C00000
 VDP_CTRL        equ     $C00004
+VDP_HV          equ     $C00008
 PLANE_A         equ     $C000
 PLANE_B         equ     $E000
 WINDOW          equ     $B000
@@ -20,6 +25,7 @@ RAM             equ     $FF0000
 frame           equ     RAM+0           ; word: frames since start
 vbl             equ     RAM+2           ; word: set by the vblank handler
 phase           equ     RAM+4           ; word
+hband           equ     RAM+6           ; word: H-interrupts since the vblank
 hstab           equ     RAM+$100        ; 240 lines x 2 words
 sattab          equ     RAM+$1000       ; 80 x 8 bytes
 
@@ -42,7 +48,7 @@ DMA_SRC         macro
                 org     0
                 dc.l    $00FFFE00, start
                 dcb.l   22, trap_stop
-                dc.l    trap_stop, trap_stop, trap_stop, trap_stop, rte_only, trap_stop, vblank, trap_stop
+                dc.l    trap_stop, trap_stop, trap_stop, trap_stop, hblank, trap_stop, vblank, trap_stop
                 dcb.l   32, trap_stop
 
                 org     $100
@@ -273,11 +279,27 @@ start:          move    #$2700,sr
                 move.w  #100+128,22(a0)
                 ; go
                 move.w  #$8174,(a5)             ; display, vint, DMA, mode 5
-                move    #$2500,sr
+                move    #$2300,sr               ; (the H-interrupt is level 4)
 main:           tst.w   (vbl)
                 beq.s   main
                 clr.w   (vbl)
                 bsr     update
+                cmpi.w  #9,(phase)
+                bne.s   main
+                ; phase 9: at line 96 the backdrop to colour $2A and plane A 40 lines further down; at
+                ; line 160 colour 1 to white and the backdrop to colour 17
+.w96:           cmpi.b  #96,(VDP_HV)
+                bne.s   .w96
+                move.w  #$872A,(a5)
+                move.l  #$40000010,(a5)
+                move.w  (frame),d0
+                addi.w  #40,d0
+                move.w  d0,(a6)
+.w160:          cmpi.b  #160,(VDP_HV)
+                bne.s   .w160
+                move.l  #$C0020000,(a5)
+                move.w  #$0EEE,(a6)
+                move.w  #$8711,(a5)
                 bra.s   main
 
 ; per frame: the scroll tables in RAM and the moving sprites, for the next vblank to send
@@ -285,7 +307,9 @@ update:         move.w  (frame),d7
                 move.w  d7,d0
                 ext.l   d0
                 divu.w  #30,d0
-                andi.w  #7,d0
+                andi.l  #$FFFF,d0
+                divu.w  #10,d0
+                swap    d0
                 move.w  d0,(phase)
                 ; horizontal scroll table: line l: A = frame + l * phase, B = -frame / 2 + l / 4
                 lea     hstab,a0
@@ -336,11 +360,18 @@ vblank:         movem.l d0-d7/a0-a6,-(sp)
                 move.w  .sizes(pc,d0.w),(a5)    ; R16
                 move.w  .winx(pc,d0.w),(a5)     ; R17
                 move.w  .winy(pc,d0.w),(a5)     ; R18
+                move.w  .hint(pc,d0.w),(a5)     ; R0: the H-interrupt in phase 8
+                move.w  #$8A0F,(a5)             ; R10: every 16 lines
+                move.w  #$873F,(a5)             ; R7: the backdrop back (phases 8, 9 change it)
+                move.l  #$C0020000,(a5)         ; colour 1 back (phase 9 changes it)
+                move.w  #$026A,(a6)
+                clr.w   (hband)
                 bra.s   .vs
-.modes:         dc.w    $0081, $0381, $0281, $0481, $0081, $0081, $0000, $0081
-.sizes:         dc.w    $9003, $9003, $9003, $9003, $9003, $9003, $9011, $9030
-.winx:          dc.w    $9100, $9100, $9100, $9100, $9108, $9188, $9100, $9100
-.winy:          dc.w    $9200, $9200, $9200, $9200, $9200, $9200, $9205, $9285
+.modes:         dc.w    $0081, $0381, $0281, $0481, $0081, $0081, $0000, $0081, $0081, $0081
+.sizes:         dc.w    $9003, $9003, $9003, $9003, $9003, $9003, $9011, $9030, $9003, $9003
+.winx:          dc.w    $9100, $9100, $9100, $9100, $9108, $9188, $9100, $9100, $9100, $9100
+.winy:          dc.w    $9200, $9200, $9200, $9200, $9200, $9200, $9205, $9285, $9200, $9200
+.hint:          dc.w    $8004, $8004, $8004, $8004, $8004, $8004, $8004, $8004, $8014, $8004
 .vs:            ; VSRAM: A = frame, B = 0; in phase 3 column c: c * frame / 8
                 move.l  #$40000010,(a5)
                 moveq   #0,d1
@@ -397,6 +428,29 @@ vblank:         movem.l d0-d7/a0-a6,-(sp)
 .done:          addq.w  #1,(frame)
                 move.w  #1,(vbl)
                 movem.l (sp)+,d0-d7/a0-a6
+                rte
+
+; the H-interrupt (phase 8): band n (from 1) sets the backdrop to colour 5n mod 64, plane A's
+; full-screen horizontal scroll to 12n + frame and plane B's vertical scroll to 6n
+hblank:         movem.l d0/a5-a6,-(sp)
+                lea     VDP_CTRL,a5
+                lea     VDP_DATA,a6
+                addq.w  #1,(hband)
+                move.w  (hband),d0
+                mulu.w  #5,d0
+                andi.w  #$3F,d0
+                ori.w   #$8700,d0
+                move.w  d0,(a5)
+                move.l  #$6C000002,(a5)         ; VRAM $AC00: the scroll table's first line
+                move.w  (hband),d0
+                mulu.w  #12,d0
+                add.w   (frame),d0
+                move.w  d0,(a6)
+                move.l  #$40020010,(a5)         ; VSRAM word 1: plane B
+                move.w  (hband),d0
+                mulu.w  #6,d0
+                move.w  d0,(a6)
+                movem.l (sp)+,d0/a5-a6
                 rte
 
 regs:           dc.w    $8004, $8134, $8200|(PLANE_A>>10), $8300|(WINDOW>>10), $8400|(PLANE_B>>13)

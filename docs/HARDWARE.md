@@ -81,3 +81,27 @@ only the Z80 relay uses it). Times are master clocks modulo 2^32; readers unwrap
   so a PAL console's chips run 0.9% slower and its 313-line frame lasts 1,070,460 master clocks.
   The mixer resamples from the configured clock and the SDL2 platform paces by it. No PAL vector
   exists yet.
+- 2026-10-16, the oracle's frame (Genesis Plus GX, `system_frame_gen`): it begins at the vertical
+  blank, line 224 (240 in V30), with the vertical interrupt; lines 225-261 follow, then the display
+  lines 0-223, each 3420 master clocks; display line n begins at (lines - height + n) x 3420 (NTSC
+  V28: (38 + n) x 3420). Each display line is drawn whole at its start, before the 68k runs that
+  line, so a write during line n shows from line n + 1 (`vdptest` phase 8: the H-interrupt
+  handler's writes, 40% into their lines). The line's period begins with its horizontal blank: a
+  write in its first 860 master clocks to the backdrop register or CRAM recolours line n, to a
+  name table register (2, 3, 4) or the display bit draws it again; the display bit later in the
+  line blanks the rest of it, or draws it and blanks the part before ((offset - 860) / 8 + 16
+  pixels in H40, / 10 in H32) (`vdptest` phase 9: a backdrop and CRAM change 10% into lines 96
+  and 160 show on those lines, a VSRAM change 22% in does not). `mdrt_vdp_beam` follows these
+  rules. Not followed: the sprites the oracle prepares a line ahead (a sprite table change during
+  the display shows a line later there; no vector has one) and the sprite pixel limit when the
+  display is turned on late in a blank.
+- 2026-10-16, the H-interrupt counter (the oracle's): reloaded from register 10 at the start of
+  line 261 (the last line of the vertical blank); at each display line's start, after the line is
+  drawn, an H-interrupt when it is 0 (and reloaded), else counted down; checked again at the
+  frame's start without a reload. Register 10 = 15: H-interrupts on lines 15, 31, 47 ...
+  (`vdptest` phase 8).
+- 2026-10-16, `vdptest` phases 8 and 9 and the first client's traces recorded with times
+  (`.vdptrace` version 2): all nine replay pixel-exact a line at a time. NHL '94's front-end
+  screens write the VDP during the display (setup: 16,350 writes, pregame 17,413, matchup 14,514,
+  pause 2,329) without changing what is drawn, which is why the frame-granular renderer was
+  exact for them too.

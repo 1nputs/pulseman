@@ -60,11 +60,11 @@ set and the FIFO is never full: DMA completes at once and the FIFO drains at onc
 for a client that waits cooperatively. A program that polls until DMA busy is *set* would spin
 for ever; port such a loop as a no-op.
 
-The HV counter's default model is a beam that starts at the vertical blank at each handshake and
-moves on a little at each read, shown as the hardware's counters show it (the V counter's jump
-back to $E5 in NTSC's vertical blank, the H counter's in the horizontal blank). Games mostly
-read it as a random source; anything that needs real timing replays recorded values
-(`mdrt_set_hv_source`).
+The HV counter's default model is the beam at the clock's position (below), moved on a little
+more at each read so that a client that moves no clock still reads changing values, shown as the
+hardware's counters show it (the V counter's jump back to $E5 in NTSC's vertical blank, the H
+counter's in the horizontal blank). Games mostly read it as a random source; anything that needs
+the oracle's exact timing replays recorded values (`mdrt_set_hv_source`).
 
 ## Sound and time
 
@@ -80,6 +80,31 @@ frame's audio is made, and the port runs its program up to master clock `until` 
 writing the YM2612 as it goes. Between handshakes the client can run it further (when the game
 waits on it); give the game's own code a cost per access so the port's time moves while the
 game polls. NHL '94: `src/z80.c` (the relay), 56 master clocks a Z80-bus access.
+
+## Time inside a frame
+
+The composition keeps a position in the frame (`mdrt_now`, master clocks since the handshake,
+which is the start of the vertical blank) that only the client moves, and draws the picture a line
+at a time as the position passes each line's start, so VDP writes land on the lines after the
+beam. A client that never moves it makes all its writes in the vertical blank, and the frame is
+drawn whole at the handshake. Three ways to move it, for what the 68k code did:
+
+| The 68k code | The port |
+|---|---|
+| ran code in the H-interrupt handler | `mdrt_set_hint(m, fn, user)`: `fn` runs at the start of each line the counter (register 10) picks, while register 0 enables it, whether or not the client moves the clock (the handshake draws the rest of the frame and calls it on the way) |
+| polled the HV counter for line n, then wrote | `mdrt_wait_line(m, n)`, then the writes (nonzero: line n is past for this frame) |
+| wrote the VDP while the beam ran, without waiting | `mdrt_charge(m, cycles)` as it runs: 68k cycles, 7 master clocks each (nonzero: the frame's end is reached, the vertical blank is due) |
+
+`mdrt_run_until(m, mclk)` moves it to a time. The default HV counter shows the beam at the
+position. The rules are the oracle's (`HARDWARE.md`, 2026-10-16): a line is drawn at the start of
+its period, which begins with its horizontal blank, so a write there (the first 860 master clocks)
+to the backdrop, CRAM, a name table or the display bit still changes that line; anything else shows
+from the next. The H-interrupt handler is called at its line's start: a handler that does work
+before it writes should charge those cycles first, or its writes count as made in the blank.
+
+Sound times are the client's own (`mdrt_ym_write(m, at, ...)`); they need not follow the clock. The
+first client, whose game writes the VDP in the vertical blank, moves no clock: its sound model
+charges the Z80 bus accesses only, which would put its VDP writes on the wrong lines.
 
 ## The handshake
 

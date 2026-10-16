@@ -23,6 +23,9 @@ typedef struct mdrt_vdp_state {
 typedef uint8_t (*mdrt_read8_fn)(void *user, uint32_t addr);
 /* the HV counter word (V counter high byte, H counter low byte) at the moment of the read */
 typedef uint16_t (*mdrt_hv_fn)(void *user);
+/* after a write that can change a line being drawn: a register (what 0-23; changed: the bits that
+ * changed) or a CRAM colour (what 64 + the colour; changed nonzero when its value changed) */
+typedef void (*mdrt_vdp_write_fn)(void *user, int what, unsigned changed);
 
 typedef struct mdrt_vdp {
     mdrt_vdp_state s;
@@ -42,10 +45,13 @@ typedef struct mdrt_vdp {
     void *read8_user;
     mdrt_hv_fn hv;
     void *hv_user;
+    mdrt_vdp_write_fn write_hook;
+    void *write_user;
 } mdrt_vdp;
 
 void mdrt_vdp_init(mdrt_vdp *v, int pal);
 void mdrt_vdp_set_memory(mdrt_vdp *v, mdrt_read8_fn fn, void *user);
+void mdrt_vdp_set_write_hook(mdrt_vdp *v, mdrt_vdp_write_fn fn, void *user);
 /* replace the HV counter model (lockstep: the recorded values); NULL restores the model */
 void mdrt_vdp_set_hv_source(mdrt_vdp *v, mdrt_hv_fn fn, void *user);
 /* the beam position the HV counter model reports: line 0-261 (312 PAL), hpos 0-341 (H32) or
@@ -84,8 +90,36 @@ void mdrt_vdp_set_vblank(mdrt_vdp *v, int on);
 int mdrt_vdp_width(const mdrt_vdp *v);
 int mdrt_vdp_height(const mdrt_vdp *v);
 
-/* draw the active area into out (9-bit colours in bus format, pitch in pixels) */
+/* draw the active area into out (9-bit colours in bus format, pitch in pixels); _lines draws lines
+ * from to to - 1 only, with the state as it stands */
 void mdrt_vdp_render(const mdrt_vdp *v, uint16_t *out, int pitch);
+void mdrt_vdp_render_lines(const mdrt_vdp *v, uint16_t *out, int pitch, int from, int to);
+
+/* A frame drawn a line at a time as the beam passes each line's start (mdrt_vdp_line_start), the
+ * way the oracle draws: the owner (the composition's clock, a trace's replay) sets `now` (master
+ * clocks since the frame began) before each write and draws the lines it has passed. A write in
+ * the horizontal blank at a line's start (its first 860 master clocks) still changes that line, as
+ * on the oracle: the backdrop register and CRAM recolour it, the name table registers and turning
+ * the display on or off draw it again (later in the line the display bit blanks the rest of it, or
+ * draws the rest). Everything else shows from the next line. The beam is the VDP's write hook
+ * while it is started. */
+typedef struct mdrt_vdp_beam {
+    mdrt_vdp *v;
+    uint16_t *out;
+    int pitch;
+    int drawn;                  /* the lines drawn this frame */
+    uint32_t now;               /* master clocks since the frame began */
+    uint8_t idx[320];           /* the last line drawn: each pixel's colour (0 the backdrop) */
+} mdrt_vdp_beam;
+void mdrt_vdp_beam_start(mdrt_vdp_beam *b, mdrt_vdp *v, uint16_t *out, int pitch);   /* a new frame */
+void mdrt_vdp_beam_line(mdrt_vdp_beam *b);              /* draw the next line */
+void mdrt_vdp_beam_to(mdrt_vdp_beam *b, uint32_t t);    /* now = t, the lines started by then drawn */
+/* the frame's timing, from the start of the vertical blank (the active height's line, where the
+ * frame begins): lines a frame (262 NTSC, 313 PAL), and the master clock at which line n of the
+ * active area begins and is drawn (a write at or after it shows from the next line; as the oracle
+ * draws) */
+int mdrt_vdp_lines(const mdrt_vdp *v);
+uint32_t mdrt_vdp_line_start(const mdrt_vdp *v, int n);
 /* a bus format colour to 0x00RRGGBB, 3-bit levels expanded by the curve (0 linear: level x 255 / 7,
  * 1 the levels x 34 Genesis Plus GX uses for normal colours) */
 uint32_t mdrt_vdp_rgb(uint16_t colour, int curve);

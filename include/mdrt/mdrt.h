@@ -90,6 +90,34 @@ void mdrt_set_hv_source(mdrt *m, mdrt_hv_fn fn, void *user);
 typedef void (*mdrt_pad_fn)(void *user, uint16_t buttons[2]);
 void mdrt_set_pad_source(mdrt *m, mdrt_pad_fn fn, void *user);
 
+/* ---- time inside a frame -----------------------------------------------------------------
+ * The composition keeps a position in the frame, in master clocks since it began (at the
+ * handshake, in the vertical blank), that only the client moves. The picture is drawn a line at a
+ * time as the position passes each line's start (mdrt_vdp_line_start), so the client's VDP writes
+ * land on the lines after the beam: a write made after mdrt_wait_line(m, 100) changes lines 101 on.
+ * A client that never moves it writes everything in the vertical blank and gets the frame drawn
+ * whole at the handshake, as before. The H-interrupt handler (mdrt_set_hint) is called as the
+ * position passes the lines the H-interrupt counter (register 10) picks, whether or not the client
+ * moves the clock: with no moves, the handshake draws the frame and calls it on the way.
+ *
+ * mdrt_now: the position. mdrt_run_until: move it on to mclk (not back; at most the frame's end).
+ * mdrt_charge: move it on by cycles of the 68k (7 master clocks each), for code that wrote the VDP
+ * while the beam ran; nonzero when the frame's end is reached (the vertical blank is due: the
+ * client takes it, mdrt_wait_vblank and its vblank code; the clock waits there until it does).
+ * mdrt_wait_line: move it on to the start of line n (0-261 NTSC, 0-312 PAL, as the V counter
+ * counts them before its jump), as the 68k's loops on the HV counter did; nonzero when line n has
+ * gone by in this frame (the 68k would have waited through the vertical blank for it). */
+uint32_t mdrt_now(const mdrt *m);
+void mdrt_run_until(mdrt *m, uint32_t mclk);
+int mdrt_charge(mdrt *m, uint32_t cycles);
+int mdrt_wait_line(mdrt *m, int line);
+/* the client's H-interrupt code (its handler, ported): called at the start of the line it comes on,
+ * with mdrt_now there, when register 0 enables it (the counter as the oracle runs it: reloaded
+ * from register 10 on the last line of the vertical blank and when it runs out, counted down on
+ * each line of the display) */
+typedef void (*mdrt_hint_fn)(void *user);
+void mdrt_set_hint(mdrt *m, mdrt_hint_fn fn, void *user);
+
 /* the handshake: draw the picture, make the frame's sound, hand both to the platform, wait for
  * its go, read the pads. On return the next frame has begun with the VDP in its vertical blank
  * (status bit 3) until mdrt_vblank_end, which the client calls when its vblank code is done.

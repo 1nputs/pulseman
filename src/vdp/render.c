@@ -1,10 +1,14 @@
-/* The picture, a line at a time, from the VDP state as it stands (frame-granular: the game writes
- * during the vertical blank). Layers from back to front: the backdrop (R7), then per pixel the
- * highest of B low, A low, sprites low, B high, A high, sprites high that is not transparent
- * (genvdp.txt "priority"). Plane A is replaced by the window inside its area. No shadow /
- * highlight or interlace yet. */
+/* The picture, a line at a time, from the VDP state as it stands when the line is drawn: the
+ * composition draws each line as its clock passes the line's start (mdrt_vdp_line_start), so
+ * writes made during the display change the lines after them; a client that writes only in the
+ * vertical blank gets the whole frame drawn at the handshake. Layers from back to front: the
+ * backdrop (R7), then per pixel the highest of B low, A low, sprites low, B high, A high, sprites
+ * high that is not transparent (genvdp.txt "priority"). Plane A is replaced by the window inside
+ * its area. No shadow / highlight or interlace yet. */
 #include <string.h>
 #include "mdrt/vdp.h"
+
+#define MDRT_LINE_MCLKS_VDP 3420                         /* master clocks a line */
 
 static uint16_t vword(const mdrt_vdp *v, uint32_t a)
 {
@@ -103,49 +107,128 @@ static void sprites(const mdrt_vdp *v, int line, int width, struct layer *out)
     }
 }
 
-void mdrt_vdp_render(const mdrt_vdp *v, uint16_t *out, int pitch)
+/* one line of the active area into o; each pixel's colour (palette << 4 | index, 0 the backdrop)
+ * into idx too when it is given */
+static void draw_line(const mdrt_vdp *v, int line, uint16_t *o, uint8_t *idx)
 {
-    int width = mdrt_vdp_width(v), height = mdrt_vdp_height(v);
+    int width = mdrt_vdp_width(v);
     uint16_t back = v->s.cram[v->s.reg[7] & 0x3F];
+    if (!(v->s.reg[1] & 0x40)) {                          /* R1 DISP off: the backdrop */
+        for (int x = 0; x < width; x++) o[x] = back;
+        if (idx) memset(idx, 0, (size_t)width);
+        return;
+    }
     uint32_t ta = (uint32_t)(v->s.reg[2] & 0x38) << 10, tb = (uint32_t)(v->s.reg[4] & 7) << 13;
     uint32_t tw = width == 320 ? (uint32_t)(v->s.reg[3] & 0x3C) << 10 : (uint32_t)(v->s.reg[3] & 0x3E) << 10;
     uint32_t hs = (uint32_t)(v->s.reg[13] & 0x3F) << 10;
     int wcells = width == 320 ? 64 : 32;
     struct layer a, b, s;
-    for (int line = 0; line < height; line++) {
-        uint16_t *o = out + line * pitch;
-        if (!(v->s.reg[1] & 0x40)) {                      /* R1 DISP off: the backdrop */
-            for (int x = 0; x < width; x++) o[x] = back;
-            continue;
-        }
-        int hl = 0;                                       /* R11 bits 1-0: per cell (2) or line (3) */
-        if ((v->s.reg[11] & 3) == 2) hl = line & ~7;
-        else if ((v->s.reg[11] & 3) == 3) hl = line;
-        int hsa = vword(v, hs + (uint32_t)(hl << 2)) & 0x3FF, hsb = vword(v, hs + (uint32_t)(hl << 2) + 2) & 0x3FF;
-        int w0, w1;
-        window_span(v, line, width, &w0, &w1);
-        scroll_plane(v, line, tb, hsb, 1, width, 0, &b);
-        scroll_plane(v, line, ta, hsa, 0, width, (w0 == 0 && w1 > 0 && w1 < width) ? w1 : 0, &a);
-        for (int x = w0; x < w1; x++) {
-            uint16_t e = vword(v, tw + (uint32_t)(((line >> 3) * wcells + (x >> 3)) << 1));
-            int c = tile_pixel(v, e, x & 7, line & 7);
-            a.col[x] = (uint8_t)(c ? (((e >> 13) & 3) << 4) | c : 0);
-            a.pri[x] = (uint8_t)(e >> 15);
-        }
-        sprites(v, line, width, &s);
-        for (int x = 0; x < width; x++) {
-            uint8_t c = 0;
-            if (s.col[x] && s.pri[x]) c = s.col[x];
-            else if (a.col[x] && a.pri[x]) c = a.col[x];
-            else if (b.col[x] && b.pri[x]) c = b.col[x];
-            else if (s.col[x]) c = s.col[x];
-            else if (a.col[x]) c = a.col[x];
-            else if (b.col[x]) c = b.col[x];
-            o[x] = c ? v->s.cram[c] : back;
-        }
-        if (v->s.reg[0] & 0x20)                           /* R0 LCB: the left column blanked */
-            for (int x = 0; x < 8 && x < width; x++) o[x] = back;
+    int hl = 0;                                           /* R11 bits 1-0: per cell (2) or line (3) */
+    if ((v->s.reg[11] & 3) == 2) hl = line & ~7;
+    else if ((v->s.reg[11] & 3) == 3) hl = line;
+    int hsa = vword(v, hs + (uint32_t)(hl << 2)) & 0x3FF, hsb = vword(v, hs + (uint32_t)(hl << 2) + 2) & 0x3FF;
+    int w0, w1;
+    window_span(v, line, width, &w0, &w1);
+    scroll_plane(v, line, tb, hsb, 1, width, 0, &b);
+    scroll_plane(v, line, ta, hsa, 0, width, (w0 == 0 && w1 > 0 && w1 < width) ? w1 : 0, &a);
+    for (int x = w0; x < w1; x++) {
+        uint16_t e = vword(v, tw + (uint32_t)(((line >> 3) * wcells + (x >> 3)) << 1));
+        int c = tile_pixel(v, e, x & 7, line & 7);
+        a.col[x] = (uint8_t)(c ? (((e >> 13) & 3) << 4) | c : 0);
+        a.pri[x] = (uint8_t)(e >> 15);
     }
+    sprites(v, line, width, &s);
+    for (int x = 0; x < width; x++) {
+        uint8_t c = 0;
+        if (s.col[x] && s.pri[x]) c = s.col[x];
+        else if (a.col[x] && a.pri[x]) c = a.col[x];
+        else if (b.col[x] && b.pri[x]) c = b.col[x];
+        else if (s.col[x]) c = s.col[x];
+        else if (a.col[x]) c = a.col[x];
+        else if (b.col[x]) c = b.col[x];
+        if (x < 8 && (v->s.reg[0] & 0x20)) c = 0;         /* R0 LCB: the left column blanked */
+        o[x] = c ? v->s.cram[c] : back;
+        if (idx) idx[x] = c;
+    }
+}
+
+void mdrt_vdp_render(const mdrt_vdp *v, uint16_t *out, int pitch) { mdrt_vdp_render_lines(v, out, pitch, 0, mdrt_vdp_height(v)); }
+
+void mdrt_vdp_render_lines(const mdrt_vdp *v, uint16_t *out, int pitch, int from, int to)
+{
+    int height = mdrt_vdp_height(v);
+    if (from < 0) from = 0;
+    if (to > height) to = height;
+    for (int line = from; line < to; line++) draw_line(v, line, out + line * pitch, NULL);
+}
+
+/* ---- the beam: a frame drawn a line at a time ------------------------------------------------ */
+
+#define HBLANK_MCLKS 860                                  /* a line's horizontal blank, from its start */
+
+static void recolour(mdrt_vdp_beam *b, int line)
+{
+    const mdrt_vdp *v = b->v;
+    uint16_t *o = b->out + line * b->pitch, back = v->s.cram[v->s.reg[7] & 0x3F];
+    for (int x = 0; x < mdrt_vdp_width(v); x++) o[x] = b->idx[x] ? v->s.cram[b->idx[x]] : back;
+}
+
+static void blank(mdrt_vdp_beam *b, int line, int from, int to)
+{
+    const mdrt_vdp *v = b->v;
+    uint16_t *o = b->out + line * b->pitch, back = v->s.cram[v->s.reg[7] & 0x3F];
+    for (int x = from; x < to; x++) { o[x] = back; b->idx[x] = 0; }
+}
+
+/* a write in the line last drawn, at b->now: the oracle's rules (docs/HARDWARE.md, 2026-10-16) */
+static void beam_hook(void *user, int what, unsigned changed)
+{
+    mdrt_vdp_beam *b = user;
+    const mdrt_vdp *v = b->v;
+    int line = b->drawn - 1;
+    if (line < 0 || !changed) return;
+    uint32_t start = mdrt_vdp_line_start(v, line);
+    if (b->now < start || b->now - start >= MDRT_LINE_MCLKS_VDP) return;
+    uint32_t offset = b->now - start;
+    int disp = v->s.reg[1] & 0x40, width = mdrt_vdp_width(v);
+    if (what >= 64) {                                     /* CRAM: recoloured */
+        if (offset <= HBLANK_MCLKS && (disp || what - 64 == (v->s.reg[7] & 0x3F))) recolour(b, line);
+    } else if (what == 7) {                               /* the backdrop: recoloured */
+        if ((changed & 0x3F) && offset <= HBLANK_MCLKS) recolour(b, line);
+    } else if (what >= 2 && what <= 4) {                  /* a name table: drawn again */
+        if (disp && offset <= HBLANK_MCLKS) draw_line(v, line, b->out + line * b->pitch, b->idx);
+    } else if (what == 1 && (changed & 0x40)) {           /* the display on or off */
+        if (offset <= HBLANK_MCLKS) { draw_line(v, line, b->out + line * b->pitch, b->idx); return; }
+        int px = (int)(offset - HBLANK_MCLKS) / ((v->s.reg[12] & 1) ? 8 : 10) + 16;
+        if (px >= width) return;
+        if (disp) { draw_line(v, line, b->out + line * b->pitch, b->idx); blank(b, line, 0, px); }
+        else blank(b, line, px, width);
+    }
+}
+
+void mdrt_vdp_beam_start(mdrt_vdp_beam *b, mdrt_vdp *v, uint16_t *out, int pitch)
+{
+    b->v = v;
+    b->out = out;
+    b->pitch = pitch;
+    b->drawn = 0;
+    b->now = 0;
+    memset(b->idx, 0, sizeof b->idx);
+    mdrt_vdp_set_write_hook(v, beam_hook, b);
+}
+
+void mdrt_vdp_beam_line(mdrt_vdp_beam *b)
+{
+    if (b->drawn >= mdrt_vdp_height(b->v)) return;
+    draw_line(b->v, b->drawn, b->out + b->drawn * b->pitch, b->idx);
+    b->drawn++;
+}
+
+void mdrt_vdp_beam_to(mdrt_vdp_beam *b, uint32_t t)
+{
+    int height = mdrt_vdp_height(b->v);
+    while (b->drawn < height && mdrt_vdp_line_start(b->v, b->drawn) <= t) mdrt_vdp_beam_line(b);
+    b->now = t;
 }
 
 uint32_t mdrt_vdp_rgb(uint16_t colour, int curve)

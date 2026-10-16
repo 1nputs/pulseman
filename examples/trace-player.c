@@ -23,7 +23,7 @@ static uint32_t le32(const uint8_t *p) { return (uint32_t)(p[0] | p[1] << 8 | p[
 /* ---- the video trace ("MDVT") --------------------------------------------------------------- */
 enum { T_CTRL16 = 1, T_CTRL32, T_DATA16, T_DATA32, T_READ16, T_STATUS, T_HV8, T_HV16, T_DMASRC, T_FRAME, T_END };
 #define STATE (24 + 0x10000 + 128 + 80)
-typedef struct video { uint8_t *b; long len, start, pos; const uint8_t *dma; uint32_t left; } video;
+typedef struct video { uint8_t *b; long len, start, pos; const uint8_t *dma; uint32_t left; uint32_t version; } video;
 
 static uint8_t dma_read(void *user, uint32_t addr)
 {
@@ -44,13 +44,20 @@ static void set_state(mdrt_vdp *vdp, const uint8_t *p)
     mdrt_vdp_set_state(vdp, &s);
 }
 
-/* the writes of one frame; at the trace's end, from its start again */
-static void video_frame(video *v, mdrt_vdp *vdp)
+/* the writes of one frame, each at its time in the frame (version 2: the composition's clock,
+ * so writes during the display land on their lines); at the trace's end, from its start again */
+static void video_frame(video *v, mdrt *m)
 {
+    mdrt_vdp *vdp = mdrt_get_vdp(m);
     for (;;) {
         if (v->pos >= v->len) { v->pos = v->start; set_state(vdp, v->b + 12); }
         const uint8_t *p = v->b + v->pos;
         uint8_t t = *p++;
+        if (v->version >= 2 && t >= T_CTRL16 && t <= T_HV16) {
+            int32_t at = (int32_t)le32(p);
+            p += 4;
+            if (at > 0) mdrt_run_until(m, (uint32_t)at);
+        }
         switch (t) {
         case T_CTRL16: mdrt_vdp_ctrl16(vdp, le16(p)); p += 2; break;
         case T_CTRL32: mdrt_vdp_ctrl32(vdp, le32(p)); p += 4; break;
@@ -114,7 +121,7 @@ static void game(mdrt *m, void *user)
     mdrt_vdp *vdp = mdrt_get_vdp(m);
     if (vid.b) { mdrt_vdp_set_memory(vdp, dma_read, &vid); set_state(vdp, vid.b + 12); }
     for (uint64_t f = 0;; f++) {
-        if (vid.b) video_frame(&vid, vdp);
+        if (vid.b) video_frame(&vid, m);
         int more = snd.b ? sound_frame(&snd, m, f) : 1;
         if (mdrt_wait_vblank(m) || !more) break;
         mdrt_vblank_end(m);
@@ -127,9 +134,9 @@ int main(int argc, char **argv)
         long len;
         uint8_t *b = load(argv[i], &len);
         if (!b) return 1;
-        if (len > 12 && !memcmp(b, "MDVT", 4)) { vid = (video){ b, len, 12 + STATE, 12 + STATE, NULL, 0 }; }
+        if (len > 12 && !memcmp(b, "MDVT", 4) && (le32(b + 4) == 1 || le32(b + 4) == 2)) { vid = (video){ b, len, 12 + STATE, 12 + STATE, NULL, 0, le32(b + 4) }; }
         else if (len > SND_HEADER && !memcmp(b, "MDST", 4) && le32(b + 4) == 3) { snd = (sound){ b, len, SND_HEADER, 0, 0, 1 }; }
-        else { fprintf(stderr, "%s: not a .vdptrace or a version 3 .sndtrace\n", argv[i]); return 1; }
+        else { fprintf(stderr, "%s: not a version 1 or 2 .vdptrace or a version 3 .sndtrace\n", argv[i]); return 1; }
     }
     if (!vid.b && !snd.b) { fprintf(stderr, "usage: %s [FILE.vdptrace] [FILE.sndtrace]\n", argv[0]); return 2; }
     mdrt_config c = { 0 };

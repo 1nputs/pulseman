@@ -32,17 +32,18 @@ The exporters today are the first client's (`../nhl95/tools/oracle/vdptrace.py`,
   version, and the exporter, every reader and this file change in the same commit.
 - Times are master clocks (53,693,175 Hz NTSC; 3,420 a line, 262 lines a frame).
 
-## `.vdptrace` (MDVT, version 1)
+## `.vdptrace` (MDVT, version 2)
 
-Every VDP port access of the 68k in order, the bytes each DMA from the 68k bus reads, and at the
-start of each vertical blank (the V counter reaching the active height) the VDP's state and the
-frame just drawn.
+Every VDP port access of the 68k in order with its time, the bytes each DMA from the 68k bus
+reads, and at the start of each vertical blank (the V counter reaching the active height) the
+VDP's state and the frame just drawn.
 
 ```
-"MDVT", version u32 = 1, region u8 (0 NTSC, 1 PAL), 3 reserved bytes, state
+"MDVT", version u32 = 2, region u8 (0 NTSC, 1 PAL), 3 reserved bytes, state
 state:  regs[24], VRAM[65536] (VDP byte order), CRAM[64] u16 big-endian (bus words
         0000BBB0GGG0RRR0), VSRAM[40] u16 big-endian (11 bits)
-events: tag u8, then
+events: tag u8, then for tags 1-8 a time s32 (master clocks since the frame began, at the start
+        of its vertical blank: the FRAME before it; the oracle's m68k.cycles), then
    1 CTRL16  u16          a move.w to the control port
    2 CTRL32  u32          a move.l to the control port
    3 DATA16  u16          a move.w to the data port
@@ -58,8 +59,11 @@ events: tag u8, then
 
 The replay applies the accesses in order, serves DMA reads from the recorded bytes, checks every
 READ16 value, and at each FRAME checks the state byte for byte and the rendered picture pixel for
-pixel. A trace begins after the program's set-up and only once a whole frame was drawn under
-tracing (`HARDWARE.md`, 2026-10-15).
+pixel. It draws the picture a line at a time as the accesses' times pass each line's start
+(`mdrt_vdp_beam`, as the composition's clock does), so a write during the display lands on its
+line. A trace begins after the program's set-up and only once a whole frame was drawn under
+tracing (`HARDWARE.md`, 2026-10-15). Version 1 (2026-10-15) had no times: its accesses all count as
+made in the vertical blank; readers take both.
 
 ## `.padtrace` (MDPT, version 1)
 
