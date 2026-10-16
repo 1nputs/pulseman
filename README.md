@@ -2,15 +2,17 @@
 
 A small, permissively licensed, modular Mega Drive / Genesis hardware runtime in C11: the VDP
 (state machine and renderer), PSG, YM2612 interface, controller ports and save RAM, with an
-SDL2 platform layer for Linux and a WebAssembly build for the browser. It is the runtime for
-games reimplemented in C, first the NHL '94 port in the sibling `nhl95` repository, and is
-meant to be reused by later ports and other projects.
+SDL2 platform layer for Linux. A WebAssembly build for the browser is planned (WP8, not started).
+It is the runtime for games reimplemented in C, first the NHL '94 port in the sibling `nhl95`
+repository, and is meant to be reused by later ports and other projects.
 
 No 68k or Z80 emulation: the game logic is C, and the game's own sound relay drives the sound
 chips directly.
 
-Start with `docs/WORKPLAN.md`: the decisions, the interfaces the first client needs, the work
-packages in order, and how each one is verified against a real emulator.
+Documents: `docs/API.md` (using the runtime from a client), `docs/VECTORS.md` (the test vectors
+and their formats), `docs/HARDWARE.md` (the behaviour modelled and where each piece comes from),
+`docs/WORKPLAN.md` (the original brief: the decisions, the work packages, how each is verified;
+this README carries the status).
 
 ## Status
 
@@ -58,9 +60,16 @@ packages in order, and how each one is verified against a real emulator.
   1 dB a 100 ms window. `docs/API.md` describes the contract.
 - WP5 pads and save RAM: done. The game's pad port reads replay exactly (3600 / 3600 over 900
   frames of random input on both pads); 6-button sequence and save RAM checked by hand.
+- 2026-10-16, the review's small findings: PAL's master clock (`MDRT_MASTER_CLOCK_PAL`,
+  `mdrt_master_clock`) in the mixer and the platform; the default HV counter through the VDP's
+  counter mapping; `mdrt_vdp_reg` and a rule for what in the structs is API; the mixer's gains in
+  `mdrt_config`; sound events kept in time order as they arrive (no sort per chunk);
+  `MDRT_REQUIRE_VECTORS`; the vector formats in `docs/VECTORS.md`; Clang checked. The first
+  client's golden runs (its picture, sound and state, frame by frame) are unchanged.
 
-`make check` (GCC, sanitizers); `CC=clang make MODE=release check` for Clang; `make FM_CORE=ymfm
-check` for the other FM core. Vectors come from
-`$MDRT_VECTORS` (default `../nhl95/out/vectors`, recorded with
-`../nhl95/tools/oracle/vdptrace.py`, `padtrace.py` and `sndtrace.py`; the test ROM with `tests/rom/build.sh`, which uses the vasm
-built in `../nhl95/ref/`).
+`make check` (GCC, sanitizers); `CC=clang make MODE=release check` for Clang (checked on
+2026-10-16 with Zig's Clang 22: `pip install ziglang`, `CC="python -m ziglang cc"`); `make
+FM_CORE=ymfm check` for the other FM core. Vectors come from `$MDRT_VECTORS` (default
+`../nhl95/out/vectors`; `docs/VECTORS.md`); `MDRT_REQUIRE_VECTORS=1` makes a missing vector a
+failure rather than a skip. The test ROM is assembled with `tests/rom/build.sh` (vasm; the
+default is the one built in `../nhl95/ref/`).

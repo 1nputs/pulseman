@@ -20,6 +20,25 @@ return mdrt_sdl_run(&c, &o, game, NULL);   /* game(m, user) runs on the game thr
 Without a window, fill `c.platform` (present, audio, wait, input: any may be NULL), create the
 console with `mdrt_new(&c)` and call the game yourself.
 
+Other settings: `c.pal` makes a PAL console (its master clock, 53,203,424 Hz, 313 lines a frame,
+the version register's PAL bit; V30 when register 1 asks for it); `c.fm_gain` and `c.psg_gain`
+set the mixer's balance in 1/32768ths (0 keeps the defaults, fitted to the oracle; consoles
+differ by model).
+
+## Threads
+
+Everything runs on the game's thread: the bus functions, `mdrt_wait_vblank`, the sound tick, and
+the platform callbacks it makes (present, audio, wait, input). The SDL2 platform keeps its window
+on the thread that called `mdrt_sdl_run` and hands pictures and buttons across under its own
+lock. Nothing in the runtime blocks, sleeps or reads a clock except the platform's `wait`.
+
+## What is API
+
+Use the functions. The module structs (`mdrt_vdp`, `mdrt_pads`, `mdrt_psg`, `mdrt_fm`) are
+public so they can be embedded, but their fields are not API and may change: read registers with
+`mdrt_vdp_reg`, state with `mdrt_vdp_get_state`. The exception is save RAM: `mdrt_sram`'s
+`bytes`, `size` and `dirty` are the platform's interface for keeping it.
+
 ## The bus
 
 | 68k access | runtime |
@@ -30,7 +49,21 @@ console with `mdrt_new(&c)` and call the game yourself.
 | $200000 save RAM | `mdrt_sram_read8/write8(mdrt_get_sram(m), off, ...)` (odd offsets) |
 | waiting for the vertical blank | `mdrt_wait_vblank(m)`: nonzero means stop |
 
-The VDP state can be set whole (`mdrt_vdp_set_state`) to start from a snapshot.
+The VDP state can be set whole (`mdrt_vdp_set_state`) to start from a snapshot; the sound
+chips cannot yet (a whole-console state is the next work), so a client starting from a
+recording writes their registers back.
+
+The status word shows the vertical blank (bit 3, also while the display is off), the vertical
+interrupt pending (bit 7), FIFO empty (bit 9, always) and PAL (bit 0). DMA busy (bit 1) is never
+set and the FIFO is never full: DMA completes at once and the FIFO drains at once, which is right
+for a client that waits cooperatively. A program that polls until DMA busy is *set* would spin
+for ever; port such a loop as a no-op.
+
+The HV counter's default model is a beam that starts at the vertical blank at each handshake and
+moves on a little at each read, shown as the hardware's counters show it (the V counter's jump
+back to $E5 in NTSC's vertical blank, the H counter's in the horizontal blank). Games mostly
+read it as a random source; anything that needs real timing replays recorded values
+(`mdrt_set_hv_source`).
 
 ## Sound and time
 

@@ -1,4 +1,4 @@
-/* Reading a sound trace (.sndtrace, version 3; written by ../nhl95/tools/hybrid/oracle_shim.c):
+/* Reading a sound trace (.sndtrace, version 3; docs/VECTORS.md):
  * the chip writes in time order and the oracle's audio. */
 #ifndef MDRT_TESTS_SNDTRACE_H
 #define MDRT_TESTS_SNDTRACE_H

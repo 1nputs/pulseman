@@ -13,5 +13,8 @@ int check_done(const char *name);
 
 /* the directory of test vectors, or NULL (the vector tests are then skipped) */
 const char *check_vectors(void);
+/* a vector test that cannot run: skipped, or with MDRT_REQUIRE_VECTORS=1 (the machine that has the
+ * vectors) a failure; returns the exit status for main */
+int check_skip(const char *name, const char *why);
 
 #endif

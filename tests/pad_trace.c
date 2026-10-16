@@ -1,6 +1,6 @@
 /* WP5: replay every .padtrace in $MDRT_VECTORS: the buttons each frame, the game's writes to the
  * I/O ports, and every read must return what the oracle returned. Format:
- * ../nhl95/tools/hybrid/oracle_shim.c ("MDPT"). Also the 6-button sequence and save RAM by hand. */
+ * docs/VECTORS.md ("MDPT"). Also the 6-button sequence and save RAM by hand. */
 #include <dirent.h>
 #include <stdlib.h>
 #include <string.h>
@@ -97,7 +97,8 @@ int main(void)
     six_button();
     sram();
     const char *dir = check_vectors();
-    if (!dir) { printf("pad_trace: no vectors (MDRT_VECTORS), skipped the replays\n"); return check_done("pad_trace"); }
+    if (!dir) { check_skip("pad_trace", "no vectors (MDRT_VECTORS) for the replays"); return check_done("pad_trace"); }
+    int traces = 0;
     DIR *d = opendir(dir);
     struct dirent *e;
     char path[1024];
@@ -106,7 +107,9 @@ int main(void)
         if (n < 9 || strcmp(e->d_name + n - 9, ".padtrace")) continue;
         snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
         replay(path);
+        traces++;
     }
     if (d) closedir(d);
+    if (!traces) check_skip("pad_trace", "no .padtrace in MDRT_VECTORS");
     return check_done("pad_trace");
 }

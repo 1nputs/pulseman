@@ -4,8 +4,10 @@
 #define MDRT_MDRT_H
 #include <stdint.h>
 
-/* NTSC clocks (Sega Genesis Software Manual; the YM2612 divides the 68k clock by 144) */
+/* NTSC clocks (Sega Genesis Software Manual; the YM2612 divides the 68k clock by 144). A PAL
+ * console's master clock is slower and its frame has more lines; the dividers are the same. */
 #define MDRT_MASTER_CLOCK_NTSC 53693175u
+#define MDRT_MASTER_CLOCK_PAL  53203424u
 #define MDRT_M68K_CLOCK_NTSC   (MDRT_MASTER_CLOCK_NTSC / 7)    /* 7670453 Hz */
 #define MDRT_Z80_CLOCK_NTSC    (MDRT_MASTER_CLOCK_NTSC / 15)   /* 3579545 Hz, also the PSG */
 #define MDRT_FM_RATE_NTSC      (MDRT_M68K_CLOCK_NTSC / 144)    /* 53267 Hz */
@@ -45,8 +47,9 @@ typedef struct mdrt_platform {
 } mdrt_platform;
 
 typedef struct mdrt_config {
-    int pal;
+    int pal;                    /* a PAL console: its master clock, 313 lines, the version bit */
     uint32_t audio_rate;        /* output samples a second (0: 48000) */
+    int32_t fm_gain, psg_gain;  /* the mixer's gains in 1/32768ths (0: MDRT_MIX_FM_GAIN / PSG_GAIN) */
     size_t sram_size;           /* save RAM bytes (0: none) */
     mdrt_read8_fn read68k;      /* the 68k's memory, for DMA */
     void *read68k_user;
@@ -59,7 +62,9 @@ mdrt_vdp *mdrt_get_vdp(mdrt *m);
 mdrt_pads *mdrt_get_pads(mdrt *m);
 mdrt_sram *mdrt_get_sram(mdrt *m);
 
-/* the frame's length in master clocks (896040 NTSC, 1070460 PAL) and frames completed */
+/* the master clock in Hz, the frame's length in master clocks (896040 NTSC, 1070460 PAL) and
+ * frames completed */
+uint32_t mdrt_master_clock(const mdrt *m);
 uint32_t mdrt_frame_mclks(const mdrt *m);
 uint64_t mdrt_frame_count(const mdrt *m);
 

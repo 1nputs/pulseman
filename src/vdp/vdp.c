@@ -199,28 +199,33 @@ uint16_t mdrt_vdp_status(mdrt_vdp *v)
     return s;
 }
 
-/* the V counter: NTSC V28 counts 0-$EA then $E5-$FF; PAL V28 0-$102 then $1CA-$1FF, V30 0-$10A
- * then $1D2-$1FF (8 bits shown) */
-static uint8_t v_counter(const mdrt_vdp *v)
+/* the V counter at line l: NTSC V28 counts 0-$EA then $E5-$FF; PAL V28 0-$102 then $1CA-$1FF,
+ * V30 0-$10A then $1D2-$1FF (8 bits shown) */
+static uint8_t v_counter(const mdrt_vdp *v, unsigned l)
 {
-    unsigned l = v->line;
     if (!v->pal) return (uint8_t)(l <= 0xEA ? l : l - 6);
     if (mdrt_vdp_height(v) == 240) return (uint8_t)(l <= 0x10A ? l : l + 0x1D2 - 0x10B);
     return (uint8_t)(l <= 0x102 ? l : l + 0x1CA - 0x103);
 }
 
-/* the H counter (pixel clock / 2): H32 counts 0-$93 then $E9-$FF, H40 0-$B6 then $E4-$FF */
-static uint8_t h_counter(const mdrt_vdp *v)
+/* the H counter at pixel clock hpos (it counts every second one): H32 counts 0-$93 then $E9-$FF,
+ * H40 0-$B6 then $E4-$FF */
+static uint8_t h_counter(const mdrt_vdp *v, unsigned hpos)
 {
-    unsigned h = (unsigned)v->hpos >> 1;
+    unsigned h = hpos >> 1;
     if (mdrt_vdp_width(v) == 320) return (uint8_t)(h <= 0xB6 ? h : h - 0xB7 + 0xE4);
     return (uint8_t)(h <= 0x93 ? h : h - 0x94 + 0xE9);
+}
+
+uint16_t mdrt_vdp_hv_at(const mdrt_vdp *v, unsigned line, unsigned hpos)
+{
+    return (uint16_t)(v_counter(v, line) << 8 | h_counter(v, hpos));
 }
 
 uint16_t mdrt_vdp_hv16(mdrt_vdp *v)
 {
     if (v->hv) return v->hv(v->hv_user);
-    return (uint16_t)(v_counter(v) << 8 | h_counter(v));
+    return mdrt_vdp_hv_at(v, v->line, v->hpos);
 }
 
 uint8_t mdrt_vdp_hv8(mdrt_vdp *v, int odd)
@@ -228,6 +233,8 @@ uint8_t mdrt_vdp_hv8(mdrt_vdp *v, int odd)
     uint16_t hv = mdrt_vdp_hv16(v);
     return (uint8_t)(odd ? hv : hv >> 8);
 }
+
+uint8_t mdrt_vdp_reg(const mdrt_vdp *v, int n) { return n >= 0 && n < 24 ? v->s.reg[n] : 0; }
 
 void mdrt_vdp_get_state(const mdrt_vdp *v, mdrt_vdp_state *out) { *out = v->s; }
 

@@ -80,7 +80,7 @@ static int wait(void *user)
         while (SDL_GetQueuedAudioSize(s->dev) > enough && !SDL_AtomicGet(&s->quit)) SDL_Delay(1);
     } else {                                              /* no sound: the clock */
         uint64_t freq = SDL_GetPerformanceFrequency(), now = SDL_GetPerformanceCounter();
-        uint64_t period = freq * mdrt_frame_mclks(s->m) / MDRT_MASTER_CLOCK_NTSC;
+        uint64_t period = freq * mdrt_frame_mclks(s->m) / mdrt_master_clock(s->m);
         if (!s->next_tick || now > s->next_tick + period * 4) s->next_tick = now;
         s->next_tick += period;
         while ((now = SDL_GetPerformanceCounter()) < s->next_tick && !SDL_AtomicGet(&s->quit)) {

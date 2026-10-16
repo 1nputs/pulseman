@@ -1,8 +1,9 @@
 # md-runtime: `make` builds the library, tests and examples; `make check` runs the tests.
 # MODE=debug (default: -O1, address and undefined sanitizers) or MODE=release. CC=gcc or clang.
 # FM_CORE=nuked (default: Nuked-OPN2, LGPL-2.1) or ymfm (BSD-3, C++).
-# Test vectors (from the client's oracle, never committed) are read from MDRT_VECTORS,
-# default ../nhl95/out/vectors; the vector tests are skipped when it is absent.
+# Test vectors (from the client's oracle, never committed; docs/VECTORS.md) are read from
+# MDRT_VECTORS, default ../nhl95/out/vectors; the vector tests are skipped when it is absent, or
+# fail with MDRT_REQUIRE_VECTORS=1.
 CC      ?= cc
 MODE    ?= debug
 WARN    := -std=c11 -Wall -Wextra -Werror -Wshadow -Wstrict-prototypes -Wmissing-prototypes

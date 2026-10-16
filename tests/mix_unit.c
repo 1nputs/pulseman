@@ -17,7 +17,7 @@ static int16_t fm[2 * N], psg[N], out[2 * 50000];
 
 /* one second of a tone at hz, amplitude a, on the FM's left (psg 0) or the PSG (psg 1) */
 /* (the FM's gain is above 1: the levels below are taken back to the input's) */
-static int run(uint32_t rate, double hz, double a, int to_psg, int dc)
+static int run_with(uint32_t rate, double hz, double a, int to_psg, int dc, uint32_t clock, int32_t fm_gain)
 {
     for (int i = 0; i < N; i++) {
         int16_t v = (int16_t)lround(dc + a * sin(2 * M_PI * hz * i / IN_RATE));
@@ -26,8 +26,12 @@ static int run(uint32_t rate, double hz, double a, int to_psg, int dc)
     }
     mdrt_mix m;
     mdrt_mix_init(&m, rate);
+    if (clock) mdrt_mix_set_clock(&m, clock);
+    if (fm_gain) mdrt_mix_set_gains(&m, fm_gain, MDRT_MIX_PSG_GAIN);
     return mdrt_mix_run(&m, fm, psg, N, out);
 }
+
+static int run(uint32_t rate, double hz, double a, int to_psg, int dc) { return run_with(rate, hz, a, to_psg, dc, 0, 0); }
 
 static double rms(int side, int from, int to)
 {
@@ -44,8 +48,23 @@ static double frequency(int side, int from, int to, uint32_t rate)
     return ups > 1 ? (ups - 1) * (double)rate / (last - first) : 0;
 }
 
+/* a PAL console: the same input samples last longer (its master clock is slower); the gains */
+static void pal_and_gains(void)
+{
+    double in_rate = (double)MDRT_MASTER_CLOCK_PAL / 1008;
+    int n = run_with(48000, 1000, 10000, 0, 0, MDRT_MASTER_CLOCK_PAL, 0);
+    double f = frequency(0, 4800, n, 48000);
+    printf("  PAL: %d samples for %d in (expected %.0f); the 1 kHz of NTSC input at %.2f Hz\n", n, N, N * 48000.0 / in_rate - 16 * 48000.0 / in_rate, f);
+    CHECK(abs(n - (int)(N * 48000.0 / in_rate - 16 * 48000.0 / in_rate)) <= 2);
+    CHECK(fabs(f - 1000 * in_rate / IN_RATE) < 0.05);     /* (the tone was made for NTSC's rate) */
+    n = run_with(48000, 1000, 5000, 0, 0, 0, 2 * MDRT_MIX_FM_GAIN);
+    double level = rms(0, 4800, n) * sqrt(2) * 32768 / MDRT_MIX_FM_GAIN;
+    CHECK(fabs(level - 10000) < 50);
+}
+
 int main(void)
 {
+    pal_and_gains();
     static const uint32_t rates[] = { 48000, 44100, 32000 };
     for (size_t r = 0; r < 3; r++) {
         uint32_t rate = rates[r];

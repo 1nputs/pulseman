@@ -58,7 +58,7 @@ int main(void)
 {
     int traces = 0;
     const char *dir = check_vectors();
-    if (!dir) { printf("psg_trace: no vectors, skipped\n"); return 0; }
+    if (!dir) return check_skip("psg_trace", "no vectors (MDRT_VECTORS)");
     DIR *d = opendir(dir);
     struct dirent *ent;
     char path[4096];
@@ -69,6 +69,6 @@ int main(void)
         traces += replay(path, ent->d_name);
     }
     if (d) closedir(d);
-    if (!traces) printf("psg_trace: no trace from power on without FM (sndtrace.py --fm-preamp 0), skipped\n");
+    if (!traces) check_skip("psg_trace", "no trace from power on without FM (sndtrace.py --fm-preamp 0)");
     return check_done("psg_trace");
 }

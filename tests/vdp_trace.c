@@ -1,7 +1,7 @@
 /* WP1 / WP2: replay every .vdptrace in $MDRT_VECTORS. The port accesses are applied in order,
  * DMA reads come from the recorded source bytes, data port reads must return the oracle's value,
  * and at every FRAME the registers, VRAM, CRAM and VSRAM must match byte for byte and the
- * rendered picture pixel for pixel (9-bit colours). Format: ../nhl95/tools/hybrid/oracle_shim.c. */
+ * rendered picture pixel for pixel (9-bit colours). Format: docs/VECTORS.md. */
 #include <dirent.h>
 #include <stdlib.h>
 #include <string.h>
@@ -169,8 +169,9 @@ static void replay(const char *path)
 
 int main(void)
 {
+    int traces = 0;
     const char *dir = check_vectors();
-    if (!dir) { printf("vdp_trace: no vectors (MDRT_VECTORS), skipped\n"); return 0; }
+    if (!dir) return check_skip("vdp_trace", "no vectors (MDRT_VECTORS)");
     DIR *d = opendir(dir);
     struct dirent *e;
     char path[1024];
@@ -179,7 +180,9 @@ int main(void)
         if (n < 9 || strcmp(e->d_name + n - 9, ".vdptrace")) continue;
         snprintf(path, sizeof path, "%s/%s", dir, e->d_name);
         replay(path);
+        traces++;
     }
     if (d) closedir(d);
+    if (!traces) check_skip("vdp_trace", "no .vdptrace in MDRT_VECTORS");
     return check_done("vdp_trace");
 }

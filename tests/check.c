@@ -1,4 +1,5 @@
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 #include "check.h"
 
@@ -14,6 +15,15 @@ int check_done(const char *name)
 {
     printf("%s: %d checks, %d failed\n", name, check_count, check_failures);
     return check_failures ? 1 : 0;
+}
+
+int check_skip(const char *name, const char *why)
+{
+    const char *r = getenv("MDRT_REQUIRE_VECTORS");
+    int required = r && *r && strcmp(r, "0");
+    printf("%s: %s, %s\n", name, why, required ? "FAILED (MDRT_REQUIRE_VECTORS is set)" : "skipped");
+    if (required) check_failures++;
+    return required;
 }
 
 const char *check_vectors(void)

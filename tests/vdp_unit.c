@@ -158,6 +158,14 @@ static void hv_counter(void)
     CHECK_EQ(mdrt_vdp_hv8(&v, 0), 0xFF);
     mdrt_vdp_set_position(&v, 0, 2 * 0x94);               /* H32: after $93 comes $E9 */
     CHECK_EQ(mdrt_vdp_hv8(&v, 1), 0xE9);
+    /* any beam position, as the composition's beam asks */
+    CHECK_EQ(mdrt_vdp_hv_at(&v, 235, 0), 0xE500);
+    CHECK_EQ(mdrt_vdp_hv_at(&v, 100, 2 * 0x93), 0x6493);
+    mdrt_vdp_ctrl16(&v, 0x8C81);                          /* H40: after $B6 comes $E4 */
+    CHECK_EQ(mdrt_vdp_hv_at(&v, 0, 2 * 0xB6), 0x00B6);
+    CHECK_EQ(mdrt_vdp_hv_at(&v, 0, 2 * 0xB7), 0x00E4);
+    CHECK_EQ(mdrt_vdp_reg(&v, 12), 0x81);
+    CHECK_EQ(mdrt_vdp_reg(&v, 24), 0);
 }
 
 int main(void)

@@ -4,7 +4,7 @@
 #include "mdrt/mdrt.h"
 
 enum { EV_YM, EV_YM_RESET, EV_PSG };
-typedef struct event { uint64_t at; uint32_t seq; uint8_t kind, port, value; } event;
+typedef struct event { uint64_t at; uint8_t kind, port, value; } event;
 
 #define CHUNK (16 * MDRT_FM_SAMPLE_MCLKS)                 /* the sound is made a chunk at a time */
 
@@ -18,9 +18,9 @@ struct mdrt {
     mdrt_sram sram;
     uint32_t frame;             /* master clocks a frame */
     uint64_t frames;
-    event *ev;                  /* this frame's sound, in the order it came */
+    event *ev;                  /* this frame's sound: by time, and in the order it came at one time */
     size_t nev, cap;
-    uint32_t seq;
+    size_t next;                /* the next event the sound takes (while it is made; else 0) */
     mdrt_sound_tick_fn tick;
     void *tick_user;
     mdrt_pad_fn pad_src;
@@ -34,7 +34,7 @@ static uint8_t no_memory(void *user, uint32_t addr) { (void)user; (void)addr; re
 
 /* the default HV counter: the beam from the vertical blank's start, moved on at each read as time
  * passes in the game's code (the game reads it as a random source; lockstep replays recorded
- * values through mdrt_set_hv_source) */
+ * values through mdrt_set_hv_source), shown as the hardware's counters show it */
 static uint16_t beam_hv(void *user)
 {
     mdrt *m = user;
@@ -42,8 +42,10 @@ static uint16_t beam_hv(void *user)
     uint32_t lines = m->frame / MDRT_LINE_MCLKS;
     m->beam += 97;
     uint32_t line = (224 + m->beam / (uint32_t)width) % lines, h = m->beam % (uint32_t)width;
-    return (uint16_t)((line & 0xFF) << 8 | (h >> 1));
+    return mdrt_vdp_hv_at(&m->vdp, line, h);
 }
+
+static uint32_t master_clock(const mdrt *m) { return m->cfg.pal ? MDRT_MASTER_CLOCK_PAL : MDRT_MASTER_CLOCK_NTSC; }
 
 mdrt *mdrt_new(const mdrt_config *c)
 {
@@ -58,13 +60,15 @@ mdrt *mdrt_new(const mdrt_config *c)
     mdrt_psg_init(&m->psg);
     m->fm = mdrt_fm_new();
     mdrt_mix_init(&m->mix, m->cfg.audio_rate);
+    mdrt_mix_set_clock(&m->mix, master_clock(m));
+    mdrt_mix_set_gains(&m->mix, c->fm_gain ? c->fm_gain : MDRT_MIX_FM_GAIN, c->psg_gain ? c->psg_gain : MDRT_MIX_PSG_GAIN);
     mdrt_pads_init(&m->pads, 1, c->pal);
     mdrt_sram_init(&m->sram, c->sram_size);
     size_t samples = m->frame / MDRT_FM_SAMPLE_MCLKS + 4;
     m->picture = calloc(320 * 240, sizeof *m->picture);
     m->fm_buf = malloc(2 * samples * sizeof *m->fm_buf);
     m->psg_buf = malloc(samples * sizeof *m->psg_buf);
-    m->audio = malloc(2 * ((size_t)m->cfg.audio_rate * m->frame / MDRT_MASTER_CLOCK_NTSC + 8) * sizeof *m->audio);
+    m->audio = malloc(2 * ((size_t)m->cfg.audio_rate * m->frame / master_clock(m) + 8) * sizeof *m->audio);
     m->cap = 4096;
     m->ev = malloc(m->cap * sizeof *m->ev);
     if (!m->fm || !m->picture || !m->fm_buf || !m->psg_buf || !m->audio || !m->ev) { mdrt_free(m); return NULL; }
@@ -82,9 +86,12 @@ void mdrt_free(mdrt *m)
 mdrt_vdp *mdrt_get_vdp(mdrt *m) { return &m->vdp; }
 mdrt_pads *mdrt_get_pads(mdrt *m) { return &m->pads; }
 mdrt_sram *mdrt_get_sram(mdrt *m) { return &m->sram; }
+uint32_t mdrt_master_clock(const mdrt *m) { return master_clock(m); }
 uint32_t mdrt_frame_mclks(const mdrt *m) { return m->frame; }
 uint64_t mdrt_frame_count(const mdrt *m) { return m->frames; }
 
+/* an event into the list by its time, after those at the same time; never before the next one
+ * the sound takes (a write late for the sound being made is made at once) */
 static void push(mdrt *m, uint64_t at, int kind, int port, uint8_t value)
 {
     if (m->nev == m->cap) {
@@ -93,7 +100,9 @@ static void push(mdrt *m, uint64_t at, int kind, int port, uint8_t value)
         m->ev = e;
         m->cap *= 2;
     }
-    m->ev[m->nev++] = (event){ at, m->seq++, (uint8_t)kind, (uint8_t)port, value };
+    size_t i = m->nev++;
+    while (i > m->next && m->ev[i - 1].at > at) { m->ev[i] = m->ev[i - 1]; i--; }
+    m->ev[i] = (event){ at, (uint8_t)kind, (uint8_t)port, value };
 }
 
 void mdrt_ym_write(mdrt *m, uint32_t at, int port, uint8_t value) { push(m, at, EV_YM, port & 3, value); }
@@ -106,13 +115,6 @@ void mdrt_set_hv_source(mdrt *m, mdrt_hv_fn fn, void *user)
     else mdrt_vdp_set_hv_source(&m->vdp, beam_hv, m);
 }
 void mdrt_set_pad_source(mdrt *m, mdrt_pad_fn fn, void *user) { m->pad_src = fn; m->pad_user = user; }
-
-static int by_time(const void *x, const void *y)
-{
-    const event *a = x, *b = y;
-    if (a->at != b->at) return a->at < b->at ? -1 : 1;
-    return a->seq < b->seq ? -1 : a->seq > b->seq;
-}
 
 /* the chips run for mclk master clocks; their samples go through the mixer to the frame's audio */
 static int run_chips(mdrt *m, uint32_t mclk, int made)
@@ -127,13 +129,12 @@ static int make_sound(mdrt *m)
 {
     int made = 0;
     uint32_t t = 0;
-    size_t next = 0;
+    m->next = 0;
     while (t < m->frame) {
         uint32_t until = t + CHUNK < m->frame ? t + CHUNK : m->frame;
         if (m->tick) m->tick(m->tick_user, until);
-        qsort(m->ev + next, m->nev - next, sizeof *m->ev, by_time);
-        while (next < m->nev && m->ev[next].at < until) {
-            event *e = &m->ev[next++];
+        while (m->next < m->nev && m->ev[m->next].at < until) {
+            event *e = &m->ev[m->next++];
             if (e->at > t) { made = run_chips(m, (uint32_t)e->at - t, made); t = (uint32_t)e->at; }
             if (e->kind == EV_YM) mdrt_fm_write(m->fm, e->port, e->value);
             else if (e->kind == EV_YM_RESET) mdrt_fm_reset(m->fm);
@@ -144,11 +145,12 @@ static int make_sound(mdrt *m)
     }
     /* what comes after the frame's end belongs to the next */
     size_t keep = 0;
-    for (size_t i = next; i < m->nev; i++) {
+    for (size_t i = m->next; i < m->nev; i++) {
         m->ev[keep] = m->ev[i];
         m->ev[keep++].at -= m->frame;
     }
     m->nev = keep;
+    m->next = 0;
     return made;
 }
 

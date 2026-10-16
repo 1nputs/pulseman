@@ -15,13 +15,13 @@ and a document disagree the vector wins, and the disagreement is written down he
 
 ## Vectors
 
-Recorded by `../nhl95/tools/oracle/vdptrace.py` into `$MDRT_VECTORS` (default
-`../nhl95/out/vectors`): `boot` (EA logo), `title`, `setup`, `matchup`, `pregame` (front-end
-screens, from power on with Start presses), `faceoff`, `play` (CPU against CPU), `pause` (the
-pause menu). Each is 90-150 frames.
+The formats are in `VECTORS.md`. Recorded by `../nhl95/tools/oracle/vdptrace.py` into
+`$MDRT_VECTORS` (default `../nhl95/out/vectors`): `boot` (EA logo), `title`, `setup`,
+`matchup`, `pregame` (front-end screens, from power on with Start presses), `faceoff`, `play`
+(CPU against CPU), `pause` (the pause menu), and `vdptest` (the test ROM). Each is 90-250
+frames.
 
-Sound traces (`*.sndtrace`, `../nhl95/tools/oracle/sndtrace.py`; format in
-`../nhl95/tools/hybrid/oracle_shim.c`, version 3): `game` (6000 frames from power on: EA logo,
+Sound traces (`*.sndtrace`, `../nhl95/tools/oracle/sndtrace.py`, version 3): `game` (6000 frames from power on: EA logo,
 title, menus, the faceoff, 40 s of play), `game_psg` and `game_fm` (the same with the FM chip,
 or the PSG, left out of the oracle's audio: preamp 0), `game_fm_nuked` (`game_fm` with the oracle
 on Nuked-OPN2 too), `boot` (3000 frames from power on),
@@ -70,3 +70,14 @@ only the Z80 relay uses it). Times are master clocks modulo 2^32; readers unwrap
 - 2026-10-15, `game_fm`: the oracle's FM core (MAME's YM2612 in GPGX) and Nuked-OPN2 agree within
   1 dB of loudness in 1299 of 1305 windows; ymfm agrees with the oracle in 1304. Genesis Plus GX
   resets the FM chip when the Z80's reset is asserted and again when it is released.
+- 2026-10-16, the composition's default HV counter: the beam it models is shown through the VDP's
+  counter mapping (`mdrt_vdp_hv_at`; the V counter jumps from $EA back to $E5 at line 235 in
+  NTSC, the H counter from $B6 to $E4 in H40, $93 to $E9 in H32). Before, lines 235-261 read as
+  $EB-$FF and 262 on as $00-$05, values the counter never shows there. The first client reads the
+  counter as a random source, so its native random numbers change; its lockstep replays the
+  oracle's values and is unaffected.
+- 2026-10-16, PAL: the master clock is 53,203,424 Hz (the PAL colour subcarrier, 4.43361875 MHz, x 12),
+  against NTSC's 53,693,175; the dividers (68k /7, Z80 and PSG /15, YM2612 /7/144) are the same,
+  so a PAL console's chips run 0.9% slower and its 313-line frame lasts 1,070,460 master clocks.
+  The mixer resamples from the configured clock and the SDL2 platform paces by it. No PAL vector
+  exists yet.
