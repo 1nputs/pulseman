@@ -48,6 +48,9 @@ typedef struct mdrt_platform {
     /* the player's requests to the client (MDRT_REQUEST_*): SAVE and LOAD once for each press since
      * the last call, REWIND while it is held (NULL: none) */
     unsigned (*requests)(void *user);
+    /* the file a SAVE or LOAD request names (NULL, or no callback: the client's own choice); kept
+     * by the platform until the next handshake */
+    const char *(*request_path)(void *user);
 } mdrt_platform;
 
 /* requests from the person playing, which the client carries out where it can (a state saved at
@@ -169,8 +172,10 @@ void mdrt_set_hint(mdrt *m, mdrt_hint_fn fn, void *user);
  * Nonzero: the platform is closing and the game should stop. */
 int mdrt_wait_vblank(mdrt *m);
 void mdrt_vblank_end(mdrt *m);
-/* the requests the last handshake brought (MDRT_REQUEST_*) */
+/* the requests the last handshake brought (MDRT_REQUEST_*), and the file a SAVE or LOAD among them
+ * names (NULL: the client's own); the SDL2 platform's are its save slots and quick resume */
 unsigned mdrt_requests(const mdrt *m);
+const char *mdrt_request_path(const mdrt *m);
 
 /* ---- the whole console's state, as a value ------------------------------------------------
  * Everything that decides what the game will see and hear from here on: the VDP (ports and

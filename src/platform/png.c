@@ -1,4 +1,5 @@
-/* A PNG in memory (mdrt/png.h): signature, IHDR, one IDAT of stored deflate blocks, IEND. */
+/* A PNG in memory (mdrt/png.h): signature, IHDR, one IDAT of stored deflate blocks, IEND; and the
+ * same read back (only PNGs made so: a screenshot or a save slot's picture). */
 #include <string.h>
 #include "mdrt/png.h"
 
@@ -65,4 +66,45 @@ size_t mdrt_png_encode(const uint32_t *rgb, int width, int height, int pitch, ui
     p += chunk(p, "IDAT", z);
     p += chunk(p, "IEND", 0);
     return (size_t)(p - out);
+}
+
+static uint32_t be(const uint8_t *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
+
+int mdrt_png_decode(const uint8_t *png, size_t size, uint32_t *out, int max_w, int max_h, int *w, int *h)
+{
+    static const uint8_t sig[8] = { 0x89, 'P', 'N', 'G', '\r', '\n', 0x1A, '\n' };
+    if (size < 8 + 25 || memcmp(png, sig, 8) || memcmp(png + 12, "IHDR", 4)) return -1;
+    uint32_t pw = be(png + 16), ph = be(png + 20);
+    if (!pw || !ph || pw > (uint32_t)max_w || ph > (uint32_t)max_h || png[24] != 8 || png[25] != 2 || png[28] != 0) return -1;
+    size_t o = 33;
+    while (o + 12 <= size && memcmp(png + o + 4, "IDAT", 4)) o += 12 + be(png + o);   /* (to the IDAT) */
+    if (o + 12 > size) return -1;
+    size_t len = be(png + o), at = o + 8 + 2, end = o + 8 + len;
+    if (end > size || len < 2) return -1;
+    size_t row = 1 + (size_t)pw * 3, x = 0, y = 0, k = 0;
+    uint8_t px[3];
+    int last = 0;
+    while (!last && at + 5 <= end) {                      /* stored blocks only */
+        if (png[at] >> 1) return -1;
+        last = png[at] & 1;
+        size_t n = (size_t)(png[at + 1] | png[at + 2] << 8);
+        at += 5;
+        if (at + n > end) return -1;
+        for (size_t i = 0; i < n; i++, k++) {
+            size_t c = k % row;
+            uint8_t b = png[at + i];
+            if (c == 0) { if (b) return -1; continue; }   /* the row's filter: none */
+            px[(c - 1) % 3] = b;
+            if ((c - 1) % 3 == 2) {
+                y = k / row;
+                x = (c - 1) / 3;
+                if (y < ph) out[y * (size_t)max_w + x] = 0xFF000000u | (uint32_t)px[0] << 16 | (uint32_t)px[1] << 8 | px[2];
+            }
+        }
+        at += n;
+    }
+    if (k != row * ph) return -1;
+    *w = (int)pw;
+    *h = (int)ph;
+    return 0;
 }

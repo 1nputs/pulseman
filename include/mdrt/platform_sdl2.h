@@ -6,7 +6,8 @@
  * dry or piles up.
  *
  * The menu (Esc, or a controller's Back or Guide button; the game waits while it is open): the
- * game's ROM (a file browser; the client checks each one), a reset, a state saved or loaded, the
+ * game's ROM (a file browser; the client checks each one), a reset, states saved and loaded in
+ * eight slots (states/slotN.state, each with its picture, slotN.png, shown beside the list), the
  * video (a pixel-art upscaler for the game's frames: mdrt/upscale.h; scaling, aspect, full
  * screen), the sound (volume, mute, the FM core and chip, changed as
  * the game plays), the players (two pads, or EA's 4 Way Play for four, from the next power on;
@@ -22,7 +23,12 @@
  *   pads 3 and 4, and turbo A / B / C on each pad: no keys until given some
  *   F1 mute, F2 / F3 volume down / up, F4 held to step back (mdrt_requests); F5 pause, F6 held
  *   fast-forward, F7 slow motion, F8 one frame while paused; F9 / F10 ask the game to save /
- *   load a state, F11 or Alt+Enter full screen, F12 a screenshot; Esc the menu
+ *   load a state (the slot chosen last), F11 or Alt+Enter full screen, F12 a screenshot; Esc the menu
+ * Saves and loads reach the client as MDRT_REQUEST_SAVE / LOAD with the slot's file
+ * (mdrt_request_path); a save is written to slotN.state.new and kept only when the client writes it
+ * (a game that takes states only in play leaves the slot as it was). Quick resume (on by default):
+ * the window closing asks for a state into states/resume.state, which the next start loads; when
+ * none is written (out of play) the old one goes, and the next start is a fresh one.
  * Controllers keep the slot they were given when plugged in; by default controller N is player N's
  * (X / A / B = A / B / C, Start, the left shoulder X, Y Y, the right shoulder Z; the d-pad and the
  * left stick are the directions). A change shows for a moment in the window's title.
@@ -33,8 +39,8 @@
  * screen, the upscaler, the scaling (sharp, integer, fit) and aspect (square, 4:3), the volume and mute, the
  * sound device and how many frames of sound are queued (latency), the FM core and chip, the
  * adaptor in the ports, each player's controller, the controllers' buttons, turbo's speed, the
- * stick's dead zone, pausing when the window loses focus, fast-forward's speed, the screenshots'
- * directory and every key. */
+ * stick's dead zone, pausing when the window loses focus, fast-forward's speed, the states'
+ * directory, the slot chosen last, quick resume, the screenshots' directory and every key. */
 #ifndef MDRT_PLATFORM_SDL2_H
 #define MDRT_PLATFORM_SDL2_H
 #include "mdrt/mdrt.h"

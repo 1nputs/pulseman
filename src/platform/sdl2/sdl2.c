@@ -81,10 +81,12 @@ static const char *const fast_label[6] = { "2x", "3x", "4x", "6x", "8x", "as fas
 #define ROM_MAX (16u << 20)                               /* (no cartridge is larger) */
 
 /* the menu's pages and items */
-enum { PAGE_MAIN, PAGE_VIDEO, PAGE_SOUND, PAGE_OPTIONS, PAGE_KEYS, PAGE_ROM, PAGE_PLAYERS, PAGE_CBUTTONS };
+enum { PAGE_MAIN, PAGE_VIDEO, PAGE_SOUND, PAGE_OPTIONS, PAGE_KEYS, PAGE_ROM, PAGE_PLAYERS, PAGE_CBUTTONS, PAGE_SAVE, PAGE_LOAD };
+enum { SLOT_COUNT = 8 };                                  /* save slots; 0 is quick resume's */
 enum { I_RESUME = 1, I_ROM, I_RESET, I_SAVE, I_LOAD, I_VIDEO, I_SOUND, I_OPTIONS, I_KEYS, I_QUIT, I_BACK,
        I_UPSCALE, I_SCALE, I_ASPECT, I_FULL, I_VOLUME, I_MUTE, I_FM_CORE, I_FM_CHIP, I_FOCUS, I_FAST, I_UP,
-       I_PLAYERS, I_ADAPTOR, I_TURBO, I_DEADZONE, I_CBUTTONS,
+       I_PLAYERS, I_ADAPTOR, I_TURBO, I_DEADZONE, I_CBUTTONS, I_RESUME_OPT,
+       I_SLOT = 800,             /* + slot (1-8) */
        I_PLAYER = 900,           /* + player (0-3) */
        I_PAD = 1000,             /* + pad * BUTTONS + button */
        I_CONTROL = 2000,         /* + K_ */
@@ -132,6 +134,15 @@ typedef struct sdl {
     int turbo_rate, dead_zone;  /* turbo presses a second; the stick's dead zone, in % */
     char ctrl_label[SLOTS + 1][64];
     const char *ctrl_choice[SLOTS + 1];
+    /* save slots and quick resume (states/slotN.state with slotN.png; states/resume.state) */
+    char req_path[1100], game_path[1100];   /* the file the next SAVE / LOAD names (s->lock); the game thread's copy */
+    int pending;                /* a save asked for: its slot (0 quick resume), -1 none */
+    uint32_t pending_until;
+    long pending_size;          /* its file's size when last seen growing (-1: not there yet) */
+    uint32_t *pending_pic;      /* the picture when it was asked for */
+    int pending_w, pending_h;
+    int slot, resume, quitting; /* F9 / F10's slot (the one chosen last); quick resume; quitting once it is saved */
+    uint32_t thumb[320 * 240];  /* the menu's picture of the slot selected */
     int scale, aspect, focus_pause, auto_paused;
     int upscale;                /* MDRT_UPSCALE_: the game's frames through it, before the scaling */
     uint32_t *frame, *big, *big_scratch;   /* the frame taken from the game thread; it upscaled; mmpx4x's halfway */
@@ -259,6 +270,16 @@ static unsigned requests(void *user)
     if (SDL_AtomicSet(&s->loads, 0)) r |= MDRT_REQUEST_LOAD;
     if (SDL_AtomicGet(&s->rewind)) r |= MDRT_REQUEST_REWIND;
     return r;
+}
+
+/* the file the requests name: the platform's slot (the game thread's copy, until the next handshake) */
+static const char *request_path(void *user)
+{
+    sdl *s = user;
+    SDL_LockMutex(s->lock);
+    snprintf(s->game_path, sizeof s->game_path, "%s", s->req_path);
+    SDL_UnlockMutex(s->lock);
+    return s->game_path[0] ? s->game_path : NULL;
 }
 
 static int game_thread(void *user)
@@ -492,6 +513,12 @@ static void settings_load(sdl *s)
     s->queue_frames = clamp(mdrt_settings_get_int(s->set, "audio.latency", 3), 1, 10);
     SDL_AtomicSet(&s->fast_speed, clamp(mdrt_settings_get_int(s->set, "general.fast_forward", 4), 0, 100));
     s->focus_pause = mdrt_settings_get_int(s->set, "general.pause_on_focus_loss", 1) != 0;
+    mdrt_settings_default(s->set, "general.states", "states");
+    mdrt_settings_default(s->set, "general.slot", "1");
+    mdrt_settings_default(s->set, "general.resume", "1");
+    s->slot = clamp(mdrt_settings_get_int(s->set, "general.slot", 1), 1, SLOT_COUNT);
+    s->resume = mdrt_settings_get_int(s->set, "general.resume", 1) != 0;
+    s->pending = -1;
     settings_write(s);                                    /* (a new file, or new settings: written now) */
 }
 
@@ -724,6 +751,59 @@ static void ctrl_removed(sdl *s, SDL_JoystickID id)
         }
 }
 
+/* ---- save slots ------------------------------------------------------------------------------ */
+
+/* a slot's file (0: quick resume's), with ext after its name (".state", ".png", ".state.new") */
+static void slot_path(sdl *s, char *out, size_t n, int slot, const char *ext)
+{
+    const char *dir = mdrt_settings_get(s->set, "general.states");
+    if (!dir || !*dir) dir = ".";
+    if (slot) snprintf(out, n, "%s/slot%d%s", dir, slot, ext);
+    else snprintf(out, n, "%s/resume%s", dir, ext);
+}
+
+static long file_size(const char *path)
+{
+    struct stat st;
+    return stat(path, &st) ? -1 : (long)st.st_size;
+}
+
+/* "Slot 3  16 Oct 14:03", or "Slot 3  empty"; 1 when it holds a state */
+static int slot_label(sdl *s, int slot, char *out, size_t n)
+{
+    char path[1100];
+    struct stat st;
+    slot_path(s, path, sizeof path, slot, ".state");
+    if (stat(path, &st)) { snprintf(out, n, "Slot %d  empty", slot); return 0; }
+    char when[32];
+    time_t t = st.st_mtime;
+    strftime(when, sizeof when, "%d %b %H:%M", localtime(&t));
+    snprintf(out, n, "Slot %d  %s", slot, when);
+    return 1;
+}
+
+/* the selected slot's picture beside the list (none when it has none) */
+static void slot_picture(sdl *s)
+{
+    mdrt_menu_item *it = s->menu.count ? &s->menu.items[s->menu.sel] : NULL;
+    s->menu.image = NULL;
+    if (!it || it->id < I_SLOT || it->id > I_SLOT + SLOT_COUNT) return;
+    char path[1100];
+    size_t n = 0;
+    const char *why = NULL;
+    slot_path(s, path, sizeof path, it->id - I_SLOT, ".png");
+    if (file_size(path) <= 0) return;
+    uint8_t *png = read_file(path, &n, &why);
+    int w, h;
+    if (png && !mdrt_png_decode(png, n, s->thumb, 320, 240, &w, &h)) {
+        s->menu.image = s->thumb;
+        s->menu.image_w = w;
+        s->menu.image_h = h;
+        s->menu.image_pitch = 320;
+    }
+    free(png);
+}
+
 static const char *core_label(const char *core) { return !strcmp(core, "nuked") ? "Nuked-OPN2" : core; }
 
 static void build_page(sdl *s, int page, int select)
@@ -780,6 +860,7 @@ static void build_page(sdl *s, int page, int select)
         int speed = 2, want = SDL_AtomicGet(&s->fast_speed);
         for (int i = 0; i < 6; i++) if (fast_speeds[i] == want) speed = i;
         mdrt_menu_add_choice(m, I_FAST, "Fast-forward speed", fast_label, 6, speed);
+        mdrt_menu_add_choice(m, I_RESUME_OPT, "Resume where you left off", off_on, 2, s->resume);
         mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
         break;
     }
@@ -832,6 +913,18 @@ static void build_page(sdl *s, int page, int select)
                          : SDL_GameControllerGetStringForButton(s->cbutton[i]));
         mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
         break;
+    case PAGE_SAVE: case PAGE_LOAD:
+        mdrt_menu_page(m, page == PAGE_SAVE ? "Save a state" : "Load a state");
+        snprintf(m->subtitle, sizeof m->subtitle, "%s", page == PAGE_SAVE ? "States are taken during play" : "Then the game goes on from there");
+        for (int i = 1; i <= SLOT_COUNT; i++) {
+            char label[64];
+            int full = slot_label(s, i, label, sizeof label);
+            mdrt_menu_add(m, I_SLOT + i, page == PAGE_LOAD && !full ? MDRT_ITEM_TEXT : MDRT_ITEM_ACTION, label);
+        }
+        mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
+        mdrt_menu_select(m, select);
+        slot_picture(s);
+        break;
     case PAGE_ROM:
         mdrt_menu_page(m, "Choose the game's ROM");
         list_dir(s);
@@ -882,6 +975,92 @@ static void close_menu(sdl *s)
 }
 
 static void quit(sdl *s) { SDL_AtomicSet(&s->quit, 1); }
+
+static void set_request_path(sdl *s, const char *path)
+{
+    SDL_LockMutex(s->lock);
+    snprintf(s->req_path, sizeof s->req_path, "%s", path);
+    SDL_UnlockMutex(s->lock);
+}
+
+/* a state into a slot (0: quick resume's): the game writes slotN.state.new when it can (in play),
+ * which becomes slotN.state once whole, with the picture as it was asked for beside it */
+static void ask_save(sdl *s, int slot)
+{
+    if (!s->thread || s->pending >= 0) return;
+    char path[1100];
+    const char *dir = mdrt_settings_get(s->set, "general.states");
+    make_dir(dir && *dir ? dir : ".");
+    slot_path(s, path, sizeof path, slot, ".state.new");
+    remove(path);
+    SDL_LockMutex(s->lock);
+    if (!s->pending_pic) s->pending_pic = malloc(320 * 240 * sizeof *s->pending_pic);
+    if (s->pending_pic) memcpy(s->pending_pic, s->picture, sizeof s->picture);
+    s->pending_w = s->width;
+    s->pending_h = s->height;
+    SDL_UnlockMutex(s->lock);
+    set_request_path(s, path);
+    s->pending = slot;
+    s->pending_size = -1;
+    s->pending_until = SDL_GetTicks() + 1500;
+    SDL_AtomicAdd(&s->saves, 1);
+}
+
+static void ask_load(sdl *s, int slot)
+{
+    char path[1100], msg[64];
+    slot_path(s, path, sizeof path, slot, ".state");
+    if (!s->thread || file_size(path) <= 0) {
+        if (slot) { snprintf(msg, sizeof msg, "slot %d is empty", slot); notice(s, msg); }
+        return;
+    }
+    set_request_path(s, path);
+    SDL_AtomicAdd(&s->loads, 1);
+    if (slot) snprintf(msg, sizeof msg, "state loaded: slot %d", slot);
+    else snprintf(msg, sizeof msg, "back where you left off");
+    notice(s, msg);
+}
+
+/* a save asked for: whole (its size has stopped changing) or not coming (out of play) */
+static void check_pending(sdl *s)
+{
+    if (s->pending < 0) return;
+    char made[1100], path[1100], msg[64];
+    slot_path(s, made, sizeof made, s->pending, ".state.new");
+    slot_path(s, path, sizeof path, s->pending, ".state");
+    long n = file_size(made);
+    if (n > 0 && n == s->pending_size) {                  /* (whole: the same size twice) */
+        remove(path);                                     /* (Windows renames over nothing) */
+        if (rename(made, path) == 0 && s->pending) {
+            slot_path(s, path, sizeof path, s->pending, ".png");
+            size_t len = s->pending_pic && s->pending_w ? mdrt_png_encode(s->pending_pic, s->pending_w, s->pending_h, 320, NULL, 0) : 0;
+            uint8_t *png = len ? malloc(len) : NULL;
+            FILE *f = png ? fopen(path, "wb") : NULL;
+            if (f) { mdrt_png_encode(s->pending_pic, s->pending_w, s->pending_h, 320, png, len); fwrite(png, 1, len, f); fclose(f); }
+            free(png);
+            snprintf(msg, sizeof msg, "state saved: slot %d", s->pending);
+            notice(s, msg);
+        }
+        s->pending = -1;
+    } else if (SDL_GetTicks() > s->pending_until) {       /* not in play: nothing changed */
+        remove(made);
+        if (s->pending) notice(s, "states are saved during play");
+        else remove(path);                                /* (quick resume: no old moment to come back to) */
+        s->pending = -1;
+    } else s->pending_size = n;
+}
+
+/* the window closing: with quick resume, the game's state first (in play), then quit */
+static void request_quit(sdl *s)
+{
+    if (!s->resume || !s->thread || s->quitting) { quit(s); return; }
+    s->quitting = 1;
+    if (s->menu_open) close_menu(s);
+    SDL_AtomicSet(&s->paused, 0);
+    s->auto_paused = 0;
+    if (s->pending >= 0) s->pending = -1;                 /* (a slot's save gives way) */
+    ask_save(s, 0);
+}
 
 /* the game again from the start (the ROM page's choice first, when there is one) */
 static void restart(sdl *s, const char *rom_path)
@@ -984,8 +1163,12 @@ static void act(sdl *s, int id)
         build_page(s, PAGE_ROM, I_ENTRY);
         return;
     case I_RESET: if (confirmed(s, id, "start the game again")) restart(s, NULL); return;
-    case I_SAVE: SDL_AtomicAdd(&s->saves, 1); close_menu(s); return;
-    case I_LOAD: SDL_AtomicAdd(&s->loads, 1); close_menu(s); return;
+    case I_SAVE: build_page(s, PAGE_SAVE, I_SLOT + s->slot); return;
+    case I_LOAD: build_page(s, PAGE_LOAD, I_SLOT + s->slot); return;
+    case I_RESUME_OPT:
+        s->resume = it->value;
+        mdrt_settings_set_int(s->set, "general.resume", s->resume);
+        return;
     case I_VIDEO: build_page(s, PAGE_VIDEO, I_UPSCALE); return;
     case I_SOUND: build_page(s, PAGE_SOUND, I_VOLUME); return;
     case I_OPTIONS: build_page(s, PAGE_OPTIONS, I_FOCUS); return;
@@ -1006,11 +1189,11 @@ static void act(sdl *s, int id)
         s->dead_zone = it->value;
         mdrt_settings_set_int(s->set, "controller.dead_zone", s->dead_zone);
         return;
-    case I_QUIT: if (!running || confirmed(s, id, "quit")) quit(s); return;
+    case I_QUIT: if (!running || confirmed(s, id, "quit")) request_quit(s); return;
     case I_BACK:
         if (s->page == PAGE_CBUTTONS) { build_page(s, PAGE_PLAYERS, I_CBUTTONS); return; }
         build_page(s, PAGE_MAIN, s->page == PAGE_VIDEO ? I_VIDEO : s->page == PAGE_SOUND ? I_SOUND : s->page == PAGE_OPTIONS ? I_OPTIONS
-                                 : s->page == PAGE_PLAYERS ? I_PLAYERS : I_KEYS);
+                                 : s->page == PAGE_PLAYERS ? I_PLAYERS : s->page == PAGE_SAVE ? I_SAVE : s->page == PAGE_LOAD ? I_LOAD : I_KEYS);
         return;
     case I_UPSCALE:                                       /* (the frame is upscaled again when the menu closes) */
         s->upscale = it->value;
@@ -1071,6 +1254,13 @@ static void act(sdl *s, int id)
         if (why) { snprintf(s->menu.message, sizeof s->menu.message, "%s", why); s->confirm = 0; return; }
         if (running && !confirmed(s, id, "start the game with it")) return;
         restart(s, path);
+    } else if (id > I_SLOT && id <= I_SLOT + SLOT_COUNT) {     /* a save slot: into it, or from it */
+        s->slot = id - I_SLOT;
+        mdrt_settings_set_int(s->set, "general.slot", s->slot);
+        int saving = s->page == PAGE_SAVE;
+        close_menu(s);
+        if (saving) ask_save(s, s->slot);
+        else ask_load(s, s->slot);
     } else if (id >= I_PLAYER && id < I_PLAYER + MDRT_PADS) {   /* a player's controller */
         char k[32];
         s->player_ctrl[id - I_PLAYER] = it->value;
@@ -1089,6 +1279,7 @@ static void menu_input(sdl *s, int in)
 {
     int id = mdrt_menu_input(&s->menu, in);
     if (s->confirm && id != s->confirm) { s->confirm = 0; s->menu.message[0] = 0; }   /* (not chosen again) */
+    if (s->page == PAGE_SAVE || s->page == PAGE_LOAD) slot_picture(s);
     if (id == MDRT_MENU_CLOSE) {
         if (s->page == PAGE_ROM) build_page(s, PAGE_MAIN, I_ROM);
         else if (s->page != PAGE_MAIN) act(s, I_BACK);   /* (the controller buttons' page: back to Players) */
@@ -1125,8 +1316,8 @@ static void key_pressed(sdl *s, SDL_Scancode k, SDL_Keymod mod, int repeat)
         title_now(s);
         break;
     case K_FULLSCREEN: set_fullscreen(s, !is_fullscreen(s)); break;
-    case K_SAVE: SDL_AtomicAdd(&s->saves, 1); break;
-    case K_LOAD: SDL_AtomicAdd(&s->loads, 1); break;
+    case K_SAVE: ask_save(s, s->slot); break;
+    case K_LOAD: ask_load(s, s->slot); break;
     case K_SLOW:
         SDL_AtomicSet(&s->slow, !SDL_AtomicGet(&s->slow));
         notice(s, SDL_AtomicGet(&s->slow) ? "slow motion" : "full speed");
@@ -1360,7 +1551,8 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
     cfg->audio_rate = s->rate;
     for (int i = 0; i < SDL_NumJoysticks(); i++) ctrl_added(s, i);
     s->lock = SDL_CreateMutex();
-    cfg->platform = (mdrt_platform){ .user = s, .present = present, .audio = audio, .wait = wait, .input = input, .requests = requests };
+    cfg->platform = (mdrt_platform){ .user = s, .present = present, .audio = audio, .wait = wait, .input = input, .requests = requests,
+                                     .request_path = request_path };
     mdrt_menu_init(&s->menu);
     char why[1200] = "";
     if (o->rom_check && !first_rom(s, why, sizeof why)) {   /* no ROM yet: the menu's ROM page */
@@ -1369,10 +1561,11 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
         SDL_AtomicSet(&s->in_menu, 1);
         put_text(s->menu.message, sizeof s->menu.message, why[0] ? why : o->rom_hint ? o->rom_hint : "", 0);
     } else if (!start_game(s)) { fprintf(stderr, "the game could not start (no FM core %s in this build?)\n", cfg->fm_core); SDL_Quit(); return 1; }
+    else if (s->resume) ask_load(s, 0);                   /* (quick resume: where the last run left off, if it was in play) */
     while (!SDL_AtomicGet(&s->quit)) {
         SDL_Event e;
         if (SDL_WaitEventTimeout(&e, 4)) do {
-            if (e.type == SDL_QUIT) quit(s);
+            if (e.type == SDL_QUIT) request_quit(s);
             else if (e.type == SDL_KEYDOWN || e.type == SDL_KEYUP) {
                 SDL_Scancode k = e.key.keysym.scancode;
                 if (k > SDL_SCANCODE_UNKNOWN && k < SDL_NUM_SCANCODES && !s->menu_open) s->down[k] = e.type == SDL_KEYDOWN;
@@ -1389,6 +1582,8 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
         if (s->thread && SDL_AtomicGet(&s->done) && !SDL_AtomicGet(&s->stop)) break;   /* the game ended by itself */
         read_buttons(s);
         draw(s);
+        check_pending(s);
+        if (s->quitting && s->pending < 0) quit(s);       /* (quick resume's state saved, or not to be) */
         if (s->notice_until) title_now(s);
         if (mdrt_settings_dirty(s->set) && SDL_GetTicks() - s->set_saved > 1000) settings_write(s);
     }
@@ -1405,7 +1600,7 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
     mdrt_settings_free(s->set);
     mdrt_menu_free(&s->menu);
     free_entries(s);
-    free(s->frame); free(s->big); free(s->big_scratch);
+    free(s->frame); free(s->big); free(s->big_scratch); free(s->pending_pic);
     if (stopped) { mdrt_free(s->m); SDL_DestroyMutex(s->lock); free(s->loud); free(s->rom); free(s); }   /* (else the thread still has them) */
     SDL_Quit();
     return 0;

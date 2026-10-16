@@ -76,6 +76,13 @@ This README carries the status.
   speed; the stick's dead zone), keys for pads 3 and 4 and turbo keys. `make sdl-check` plugs in
   two virtual controllers and checks players 1 and 3 get them, a moved button, the d-pad, the
   dead zone, turbo, a controller pulled out, and a button set from the menu.
+- 2026-10-16, save slots and quick resume in the SDL2 platform: requests can name a file
+  (`mdrt_platform.request_path`, `mdrt_request_path`); eight slots in `states/` with a picture each
+  (`mdrt_png_decode` reads it back; the menu shows it beside the list at half size); a save goes to
+  `slotN.state.new` and becomes the slot only when the client writes it; F9 / F10 use the slot
+  chosen last; quick resume saves at quitting and loads at the next start, or forgets when no state
+  could be taken. `make sdl-check`: F9, the Save and Load pages, F10, a save the game refuses, a
+  state at quitting and the next start back at it, and quitting out of play leaving none.
 - 2026-10-16, the review's small findings: PAL's master clock (`MDRT_MASTER_CLOCK_PAL`,
   `mdrt_master_clock`) in the mixer and the platform; the default HV counter through the VDP's
   counter mapping; `mdrt_vdp_reg` and a rule for what in the structs is API; the mixer's gains in

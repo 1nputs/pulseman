@@ -9,7 +9,9 @@
  * changed, a reset, another ROM while playing, a key changed by pressing it, and the ROM chosen
  * last found again on the next start; and four players: EA's 4 Way Play in the ports, two virtual
  * controllers given to players 1 and 3, a button moved, a turbo button, the stick's dead zone, a
- * controller pulled out, the Players page and a controller button changed by pressing it. */
+ * controller pulled out, the Players page and a controller button changed by pressing it; and the
+ * save slots (F9, F10, the Save and Load pages, a save out of play that changes nothing) and quick
+ * resume (the state at quitting, back at the next start; none when quitting out of play). */
 #include <SDL2/SDL.h>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -17,9 +19,11 @@
 #include <direct.h>
 #define chdir _chdir
 #define make_dir(d) _mkdir(d)
+#define remove_dir(d) _rmdir(d)
 #else
 #include <unistd.h>
 #define make_dir(d) mkdir(d, 0777)
+#define remove_dir(d) rmdir(d)
 #endif
 #include <stdlib.h>
 #include <string.h>
@@ -30,7 +34,7 @@
 #define BACKDROP 0x0E42                                   /* the picture: the backdrop's colour */
 
 static const char *const shots = "shots", *const sound = "sound.raw", *const settings_path = "settings.ini";
-static SDL_atomic_t frame, held, starts, fm_second, pads4[MDRT_PADS], adaptor;
+static SDL_atomic_t frame, held, starts, fm_second, pads4[MDRT_PADS], adaptor, game_frame, refuse_saves;
 static int run;
 static char rom_seen[16];                                 /* the start of the ROM the client was given */
 
@@ -286,6 +290,64 @@ static int players(void *user)
     return 0;
 }
 
+/* runs 6 and 7: the save slots and quick resume */
+static int state_in(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    int n = -1;
+    if (f && fscanf(f, "STATE %d", &n) != 1) n = -1;
+    if (f) fclose(f);
+    return n;
+}
+
+static int exists(const char *path) { FILE *f = fopen(path, "rb"); if (f) fclose(f); return f != NULL; }
+
+static int slots(void *user)
+{
+    (void)user;
+    until_frame(20);
+    if (run == 7) {                                       /* started again: back where run 6 quit */
+        int was = state_in("states/resume.state.seen");
+        printf("  quick resume: the game at %d, run 6 quit at %d\n", SDL_AtomicGet(&game_frame), was);
+        CHECK(was > 0 && SDL_AtomicGet(&game_frame) >= was && SDL_AtomicGet(&game_frame) < was + 60);
+        SDL_AtomicSet(&refuse_saves, 1);                  /* quitting out of play: no state to come back to */
+        quit_event();
+        return 0;
+    }
+    press(SDL_SCANCODE_F9);                               /* slot 1 */
+    SDL_Delay(500);
+    int s1 = state_in("states/slot1.state");
+    CHECK(s1 > 0 && exists("states/slot1.png") && !exists("states/slot1.state.new"));
+    /* the menu: [Resume, Reset, Save a state, Load the state, Video ...]; Save: [slot 1-8, Back] */
+    keys(SDL_SCANCODE_ESCAPE, 1);
+    keys(SDL_SCANCODE_DOWN, 2);
+    keys(SDL_SCANCODE_RETURN, 1);
+    keys(SDL_SCANCODE_DOWN, 1);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* slot 2 */
+    SDL_Delay(500);
+    int s2 = state_in("states/slot2.state");
+    CHECK(s2 > s1 && exists("states/slot2.png"));
+    SDL_Delay(300);
+    press(SDL_SCANCODE_F10);                              /* slot 2 again: the one chosen last */
+    SDL_Delay(200);
+    CHECK(SDL_AtomicGet(&game_frame) >= s2 && SDL_AtomicGet(&game_frame) < s2 + 20);
+    keys(SDL_SCANCODE_ESCAPE, 1);
+    keys(SDL_SCANCODE_DOWN, 3);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* Load: slot 2 selected */
+    keys(SDL_SCANCODE_UP, 1);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* slot 1 */
+    SDL_Delay(200);
+    CHECK(SDL_AtomicGet(&game_frame) >= s1 && SDL_AtomicGet(&game_frame) < s1 + 20);
+    SDL_AtomicSet(&refuse_saves, 1);                      /* out of play: slot 1 as it was */
+    press(SDL_SCANCODE_F9);
+    SDL_Delay(1800);
+    CHECK_EQ(state_in("states/slot1.state"), s1);
+    CHECK(!exists("states/slot1.state.new"));
+    SDL_AtomicSet(&refuse_saves, 0);
+    quit_event();                                         /* quick resume: the state at quitting */
+    return 0;
+}
+
 static const char *rom_check(const uint8_t *rom, size_t size, void *user)
 {
     (void)user;
@@ -310,10 +372,24 @@ static void game(mdrt *m, void *user)
     mdrt_psg_port(m, 0, 0x80 | (254 & 15));               /* a 440 Hz square, loud */
     mdrt_psg_port(m, 100, 254 >> 4);
     mdrt_psg_port(m, 200, 0x90);
-    SDL_Thread *t = run <= 2 ? SDL_CreateThread(player, "player", NULL) : run == 5 ? SDL_CreateThread(players, "players", NULL) : NULL;
+    SDL_Thread *t = run <= 2 ? SDL_CreateThread(player, "player", NULL) : run == 5 ? SDL_CreateThread(players, "players", NULL)
+                  : run >= 6 ? SDL_CreateThread(slots, "slots", NULL) : NULL;
     for (;;) {
         mdrt_vblank_end(m);
         if (mdrt_wait_vblank(m)) break;
+        SDL_AtomicAdd(&game_frame, 1);                    /* the game's own count: what a state holds */
+        unsigned req = mdrt_requests(m);
+        const char *path = mdrt_request_path(m);
+        if ((req & MDRT_REQUEST_SAVE) && path && !SDL_AtomicGet(&refuse_saves)) {
+            FILE *f = fopen(path, "wb");
+            if (f) { fprintf(f, "STATE %d\n", SDL_AtomicGet(&game_frame)); fclose(f); }
+        }
+        if ((req & MDRT_REQUEST_LOAD) && path) {
+            FILE *f = fopen(path, "rb");
+            int n;
+            if (f && fscanf(f, "STATE %d", &n) == 1) SDL_AtomicSet(&game_frame, n);
+            if (f) fclose(f);
+        }
         SDL_AtomicSet(&held, mdrt_get_pads(m)->buttons[0]);
         for (int p = 0; p < MDRT_PADS; p++) SDL_AtomicSet(&pads4[p], mdrt_get_pads(m)->buttons[p]);
         SDL_AtomicSet(&adaptor, mdrt_get_pads(m)->adaptor);
@@ -435,13 +511,22 @@ int main(int argc, char **argv)
     SDL_setenv("SDL_AUDIODRIVER", "disk", 1);
     SDL_setenv("SDL_DISKAUDIOFILE", sound, 1);
     remove(sound);
+    for (int i = 0; i <= 8; i++)                          /* (last time's save slots: the ROM page lists folders) */
+        for (int k = 0; k < 4; k++) {
+            static const char *const ext[4] = { ".state", ".png", ".state.new", ".state.seen" };
+            char p[64];
+            if (i) snprintf(p, sizeof p, "states/slot%d%s", i, ext[k]);
+            else snprintf(p, sizeof p, "states/resume%s", ext[k]);
+            remove(p);
+        }
+    remove_dir("states");
     DIR *d = opendir(shots);                              /* (last time's screenshots) */
     struct dirent *e;
     char path[1024];
     while (d && (e = readdir(d))) if (strstr(e->d_name, ".png")) { snprintf(path, sizeof path, "%s/%s", shots, e->d_name); remove(path); }
     if (d) closedir(d);
     char text[1024];
-    snprintf(text, sizeof text, "# the test's own comment\nmystery.key = kept\ngeneral.screenshots = %s\nvideo.scale = integer\n", shots);
+    snprintf(text, sizeof text, "# the test's own comment\nmystery.key = kept\ngeneral.screenshots = %s\nvideo.scale = integer\ngeneral.resume = 0\n", shots);
     spit(settings_path, text);
     run = 1;
     CHECK_EQ(play(), 0);
@@ -499,5 +584,30 @@ int main(int argc, char **argv)
     t = slurp(settings_path, &len);
     CHECK(t && strstr(t, "\nplayer1.controller = 3\n") && strstr(t, "\ncontroller.a = leftstick\n"));
     free(t);
+    /* save slots and quick resume */
+    for (int i = 0; i <= 2; i++) {                        /* (last time's) */
+        char p[64];
+        snprintf(p, sizeof p, i ? "states/slot%d.state" : "states/resume.state", i);
+        remove(p);
+    }
+    t = slurp(settings_path, &len);                       /* quick resume on, from here */
+    if (t) {
+        char *at = strstr(t, "general.resume = 0\n");
+        if (at) at[17] = '1';
+        spit(settings_path, t);
+        free(t);
+    }
+    SDL_AtomicSet(&game_frame, 0);
+    run = 6;
+    CHECK_EQ(play(), 0);
+    int quit_at = state_in("states/resume.state");
+    CHECK(quit_at > 0);
+    t = slurp("states/resume.state", &len);
+    if (t) { spit("states/resume.state.seen", t); free(t); }
+    SDL_AtomicSet(&game_frame, 0);
+    SDL_AtomicSet(&refuse_saves, 0);
+    run = 7;
+    CHECK_EQ(play(), 0);
+    CHECK(!exists("states/resume.state"));                /* (quit out of play: none to come back to) */
     return check_done("platform_test");
 }

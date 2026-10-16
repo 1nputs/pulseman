@@ -135,6 +135,7 @@ void mdrt_menu_free(mdrt_menu *m)
 void mdrt_menu_page(mdrt_menu *m, const char *title)
 {
     m->count = m->sel = m->top = 0;
+    m->image = NULL;
     COPY(m->title, title);
     m->subtitle[0] = m->message[0] = 0;
 }
@@ -339,6 +340,14 @@ void mdrt_menu_draw(mdrt_menu *m, uint32_t *px, int w, int h, int pitch)
         }
     }
     if (m->top + list < m->count) row_text(px, w, h, pitch, x0, y0, cols - 2, 3 + list, "\x81", GREY);
+    if (m->image && m->image_w > 1 && m->image_h > 1) {   /* the picture, half size, at the list's right with a frame */
+        int iw = m->image_w / 2, ih = m->image_h / 2, ix = x0 + (cols - 1) * CW - iw, iy = y0 + 3 * CH;
+        for (int y = -1; y <= ih; y++)
+            for (int x = -1; x <= iw; x++) {
+                uint32_t c = x < 0 || y < 0 || x == iw || y == ih ? GREY : m->image[(2 * y) * m->image_pitch + 2 * x] & 0xFFFFFF;
+                put(px, w, h, pitch, ix + x, iy + y, c);
+            }
+    }
     fit(buf, sizeof buf, m->message, cols - 2, 0);
     row_text(px, w, h, pitch, x0, y0, 1, rows - 2, buf, WARN);
     const mdrt_menu_item *it = m->count && selectable(m, m->sel) ? &m->items[m->sel] : NULL;

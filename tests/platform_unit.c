@@ -134,6 +134,14 @@ static void png(void)
     }
     printf("  png: %zu bytes, %d of %d pixels decoded back\n", n, same, W * H);
     CHECK_EQ(same, W * H);
+    static uint32_t back[320 * 240];                                  /* mdrt_png_decode: the same pixels */
+    int bw = 0, bh = 0, again = 0;
+    CHECK_EQ(mdrt_png_decode(b, n, back, 320, 240, &bw, &bh), 0);
+    CHECK(bw == W && bh == H);
+    for (int y = 0; y < H; y++) for (int x = 0; x < W; x++) again += back[y * 320 + x] == (0xFF000000u | px[y * PITCH + x]);
+    CHECK_EQ(again, W * H);
+    CHECK_EQ(mdrt_png_decode(b, n, back, 200, 240, &bw, &bh), -1);   /* too wide for the room */
+    CHECK_EQ(mdrt_png_decode(b, n - 30, back, 320, 240, &bw, &bh), -1);
     free(raw); free(b);
 }
 
@@ -195,6 +203,14 @@ static void menu(void)
         if (f) { fwrite(b, 1, n, f); fclose(f); }
         free(b);
     }
+    static uint32_t pic[40 * 30];                                     /* a page's picture: at half size, right of the list */
+    for (int i = 0; i < 40 * 30; i++) pic[i] = 0xFF00C000;
+    m.image = pic; m.image_w = 40; m.image_h = 30; m.image_pitch = 40;
+    mdrt_menu_draw(&m, px, 320, 224, 320);
+    int right = 1 + 52 * 6 - 20;                                      /* x0 (1) + (cols - 1) * 6 - 20: its left edge */
+    CHECK_EQ(px[(2 + 3 * 10 + 5) * 320 + right + 5], 0x00C000);
+    CHECK_EQ(px[(2 + 3 * 10 + 5) * 320 + right - 1], 0x98A0B4);       /* its frame */
+    m.image = NULL;
     for (int i = 0; i < 320 * 8; i++) px[i] = 0;
     CHECK_EQ(mdrt_menu_text(px, 320, 224, 320, 0, 0, "A", 0xFFFFFF), 6);
     CHECK(px[0] == 0 && px[1] == 0xFFFFFF && px[3] == 0xFFFFFF && px[4] == 0 && px[320] == 0xFFFFFF && px[320 + 4] == 0xFFFFFF);

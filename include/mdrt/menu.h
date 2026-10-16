@@ -6,7 +6,8 @@
  * A page: a title, a line under it (a directory, a hint), the items, a message line (what went
  * wrong) and the keys' hint at the bottom. Items: actions (chosen with OK; a detail at the right,
  * such as a file's name or a key), choices (one of some names, changed with LEFT / RIGHT or OK),
- * numbers (min to max by a step) and text (not selectable). A list longer than the screen scrolls. */
+ * numbers (min to max by a step) and text (not selectable). A list longer than the screen scrolls.
+ * A page can show a picture at the right of its list, at half size (a save slot's). */
 #ifndef MDRT_MENU_H
 #define MDRT_MENU_H
 #include <stdint.h>
@@ -34,6 +35,8 @@ typedef struct mdrt_menu {
     mdrt_menu_item *items;
     int count, cap, sel, top;
     int rows;                   /* the items the last drawing had room for (a page, for LEFT / RIGHT) */
+    const uint32_t *image;      /* a picture beside the list, at half its size (a save slot's); NULL: none */
+    int image_w, image_h, image_pitch;
 } mdrt_menu;
 
 void mdrt_menu_init(mdrt_menu *m);

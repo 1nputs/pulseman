@@ -50,6 +50,7 @@ struct mdrt {
     mdrt_hint_fn hint;
     void *hint_user;
     unsigned requests;          /* the player's, from the last handshake */
+    const char *request_path;   /* the file they name (the platform's) */
     part parts[MAX_PARTS];      /* the client's parts of a state */
     int nparts;
     bus_map maps[MAX_MAPS];     /* the client's regions of the 68k's bus */
@@ -415,6 +416,7 @@ int mdrt_wait_vblank(mdrt *m)
     mdrt_pads_frame(&m->pads);
     rec_buttons(m);
     m->requests = p->requests ? p->requests(p->user) : 0;
+    m->request_path = m->requests && p->request_path ? p->request_path(p->user) : NULL;
     m->frames++;
     m->nudge = 0;
     m->now = 0;
@@ -429,6 +431,7 @@ int mdrt_wait_vblank(mdrt *m)
 
 void mdrt_vblank_end(mdrt *m) { mdrt_vdp_set_vblank(&m->vdp, 0); }
 unsigned mdrt_requests(const mdrt *m) { return m->requests; }
+const char *mdrt_request_path(const mdrt *m) { return m->request_path; }
 
 /* ---- states -------------------------------------------------------------------------------
  * "MDRS", version u32 = 2, then sections: tag[4], size u32, bytes. In this order: CONS (PAL u8,
