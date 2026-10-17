@@ -7,11 +7,16 @@
  * (MDRT_UPSCALE_DUMP=DIR writes the inputs for that code), Scale3x against a second formulation;
  * and the looks: the console's colour levels, dithering blended where it is and nowhere else, the
  * soft blend, the scanlines' rows at whole and uneven sizes, the masks' stripes, slots and dots, and
- * the light they take made up on average by the lift. */
+ * the light they take made up on average by the lift; and captures: GIF's palettes and code sizes,
+ * its LZW back and forth (noise at every code size, through the dictionary's fresh starts; long
+ * runs; one pixel; none), the last frames kept and taken in order, a recording's file read back, a
+ * clip as RGB stretched, as a GIF (its frames and their times) and its sound as WAV, kept in time. */
 #include <stdlib.h>
 #include <string.h>
 #include "check.h"
 #include <stdio.h>
+#include "mdrt/capture.h"
+#include "mdrt/gif.h"
 #include "mdrt/look.h"
 #include "mdrt/menu.h"
 #include "mdrt/png.h"
@@ -458,6 +463,116 @@ static void looks(void)
     }
 }
 
+/* ---- captures ----------------------------------------------------------------------------------- */
+
+static void put_mem(void *user, const void *b, size_t n)
+{
+    struct mem { uint8_t *p; size_t n, cap; } *m = user;
+    if (m->n + n > m->cap) { m->cap = (m->n + n) * 2; m->p = realloc(m->p, m->cap); }
+    memcpy(m->p + m->n, b, n);
+    m->n += n;
+}
+
+static void captures(void)
+{
+    CHECK_EQ(mdrt_gif_bits(1), 2);
+    CHECK_EQ(mdrt_gif_bits(4), 2);
+    CHECK_EQ(mdrt_gif_bits(5), 3);
+    CHECK_EQ(mdrt_gif_bits(64), 6);
+    CHECK_EQ(mdrt_gif_bits(256), 8);
+    /* the palette: colours in the order first seen, the low bits of each ignored */
+    static const uint16_t px[6] = { 0x0E00, 0x000E, 0x0E01, 0x00E0, 0x000E, 0x0E00 };
+    uint8_t idx[6];
+    uint16_t pal[256];
+    CHECK_EQ(mdrt_gif_palette(px, 3, 2, 3, idx, pal), 3);
+    CHECK(idx[0] == 0 && idx[1] == 1 && idx[2] == 0 && idx[3] == 2 && idx[4] == 1 && idx[5] == 0 && pal[2] == 0x00E0);
+
+    /* LZW there and back */
+    enum { N = 320 * 240 };
+    static uint8_t in[N], back[N], code[N * 2];
+    unsigned seed = 7;
+    int all = 1;
+    for (int bits = 2; bits <= 8; bits++)
+        for (int kind = 0; kind < 4; kind++) {
+            size_t n = kind == 2 ? 1 : kind == 3 ? 0 : N;
+            for (size_t i = 0; i < n; i++) {
+                seed = seed * 1103515245u + 12345u;
+                in[i] = (uint8_t)(kind == 1 ? 3 & ((1 << bits) - 1) : (seed >> 16) & ((1u << bits) - 1));
+            }
+            size_t len = mdrt_gif_lzw(in, n, bits, code, sizeof code);
+            int ok = len > 0 && len <= mdrt_gif_lzw_bound(n) && mdrt_gif_unlzw(code, len, bits, back, n) && !memcmp(in, back, n);
+            if (!ok) printf("  lzw: %d bits, case %d: not the same back\n", bits, kind);
+            all &= ok;
+            if (kind == 1 && bits == 8) CHECK(len < n / 50);   /* (a run: a few hundred codes) */
+        }
+    CHECK(all);
+    CHECK_EQ(mdrt_gif_lzw(in, N, 8, code, 100), 0);            /* (no room) */
+    CHECK(!mdrt_gif_unlzw(code, 3, 8, back, N));               /* (cut short) */
+
+    /* a capture keeping 5 frames, of 8: frame k all red k % 7 + 1 at 4 x 2, its sound k pairs of k */
+    mdrt_capture *c = mdrt_capture_new(5);
+    FILE *rec = tmpfile();
+    CHECK(c && rec);
+    if (!c || !rec) return;
+    mdrt_capture_record(c, rec);
+    for (int k = 0; k < 8; k++) {
+        uint16_t f[8];
+        int16_t snd[16];
+        for (int i = 0; i < 8; i++) f[i] = (uint16_t)((k % 7 + 1) << 1);
+        for (int i = 0; i < 16; i++) snd[i] = (int16_t)k;
+        mdrt_capture_picture(c, f, 4, 2, 4);
+        mdrt_capture_sound(c, snd, k);
+    }
+    CHECK_EQ(mdrt_capture_kept(c), 5);
+    CHECK_EQ(mdrt_capture_recorded(c), 8);
+    mdrt_capture_record(c, NULL);
+    mdrt_capture_keep(c, 7);                                    /* (more room: the frames stay) */
+    CHECK_EQ(mdrt_capture_kept(c), 5);
+    mdrt_capture_keep(c, 4);                                    /* (less: the oldest go) */
+    CHECK_EQ(mdrt_capture_kept(c), 4);
+    mdrt_clip *clip = mdrt_capture_take(c);
+    CHECK(clip && !mdrt_capture_kept(c) && !mdrt_capture_take(c));
+    int w = 0, h = 0, order = 1;
+    CHECK_EQ(mdrt_clip_frames(clip, &w, &h), 4);
+    CHECK(w == 4 && h == 2);
+    mdrt_capture_frame f;
+    for (int k = 4; mdrt_clip_next(clip, &f); k++)             /* frames 4-7, the oldest first */
+        order &= f.colours == 1 && f.palette[0] == (uint16_t)((k % 7 + 1) << 1) && f.sound_frames == k && f.sound[0] == k;
+    CHECK(order);
+    mdrt_clip_rewind(clip);
+    uint8_t rgb[8 * 4 * 3];
+    CHECK(mdrt_clip_next(clip, &f) && mdrt_clip_rgb(&f, MDRT_RGB_LINEAR, 8, 4, rgb));   /* (stretched twice) */
+    CHECK(rgb[0] == 182 && rgb[1] == 0 && rgb[2] == 0 && rgb[31 * 3] == 182);          /* (red 5 of 7) */
+    /* as a GIF at 60 frames a second: frames 0 and 2 kept, 3 and 4 hundredths each; twice the size */
+    struct mem { uint8_t *p; size_t n, cap; } gif = { NULL, 0, 0 };
+    CHECK(mdrt_clip_gif(clip, MDRT_RGB_LINEAR, 2, 60, put_mem, &gif, NULL));
+    int frames = 0, delays[4] = { 0 };
+    for (size_t i = 13; gif.p && i + 8 < gif.n; i++)
+        if (gif.p[i] == 0x21 && gif.p[i + 1] == 0xF9 && frames < 4) delays[frames++] = gif.p[i + 4] | gif.p[i + 5] << 8;
+    CHECK(gif.p && gif.n > 40 && !memcmp(gif.p, "GIF89a", 6) && gif.p[6] == 8 && gif.p[8] == 4 && gif.p[gif.n - 1] == 0x3B);
+    CHECK(frames == 2 && delays[0] == 3 && delays[1] == 4);
+    free(gif.p);
+    /* its sound: 4 frames of 800 at 48000 (each frame's own pairs, then silence) */
+    struct mem wav = { NULL, 0, 0 };
+    mdrt_clip_wav(clip, 48000, 60, put_mem, &wav);
+    CHECK(wav.p && wav.n == 44 + 3200 * 4 && !memcmp(wav.p, "RIFF", 4) && !memcmp(wav.p + 36, "data", 4));
+    if (wav.p && wav.n == 44 + 3200 * 4) {
+        const uint8_t *d = wav.p + 44;
+        CHECK(d[0] == 4 && d[4 * 3] == 4 && d[4 * 4] == 0 && d[4 * 800] == 5 && d[4 * 805] == 0);
+    }
+    free(wav.p);
+    mdrt_clip_free(clip);
+    /* the recording's file: all 8 frames, read back the same */
+    mdrt_clip *file = mdrt_clip_file(rec);
+    order = 1;
+    CHECK_EQ(mdrt_clip_frames(file, &w, &h), 8);
+    for (int k = 0; mdrt_clip_next(file, &f); k++) order &= f.palette[0] == (uint16_t)((k % 7 + 1) << 1) && f.sound_frames == k;
+    CHECK(order);
+    mdrt_clip_free(file);
+    fclose(rec);
+    mdrt_capture_free(c);
+}
+
 int main(void)
 {
     settings();
@@ -466,5 +581,6 @@ int main(void)
     menu();
     upscalers();
     looks();
+    captures();
     return check_done("platform_unit");
 }

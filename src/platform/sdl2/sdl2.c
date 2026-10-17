@@ -14,12 +14,16 @@
 #define make_dir(d) _mkdir(d)
 #define get_cwd _getcwd
 #define SEP '\\'
+#define popen _popen
+#define pclose _pclose
 #else
+#include <signal.h>
 #include <unistd.h>
 #define make_dir(d) mkdir(d, 0777)
 #define get_cwd getcwd
 #define SEP '/'
 #endif
+#include "mdrt/capture.h"
 #include "mdrt/look.h"
 #include "mdrt/menu.h"
 #include "mdrt/platform_sdl2.h"
@@ -31,15 +35,17 @@
 /* ---- the keys: what each does, its setting and its default ------------------------------------ */
 
 /* the controls on the function keys, in the keyboard's groups of four: the sound and rewind;
- * time (pause, fast-forward, slow motion, a frame); states, the window and screenshots */
+ * time (pause, fast-forward, slow motion, a frame); states, the window and screenshots, with
+ * Shift the replay and with Ctrl a recording (a control's key may have Shift, Ctrl or Alt) */
 enum { K_MUTE, K_VOL_DOWN, K_VOL_UP, K_REWIND, K_PAUSE, K_FAST, K_SLOW, K_STEP, K_SAVE, K_LOAD,
-       K_FULLSCREEN, K_SHOT, K_MENU, K_COUNT };
+       K_FULLSCREEN, K_SHOT, K_REPLAY, K_RECORD, K_MENU, K_COUNT };
 static const char *const key_setting[K_COUNT][3] = {
     { "key.mute", "F1", "Mute" }, { "key.volume_down", "F2", "Volume down" }, { "key.volume_up", "F3", "Volume up" },
     { "key.rewind", "F4", "Rewind (held)" }, { "key.pause", "F5", "Pause" },
     { "key.fast_forward", "F6", "Fast-forward (held)" }, { "key.slow_motion", "F7", "Slow motion" },
     { "key.frame_step", "F8", "A frame, while paused" }, { "key.save_state", "F9", "Save a state" },
     { "key.load_state", "F10", "Load the state" }, { "key.fullscreen", "F11", "Full screen" }, { "key.screenshot", "F12", "Screenshot" },
+    { "key.save_replay", "Shift+F12", "Save the replay" }, { "key.record", "Ctrl+F12", "Record (again: stop)" },
     { "key.menu", "Escape", "Menu" },
 };
 enum { BUTTONS = 12 };
@@ -84,6 +90,13 @@ static const char *const scanlines_name[MDRT_SCANLINES_COUNT] = { "off", "light"
 static const char *const mask_name[MDRT_MASK_COUNT] = { "off", "aperture", "slot", "dot" };
 static const char *const mask_label[MDRT_MASK_COUNT] = { "off", "aperture grille", "slot mask", "shadow mask" };
 static const char *const chip_name[2] = { "YM2612", "YM3438" };
+static const struct { const char *name; Uint16 mod; } key_mods[3] = { { "Shift+", KMOD_SHIFT }, { "Ctrl+", KMOD_CTRL }, { "Alt+", KMOD_ALT } };
+/* captures: the replay's seconds, the format, a GIF's size */
+static const int replay_secs[5] = { 0, 10, 20, 30, 60 };
+static const char *const replay_label[5] = { "off", "10 seconds", "20 seconds", "30 seconds", "60 seconds" };
+static const char *const format_name[2] = { "gif", "mp4" };
+static const char *const format_label[2] = { "GIF", "MP4 (with ffmpeg)" };
+static const char *const gif_scale_label[3] = { "1x", "2x", "3x" };
 static const int fast_speeds[6] = { 2, 3, 4, 6, 8, 0 };
 static const char *const fast_label[6] = { "2x", "3x", "4x", "6x", "8x", "as fast as it goes" };
 
@@ -91,11 +104,12 @@ static const char *const fast_label[6] = { "2x", "3x", "4x", "6x", "8x", "as fas
 #define ROM_MAX (16u << 20)                               /* (no cartridge is larger) */
 
 /* the menu's pages and items */
-enum { PAGE_MAIN, PAGE_VIDEO, PAGE_SOUND, PAGE_OPTIONS, PAGE_KEYS, PAGE_ROM, PAGE_PLAYERS, PAGE_CBUTTONS, PAGE_SAVE, PAGE_LOAD };
+enum { PAGE_MAIN, PAGE_VIDEO, PAGE_SOUND, PAGE_OPTIONS, PAGE_KEYS, PAGE_ROM, PAGE_PLAYERS, PAGE_CBUTTONS, PAGE_SAVE, PAGE_LOAD, PAGE_CAPTURE };
 enum { SLOT_COUNT = 8 };                                  /* save slots; 0 is quick resume's */
 enum { I_RESUME = 1, I_ROM, I_RESET, I_SAVE, I_LOAD, I_VIDEO, I_SOUND, I_OPTIONS, I_KEYS, I_QUIT, I_BACK,
        I_UPSCALE, I_SCALE, I_ASPECT, I_FULL, I_COLOURS, I_BLEND, I_SCANLINES, I_MASK, I_VOLUME, I_MUTE, I_FM_CORE, I_FM_CHIP, I_FOCUS, I_FAST, I_UP,
        I_PLAYERS, I_ADAPTOR, I_TURBO, I_DEADZONE, I_CBUTTONS, I_RESUME_OPT,
+       I_CAPTURE, I_CAP_REPLAY, I_CAP_RECORD, I_CAP_SECONDS, I_CAP_FORMAT, I_CAP_GIFSCALE,
        I_SLOT = 800,             /* + slot (1-8) */
        I_PLAYER = 900,           /* + player (0-3) */
        I_PAD = 1000,             /* + pad * BUTTONS + button */
@@ -138,6 +152,7 @@ typedef struct sdl {
     const char *set_path;
     uint32_t set_saved;         /* SDL_GetTicks of the last write */
     SDL_Scancode key[K_COUNT], button_key[MDRT_PADS][BUTTONS], turbo_key[MDRT_PADS][TURBOS];
+    Uint16 key_mod[K_COUNT];    /* a control's Shift, Ctrl or Alt (0: none) */
     uint8_t down[SDL_NUM_SCANCODES];
     uint16_t pad_ignore[MDRT_PADS];   /* controller buttons held when the menu closed, until let go */
     int adaptor;                /* MDRT_ADAPTOR_* in the ports (the game looks at power on) */
@@ -164,6 +179,17 @@ typedef struct sdl {
     SDL_Texture *big_tex;       /* the upscaled frame, big_f times the picture's texture */
     int big_f;
     const char *upscale_label[MDRT_UPSCALE_COUNT];
+    /* captures (mdrt/capture.h): the replay kept and a recording, the game thread's frames into
+     * them under cap_lock; clips saved on threads of their own, one at a time */
+    SDL_mutex *cap_lock, *save_lock;
+    mdrt_capture *cap;
+    SDL_atomic_t capturing;     /* the replay on, or a recording */
+    int replay, format, gif_scale; /* replay_secs' index; format_name's; a GIF's size - 1 */
+    FILE *rec;                  /* the recording's file, */
+    char rec_path[1100];
+    uint32_t rec_since, status_at;
+    struct clip_save *clips[4]; /* clips being saved */
+    int ffmpeg_ok;              /* whether ffmpeg runs: 1, 0, -1 not asked yet */
     char title[200];
     uint32_t notice_until;
     uint8_t *rom;               /* the game's ROM (given to the client by rom_use) */
@@ -217,6 +243,11 @@ static void present(void *user, const uint16_t *px, int w, int h, int pitch)
     s->height = h;
     s->fresh = 1;
     SDL_UnlockMutex(s->lock);
+    if (SDL_AtomicGet(&s->capturing)) {                   /* (the frame for the replay and a recording) */
+        SDL_LockMutex(s->cap_lock);
+        mdrt_capture_picture(s->cap, px, w, h, pitch);
+        SDL_UnlockMutex(s->cap_lock);
+    }
 }
 
 static int held(sdl *s) { return SDL_AtomicGet(&s->paused) || SDL_AtomicGet(&s->in_menu); }
@@ -225,6 +256,11 @@ static int held(sdl *s) { return SDL_AtomicGet(&s->paused) || SDL_AtomicGet(&s->
 static void audio(void *user, const int16_t *samples, int frames)
 {
     sdl *s = user;
+    if (SDL_AtomicGet(&s->capturing)) {                   /* (the frame's sound, as the game made it) */
+        SDL_LockMutex(s->cap_lock);
+        mdrt_capture_sound(s->cap, samples, frames);
+        SDL_UnlockMutex(s->cap_lock);
+    }
     if (!s->dev || SDL_AtomicGet(&s->fast) || SDL_AtomicGet(&s->slow) || held(s)) return;
     int vol = SDL_AtomicGet(&s->mute) ? 0 : SDL_AtomicGet(&s->volume);
     if (vol < 100) {
@@ -432,6 +468,15 @@ static SDL_Scancode bound(const char *name)
     return k;
 }
 
+/* a control's key: a name, perhaps after Shift+, Ctrl+ or Alt+ */
+static SDL_Scancode bound_mod(const char *name, Uint16 *mod)
+{
+    *mod = 0;
+    for (int i = 0; name && i < 3; i++)
+        if (!strncmp(name, key_mods[i].name, strlen(key_mods[i].name))) { *mod = key_mods[i].mod; name += strlen(key_mods[i].name); break; }
+    return bound(name);
+}
+
 static int named(const char *v, const char *const *names, int n, int fallback)
 {
     for (int i = 0; v && i < n; i++) if (!strcmp(v, names[i])) return i;
@@ -477,7 +522,10 @@ static void settings_load(sdl *s)
             "# audio.volume: 0-100.\n"
             "# audio.device: empty for the default. audio.latency: frames of sound queued (1-10).\n"
             "# audio.fm_core: nuked or ymfm. audio.fm_chip: YM2612 or YM3438.\n"
-            "# general.fast_forward: times the speed while it is held (0: as fast as it goes).\n";
+            "# general.fast_forward: times the speed while it is held (0: as fast as it goes).\n"
+            "# capture.replay: the seconds kept for the replay (0: off). capture.format: gif or mp4 (made\n"
+            "# by ffmpeg, capture.ffmpeg, which must be installed). capture.gif_scale: 1-3. A control's key\n"
+            "# may have Shift+, Ctrl+ or Alt+ before it.\n";
         mdrt_settings_parse(s->set, head, sizeof head - 1);
     }
     const char *defaults[][2] = {
@@ -523,7 +571,7 @@ static void settings_load(sdl *s)
     s->turbo_rate = clamp(mdrt_settings_get_int(s->set, "general.turbo_rate", 10), 1, 30);
     for (int i = 0; i < K_COUNT; i++) {
         mdrt_settings_default(s->set, key_setting[i][0], key_setting[i][1]);
-        s->key[i] = bound(mdrt_settings_get(s->set, key_setting[i][0]));
+        s->key[i] = bound_mod(mdrt_settings_get(s->set, key_setting[i][0]), &s->key_mod[i]);
     }
     s->scale = named(mdrt_settings_get(s->set, "video.scale"), scale_name, 3, MDRT_SCALE_SHARP);
     const char *up = mdrt_settings_get(s->set, "video.upscaler");
@@ -548,21 +596,37 @@ static void settings_load(sdl *s)
     s->slot = clamp(mdrt_settings_get_int(s->set, "general.slot", 1), 1, SLOT_COUNT);
     s->resume = mdrt_settings_get_int(s->set, "general.resume", 1) != 0;
     s->pending = -1;
+    mdrt_settings_default(s->set, "capture.replay", "20");
+    mdrt_settings_default(s->set, "capture.format", "mp4");
+    mdrt_settings_default(s->set, "capture.gif_scale", "1");
+    mdrt_settings_default(s->set, "capture.video_scale", "4");
+    mdrt_settings_default(s->set, "capture.ffmpeg", "ffmpeg");
+    mdrt_settings_default(s->set, "general.videos", "videos");
+    int secs = mdrt_settings_get_int(s->set, "capture.replay", 20);
+    for (int i = 0; i < 5; i++) if (replay_secs[i] <= secs) s->replay = i;   /* (the nearest below) */
+    s->format = named(mdrt_settings_get(s->set, "capture.format"), format_name, 2, 1);
+    s->gif_scale = clamp(mdrt_settings_get_int(s->set, "capture.gif_scale", 1), 1, 3) - 1;
     settings_write(s);                                    /* (a new file, or new settings: written now) */
 }
 
 /* ---- the window's title, screenshots, full screen ------------------------------------------- */
 
+static int saving_percent(sdl *s);
+
+/* the title: the game's, paused, recording (for how long), saving a capture (how far) */
 static void title_now(sdl *s)
 {
     if (SDL_GetTicks() < s->notice_until) return;
     s->notice_until = 0;
-    const char *t = s->o->title ? s->o->title : "pulseman";
-    if (SDL_AtomicGet(&s->paused) && !s->menu_open) {
-        snprintf(s->title, sizeof s->title, "%s - paused", t);
-        t = s->title;
+    size_t n = (size_t)snprintf(s->title, sizeof s->title, "%s", s->o->title ? s->o->title : "pulseman");
+    if (SDL_AtomicGet(&s->paused) && !s->menu_open && n < sizeof s->title) n += (size_t)snprintf(s->title + n, sizeof s->title - n, " - paused");
+    if (s->rec && n < sizeof s->title) {
+        uint32_t t = (SDL_GetTicks() - s->rec_since) / 1000;
+        n += (size_t)snprintf(s->title + n, sizeof s->title - n, " - recording %u:%02u", t / 60, t % 60);
     }
-    SDL_SetWindowTitle(s->win, t);
+    int pc = saving_percent(s);
+    if (pc >= 0 && n < sizeof s->title) snprintf(s->title + n, sizeof s->title - n, " - saving the video, %d%%", pc);
+    SDL_SetWindowTitle(s->win, s->title);
 }
 
 /* a change, for a moment in the title (and on the console) */
@@ -582,6 +646,25 @@ static void volume_notice(sdl *s)
     notice(s, msg);
 }
 
+/* a new file in a directory (made if need be), named for the game and the time: the first name not
+ * taken; NULL when none can be made */
+static FILE *new_file(sdl *s, const char *dir, const char *prefix, const char *ext, char *path, size_t size)
+{
+    const char *name = s->o->app ? s->o->app : "pulseman";
+    make_dir(dir);
+    char stamp[32];
+    time_t now = time(NULL);
+    strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", localtime(&now));
+    for (int k = 1; k < 100; k++) {
+        if (k == 1) snprintf(path, size, "%s/%s%s-%s%s", dir, prefix, name, stamp, ext);
+        else snprintf(path, size, "%s/%s%s-%s-%d%s", dir, prefix, name, stamp, k, ext);
+        FILE *t = fopen(path, "rb");
+        if (t) { fclose(t); continue; }
+        return fopen(path, "wb");
+    }
+    return NULL;
+}
+
 /* the picture as it stands, to a PNG in the screenshots' directory */
 static void screenshot(sdl *s)
 {
@@ -592,21 +675,10 @@ static void screenshot(sdl *s)
     if (png) mdrt_png_encode(s->picture, w, h, 320, png, n);
     SDL_UnlockMutex(s->lock);
     if (!png) return;
-    const char *dir = mdrt_settings_get(s->set, "general.screenshots"), *name = s->o->app ? s->o->app : "screenshot";
+    const char *dir = mdrt_settings_get(s->set, "general.screenshots");
     if (!dir || !*dir) dir = ".";
-    make_dir(dir);
-    char stamp[32], path[1024];
-    time_t now = time(NULL);
-    strftime(stamp, sizeof stamp, "%Y%m%d-%H%M%S", localtime(&now));
-    FILE *f = NULL;
-    for (int k = 1; k < 100 && !f; k++) {                 /* the first name not taken */
-        if (k == 1) snprintf(path, sizeof path, "%s/%s-%s.png", dir, name, stamp);
-        else snprintf(path, sizeof path, "%s/%s-%s-%d.png", dir, name, stamp, k);
-        FILE *t = fopen(path, "rb");
-        if (t) { fclose(t); continue; }
-        f = fopen(path, "wb");
-        if (!f) break;
-    }
+    char path[1024];
+    FILE *f = new_file(s, dir, "", ".png", path, sizeof path);
     char msg[1100];
     if (f && fwrite(png, 1, n, f) == n) snprintf(msg, sizeof msg, "screenshot: %s", path);
     else snprintf(msg, sizeof msg, "screenshot: cannot write in %s", dir);
@@ -624,9 +696,274 @@ static void set_fullscreen(sdl *s, int on)
     s->redraw = 1;
 }
 
+/* ---- captures: the replay, recordings, and saving them ------------------------------------- */
+
+static double frame_rate(sdl *s)
+{
+    return s->cfg->pal ? (double)MDRT_MASTER_CLOCK_PAL / (MDRT_LINE_MCLKS * MDRT_LINES_PAL)
+                       : (double)MDRT_MASTER_CLOCK_NTSC / (MDRT_LINE_MCLKS * MDRT_LINES_NTSC);
+}
+
+/* the frames kept for the replay, and whether the game thread hands them over */
+static void capture_set(sdl *s)
+{
+    SDL_LockMutex(s->cap_lock);
+    mdrt_capture_keep(s->cap, (int)(replay_secs[s->replay] * frame_rate(s) + 0.5));
+    SDL_UnlockMutex(s->cap_lock);
+    SDL_AtomicSet(&s->capturing, s->replay > 0 || s->rec != NULL);
+}
+
+/* a clip being saved, on a thread of its own (one saves at a time, under save_lock) */
+typedef struct clip_save {
+    mdrt_clip *clip;
+    FILE *src;                  /* a recording's file (closed and removed after), or NULL */
+    char src_path[1100], path[1100], wav[1110], ffmpeg[600], msg[1300];
+    const char *note;           /* said after the file's name */
+    int mp4, curve, gif_scale, video_scale;
+    double fps;
+    uint32_t rate;
+    volatile long frames, done; /* (how far, for the title) */
+    SDL_mutex *lock;
+    SDL_Thread *thread;
+    SDL_atomic_t finished;
+} clip_save;
+
+static void put_file(void *user, const void *b, size_t n) { (void)fwrite(b, 1, n, user); }   /* (ferror at the end) */
+
+/* whether ffmpeg runs (its version asked for, the answer thrown away) */
+static int have_ffmpeg(const char *cmd)
+{
+    char line[700];
+#ifdef _WIN32
+    snprintf(line, sizeof line, "\"\"%s\" -version >NUL 2>&1\"", cmd);
+#else
+    snprintf(line, sizeof line, "\"%s\" -version >/dev/null 2>&1", cmd);
+#endif
+    return system(line) == 0;
+}
+
+/* the frames to ffmpeg as RGB through a pipe, the sound beside them as a WAV file; its answer */
+static int save_mp4(clip_save *v)
+{
+    int w, h;
+    mdrt_clip_frames(v->clip, &w, &h);
+    FILE *wav = fopen(v->wav, "wb");
+    if (!wav) return 0;
+    mdrt_clip_wav(v->clip, v->rate, v->fps, put_file, wav);
+    int wrote = !ferror(wav);
+    fclose(wav);
+    if (!wrote) return 0;
+    char cmd[4200];
+    snprintf(cmd, sizeof cmd,
+#ifdef _WIN32
+             "\""
+#endif
+             "\"%s\" -hide_banner -loglevel error -y -f rawvideo -pix_fmt rgb24 -s %dx%d -framerate %.6f -i - -i \"%s\" "
+             "-vf scale=iw*%d:ih*%d:flags=neighbor -c:v libx264 -pix_fmt yuv420p -crf 18 -preset veryfast "
+             "-c:a aac -b:a 192k -movflags +faststart -shortest \"%s\""
+#ifdef _WIN32
+             "\""
+#endif
+             , v->ffmpeg, w, h, v->fps, v->wav, v->video_scale, v->video_scale, v->path);
+#ifdef _WIN32
+    FILE *p = popen(cmd, "wb");
+#else
+    signal(SIGPIPE, SIG_IGN);                             /* (ffmpeg stopping early is an answer, not the end of the game) */
+    FILE *p = popen(cmd, "w");
+#endif
+    if (!p) return 0;
+    uint8_t *rgb = malloc((size_t)w * h * 3);
+    mdrt_capture_frame f;
+    int ok = rgb != NULL;
+    mdrt_clip_rewind(v->clip);
+    for (long i = 0; ok && mdrt_clip_next(v->clip, &f); i++) {
+        ok = mdrt_clip_rgb(&f, v->curve, w, h, rgb) && fwrite(rgb, 1, (size_t)w * h * 3, p) == (size_t)w * h * 3;
+        v->done = i + 1;
+    }
+    free(rgb);
+    return pclose(p) == 0 && ok;                          /* (0: ffmpeg ended well) */
+}
+
+static int save_thread(void *user)
+{
+    clip_save *v = user;
+    SDL_LockMutex(v->lock);
+    long frames = mdrt_clip_frames(v->clip, NULL, NULL);
+    v->frames = frames > 0 ? frames : 1;
+    int ok = 0;
+    const char *note = v->note;
+    if (v->mp4) {
+        ok = save_mp4(v);
+        remove(v->wav);
+        if (!ok) note = " (ffmpeg could not make it)";
+    } else {
+        FILE *f = fopen(v->path, "wb");
+        if (f) {
+            ok = mdrt_clip_gif(v->clip, v->curve, v->gif_scale, v->fps, put_file, f, &v->done);
+            ok = !ferror(f) && ok;
+            fclose(f);
+        }
+    }
+    if (!ok) remove(v->path);
+    if (ok) snprintf(v->msg, sizeof v->msg, "saved: %s%s", v->path, note);
+    else snprintf(v->msg, sizeof v->msg, "could not save the video%s", note);
+    mdrt_clip_free(v->clip);
+    if (v->src) { fclose(v->src); remove(v->src_path); }
+    SDL_UnlockMutex(v->lock);
+    SDL_AtomicSet(&v->finished, 1);
+    return 0;
+}
+
+/* a clip saved (from the replay, or a recording's file at src_path) as the format chosen; 0 when
+ * it cannot be started */
+static int start_saving(sdl *s, mdrt_clip *clip, FILE *src, const char *src_path)
+{
+    int slot = 0;
+    while (slot < 4 && s->clips[slot]) slot++;
+    clip_save *v = slot < 4 ? calloc(1, sizeof *v) : NULL;
+    const char *dir = mdrt_settings_get(s->set, "general.videos"), *ff = mdrt_settings_get(s->set, "capture.ffmpeg");
+    if (!dir || !*dir) dir = ".";
+    if (!ff || !*ff) ff = "ffmpeg";
+    if (v && s->format == 1 && s->ffmpeg_ok < 0) s->ffmpeg_ok = have_ffmpeg(ff);   /* (asked once a run) */
+    int mp4 = s->format == 1 && s->ffmpeg_ok == 1;
+    FILE *f = v ? new_file(s, dir, "", mp4 ? ".mp4" : ".gif", v->path, sizeof v->path) : NULL;
+    if (!f) {
+        notice(s, slot < 4 ? "cannot write a video there" : "still saving the last ones");
+        free(v);
+        mdrt_clip_free(clip);
+        if (src) { fclose(src); remove(src_path); }
+        return 0;
+    }
+    fclose(f);                                            /* (the name taken; written by the thread) */
+    v->clip = clip;
+    v->src = src;
+    if (src_path) snprintf(v->src_path, sizeof v->src_path, "%s", src_path);
+    snprintf(v->wav, sizeof v->wav, "%s.wav", v->path);
+    snprintf(v->ffmpeg, sizeof v->ffmpeg, "%s", ff);
+    v->mp4 = mp4;
+    v->note = s->format == 1 && !mp4 ? " (MP4 needs ffmpeg installed)" : "";
+    v->curve = SDL_AtomicGet(&s->curve);
+    v->gif_scale = s->gif_scale + 1;
+    v->video_scale = clamp(mdrt_settings_get_int(s->set, "capture.video_scale", 4), 1, 8);
+    v->fps = frame_rate(s);
+    v->rate = s->rate;
+    v->lock = s->save_lock;
+    v->thread = SDL_CreateThread(save_thread, "capture", v);
+    if (!v->thread) { remove(v->path); free(v); mdrt_clip_free(clip); if (src) { fclose(src); remove(src_path); } return 0; }
+    s->clips[slot] = v;
+    return 1;
+}
+
+/* how far the clip saving now is (-1: none saving) */
+static int saving_percent(sdl *s)
+{
+    int pc = -1;
+    for (int i = 0; i < 4; i++) {
+        clip_save *v = s->clips[i];
+        if (v && !SDL_AtomicGet(&v->finished)) {
+            long n = v->frames, d = v->done;
+            int p = n > 0 ? (int)(d * 100 / n) : 0;
+            if (p > pc) pc = p;
+        }
+    }
+    return pc;
+}
+
+/* the saves finished: their answers in the title; with wait, until none is left */
+static void check_saves(sdl *s, int wait)
+{
+    for (int i = 0; i < 4; i++) {
+        clip_save *v = s->clips[i];
+        if (!v || (!SDL_AtomicGet(&v->finished) && !wait)) continue;
+        SDL_WaitThread(v->thread, NULL);
+        notice(s, v->msg);
+        free(v);
+        s->clips[i] = NULL;
+    }
+}
+
+/* the replay: the last seconds kept, saved (the replay keeps on from now); what became of it */
+static const char *save_replay(sdl *s)
+{
+    const char *msg = "saving the replay";
+    SDL_LockMutex(s->cap_lock);
+    mdrt_clip *clip = s->replay ? mdrt_capture_take(s->cap) : NULL;
+    SDL_UnlockMutex(s->cap_lock);
+    if (!s->replay) msg = "the replay is off (in the menu: Capture)";
+    else if (!clip) msg = "no replay yet";
+    else if (!start_saving(s, clip, NULL, NULL)) return "";   /* (it says why) */
+    notice(s, msg);
+    return msg;
+}
+
+/* a recording started (to a file in the videos' directory), or stopped and saved */
+static void record(sdl *s)
+{
+    if (!s->rec) {
+        const char *dir = mdrt_settings_get(s->set, "general.videos");
+        FILE *f = new_file(s, dir && *dir ? dir : ".", ".recording-", ".clip", s->rec_path, sizeof s->rec_path);
+        if (f) fclose(f);
+        f = f ? fopen(s->rec_path, "w+b") : NULL;          /* (written, then read back) */
+        if (!f) { notice(s, "cannot record there"); return; }
+        s->rec = f;
+        s->rec_since = SDL_GetTicks();
+        SDL_LockMutex(s->cap_lock);
+        mdrt_capture_record(s->cap, f);
+        SDL_UnlockMutex(s->cap_lock);
+        capture_set(s);
+        notice(s, "recording");
+        return;
+    }
+    SDL_LockMutex(s->cap_lock);
+    mdrt_capture_record(s->cap, NULL);
+    long n = mdrt_capture_recorded(s->cap);
+    SDL_UnlockMutex(s->cap_lock);
+    FILE *f = s->rec;
+    s->rec = NULL;
+    capture_set(s);
+    mdrt_clip *clip = n > 0 && fflush(f) == 0 ? mdrt_clip_file(f) : NULL;
+    if (!clip) {
+        fclose(f);
+        remove(s->rec_path);
+        notice(s, n < 0 ? "the recording could not be written (the disk full?)" : "nothing was recorded");
+        return;
+    }
+    if (start_saving(s, clip, f, s->rec_path)) notice(s, "saving the recording");
+}
+
+/* a second on: the title's clock, and a recording that could not be written stopped */
+static void capture_status(sdl *s)
+{
+    if (!s->rec && saving_percent(s) < 0) return;
+    if (SDL_GetTicks() - s->status_at < 500) return;
+    s->status_at = SDL_GetTicks();
+    if (s->rec) {
+        SDL_LockMutex(s->cap_lock);
+        long n = mdrt_capture_recorded(s->cap);
+        SDL_UnlockMutex(s->cap_lock);
+        if (n < 0) record(s);
+    }
+    title_now(s);
+}
+
 /* ---- the menu ------------------------------------------------------------------------------------ */
 
 static const char *key_name(SDL_Scancode k) { return k == SDL_SCANCODE_UNKNOWN ? "none" : SDL_GetScancodeName(k); }
+
+/* a control's key as the settings and the menu name it: "F12", "Shift+F12" ("" for none) */
+static const char *control_name(sdl *s, int c, char *buf, size_t n)
+{
+    const char *m = "";
+    for (int i = 0; i < 3; i++) if (s->key_mod[c] == key_mods[i].mod) m = key_mods[i].name;
+    snprintf(buf, n, "%s%s", s->key[c] == SDL_SCANCODE_UNKNOWN ? "" : m, s->key[c] == SDL_SCANCODE_UNKNOWN ? "" : SDL_GetScancodeName(s->key[c]));
+    return buf;
+}
+
+static void control_detail(sdl *s, int c, char *buf, size_t n)
+{
+    control_name(s, c, buf, n);
+    if (!buf[0]) snprintf(buf, n, "none");
+}
 
 static int is_rom_name(const char *name)
 {
@@ -851,10 +1188,11 @@ static void build_page(sdl *s, int page, int select)
             put_text(it->detail, sizeof it->detail, s->rom ? base_name(s->rom_name) : "none", 1);
         if (running) {
             mdrt_menu_add(m, I_RESET, MDRT_ITEM_ACTION, "Reset");
-            if ((it = mdrt_menu_add(m, I_SAVE, MDRT_ITEM_ACTION, "Save a state"))) snprintf(it->detail, sizeof it->detail, "%s", key_name(s->key[K_SAVE]));
-            if ((it = mdrt_menu_add(m, I_LOAD, MDRT_ITEM_ACTION, "Load the state"))) snprintf(it->detail, sizeof it->detail, "%s", key_name(s->key[K_LOAD]));
+            if ((it = mdrt_menu_add(m, I_SAVE, MDRT_ITEM_ACTION, "Save a state"))) control_detail(s, K_SAVE, it->detail, sizeof it->detail);
+            if ((it = mdrt_menu_add(m, I_LOAD, MDRT_ITEM_ACTION, "Load the state"))) control_detail(s, K_LOAD, it->detail, sizeof it->detail);
         }
         mdrt_menu_add(m, I_VIDEO, MDRT_ITEM_ACTION, "Video");
+        mdrt_menu_add(m, I_CAPTURE, MDRT_ITEM_ACTION, "Capture");
         mdrt_menu_add(m, I_SOUND, MDRT_ITEM_ACTION, "Sound");
         mdrt_menu_add(m, I_PLAYERS, MDRT_ITEM_ACTION, "Players");
         mdrt_menu_add(m, I_OPTIONS, MDRT_ITEM_ACTION, "Options");
@@ -875,6 +1213,27 @@ static void build_page(sdl *s, int page, int select)
         mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
         snprintf(m->subtitle, sizeof m->subtitle, "Sharp: smooth edges. Integer: even pixels. Fit: fills.");
         break;
+    case PAGE_CAPTURE: {
+        char a[64], b[64];
+        mdrt_menu_page(m, "Capture");
+        it = mdrt_menu_add(m, I_CAP_REPLAY, s->replay ? MDRT_ITEM_ACTION : MDRT_ITEM_TEXT, "Save the replay");
+        if (it) {
+            if (s->replay) snprintf(it->detail, sizeof it->detail, "the last %d s", replay_secs[s->replay]);
+            else snprintf(it->detail, sizeof it->detail, "(off)");
+        }
+        if ((it = mdrt_menu_add(m, I_CAP_RECORD, MDRT_ITEM_ACTION, s->rec ? "Stop recording" : "Start recording")) && s->rec) {
+            uint32_t t = (SDL_GetTicks() - s->rec_since) / 1000;
+            snprintf(it->detail, sizeof it->detail, "%u:%02u", t / 60, t % 60);
+        }
+        mdrt_menu_add_choice(m, I_CAP_SECONDS, "Replay kept", replay_label, 5, s->replay);
+        mdrt_menu_add_choice(m, I_CAP_FORMAT, "Saved as", format_label, 2, s->format);
+        mdrt_menu_add_choice(m, I_CAP_GIFSCALE, "GIF size", gif_scale_label, 3, s->gif_scale);
+        mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
+        control_detail(s, K_REPLAY, a, sizeof a);
+        control_detail(s, K_RECORD, b, sizeof b);
+        snprintf(m->subtitle, sizeof m->subtitle, "%s: the replay. %s: record.", a, b);
+        break;
+    }
     case PAGE_SOUND: {
         mdrt_menu_page(m, "Sound");
         mdrt_menu_add_number(m, I_VOLUME, "Volume", SDL_AtomicGet(&s->volume), 0, 100, VOLUME_STEP, "%");
@@ -914,8 +1273,7 @@ static void build_page(sdl *s, int page, int select)
             }
         }
         for (int k = 0; k < K_COUNT; k++)
-            if ((it = mdrt_menu_add(m, I_CONTROL + k, MDRT_ITEM_ACTION, key_setting[k][2])))
-                snprintf(it->detail, sizeof it->detail, "%s", key_name(s->key[k]));
+            if ((it = mdrt_menu_add(m, I_CONTROL + k, MDRT_ITEM_ACTION, key_setting[k][2]))) control_detail(s, k, it->detail, sizeof it->detail);
         mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
         break;
     case PAGE_PLAYERS: {
@@ -1130,9 +1488,16 @@ static void bind_cbutton(sdl *s, int id, SDL_GameControllerButton b)
 }
 
 /* a key for the item being bound (Esc keeps the old one, Delete leaves none) */
-static void bind_key(sdl *s, SDL_Scancode k)
+static int is_modifier(SDL_Scancode k)
+{
+    return k == SDL_SCANCODE_LSHIFT || k == SDL_SCANCODE_RSHIFT || k == SDL_SCANCODE_LCTRL || k == SDL_SCANCODE_RCTRL
+        || k == SDL_SCANCODE_LALT || k == SDL_SCANCODE_RALT || k == SDL_SCANCODE_LGUI || k == SDL_SCANCODE_RGUI;
+}
+
+static void bind_key(sdl *s, SDL_Scancode k, SDL_Keymod mod)
 {
     int id = s->binding, sel = id;
+    if (id >= I_CONTROL && id < I_TURBOKEY && is_modifier(k)) return;   /* (a control: Shift, Ctrl or Alt waits for its key) */
     s->binding = -1;
     if (id >= I_CBUTTON) {                                /* (a controller button: the keyboard keeps or clears it) */
         if (k == SDL_SCANCODE_DELETE) bind_cbutton(s, id, SDL_CONTROLLER_BUTTON_INVALID);
@@ -1155,18 +1520,23 @@ static void bind_key(sdl *s, SDL_Scancode k)
             return;
         }
         s->key[id - I_CONTROL] = k;
+        s->key_mod[id - I_CONTROL] = k == SDL_SCANCODE_UNKNOWN ? 0 : (mod & KMOD_SHIFT) ? KMOD_SHIFT : (mod & KMOD_CTRL) ? KMOD_CTRL
+                                     : (mod & KMOD_ALT) ? KMOD_ALT : 0;
         snprintf(setting, sizeof setting, "%s", key_setting[id - I_CONTROL][0]);
     } else {
         int p = (id - I_PAD) / BUTTONS, b = (id - I_PAD) % BUTTONS;
         s->button_key[p][b] = k;
         snprintf(setting, sizeof setting, "pad%d.%s", p + 1, button_name[b]);
     }
-    mdrt_settings_set(s->set, setting, k == SDL_SCANCODE_UNKNOWN ? "" : SDL_GetScancodeName(k));
+    char name[64];
+    if (id >= I_CONTROL && id < I_TURBOKEY) control_name(s, id - I_CONTROL, name, sizeof name);
+    else snprintf(name, sizeof name, "%s", k == SDL_SCANCODE_UNKNOWN ? "" : SDL_GetScancodeName(k));
+    mdrt_settings_set(s->set, setting, name);
     build_page(s, PAGE_KEYS, sel);
-    for (int i = 0; i < s->menu.count && k != SDL_SCANCODE_UNKNOWN; i++)   /* the key's other use, if it has one */
-        if (s->menu.items[i].id != id && s->menu.items[i].id >= I_PAD && !strcmp(s->menu.items[i].detail, SDL_GetScancodeName(k)))
+    for (int i = 0; i < s->menu.count && name[0]; i++)    /* the key's other use, if it has one */
+        if (s->menu.items[i].id != id && s->menu.items[i].id >= I_PAD && !strcmp(s->menu.items[i].detail, name))
             other = s->menu.items[i].label;
-    if (other) snprintf(s->menu.message, sizeof s->menu.message, "%s is also %s", SDL_GetScancodeName(k), other);
+    if (other) snprintf(s->menu.message, sizeof s->menu.message, "%s is also %s", name, other);
 }
 
 /* a choice that needs choosing twice (it ends the game in play) */
@@ -1203,6 +1573,32 @@ static void act(sdl *s, int id)
         mdrt_settings_set_int(s->set, "general.resume", s->resume);
         return;
     case I_VIDEO: build_page(s, PAGE_VIDEO, I_UPSCALE); return;
+    case I_CAPTURE: build_page(s, PAGE_CAPTURE, s->replay ? I_CAP_REPLAY : I_CAP_RECORD); return;
+    case I_CAP_REPLAY:                                    /* (saved while the menu stays) */
+        snprintf(s->menu.message, sizeof s->menu.message, "%s", save_replay(s));
+        return;
+    case I_CAP_RECORD:
+        if (s->rec) {
+            record(s);
+            build_page(s, PAGE_CAPTURE, I_CAP_RECORD);
+            snprintf(s->menu.message, sizeof s->menu.message, "Saving the recording");
+        } else if (running) { close_menu(s); record(s); }   /* (recording from the moment play goes on) */
+        else snprintf(s->menu.message, sizeof s->menu.message, "No game is running");
+        return;
+    case I_CAP_SECONDS:
+        s->replay = it->value;
+        mdrt_settings_set_int(s->set, "capture.replay", replay_secs[s->replay]);
+        capture_set(s);
+        build_page(s, PAGE_CAPTURE, I_CAP_SECONDS);
+        return;
+    case I_CAP_FORMAT:
+        s->format = it->value;
+        mdrt_settings_set(s->set, "capture.format", format_name[s->format]);
+        return;
+    case I_CAP_GIFSCALE:
+        s->gif_scale = it->value;
+        mdrt_settings_set_int(s->set, "capture.gif_scale", s->gif_scale + 1);
+        return;
     case I_SOUND: build_page(s, PAGE_SOUND, I_VOLUME); return;
     case I_OPTIONS: build_page(s, PAGE_OPTIONS, I_FOCUS); return;
     case I_KEYS: build_page(s, PAGE_KEYS, I_PAD); return;
@@ -1225,7 +1621,7 @@ static void act(sdl *s, int id)
     case I_QUIT: if (!running || confirmed(s, id, "quit")) request_quit(s); return;
     case I_BACK:
         if (s->page == PAGE_CBUTTONS) { build_page(s, PAGE_PLAYERS, I_CBUTTONS); return; }
-        build_page(s, PAGE_MAIN, s->page == PAGE_VIDEO ? I_VIDEO : s->page == PAGE_SOUND ? I_SOUND : s->page == PAGE_OPTIONS ? I_OPTIONS
+        build_page(s, PAGE_MAIN, s->page == PAGE_VIDEO ? I_VIDEO : s->page == PAGE_CAPTURE ? I_CAPTURE : s->page == PAGE_SOUND ? I_SOUND : s->page == PAGE_OPTIONS ? I_OPTIONS
                                  : s->page == PAGE_PLAYERS ? I_PLAYERS : s->page == PAGE_SAVE ? I_SAVE : s->page == PAGE_LOAD ? I_LOAD : I_KEYS);
         return;
     case I_UPSCALE:                                       /* (the frame is upscaled again when the menu closes) */
@@ -1349,7 +1745,7 @@ static void key_pressed(sdl *s, SDL_Scancode k, SDL_Keymod mod, int repeat)
 {
     if (k == SDL_SCANCODE_RETURN && (mod & KMOD_ALT)) { if (!repeat) set_fullscreen(s, !is_fullscreen(s)); return; }
     if (s->menu_open) {
-        if (s->binding >= 0) { if (!repeat) bind_key(s, k); s->redraw = 1; return; }
+        if (s->binding >= 0) { if (!repeat) bind_key(s, k, mod); s->redraw = 1; return; }
         int in = k == SDL_SCANCODE_UP ? MDRT_MENU_UP : k == SDL_SCANCODE_DOWN ? MDRT_MENU_DOWN :
                  k == SDL_SCANCODE_LEFT ? MDRT_MENU_LEFT : k == SDL_SCANCODE_RIGHT ? MDRT_MENU_RIGHT :
                  k == SDL_SCANCODE_RETURN || k == SDL_SCANCODE_KP_ENTER || k == SDL_SCANCODE_SPACE ? MDRT_MENU_OK :
@@ -1360,8 +1756,11 @@ static void key_pressed(sdl *s, SDL_Scancode k, SDL_Keymod mod, int repeat)
         return;
     }
     if (repeat) return;
-    int a = 0;
-    while (a < K_COUNT && (s->key[a] != k || k == SDL_SCANCODE_UNKNOWN)) a++;
+    int a = K_COUNT, held_mods = mod & (KMOD_SHIFT | KMOD_CTRL | KMOD_ALT);
+    for (int i = 0; i < K_COUNT && a == K_COUNT; i++)     /* a control with its Shift, Ctrl or Alt held first */
+        if (s->key[i] == k && k != SDL_SCANCODE_UNKNOWN && s->key_mod[i] && (held_mods & s->key_mod[i])) a = i;
+    for (int i = 0; i < K_COUNT && a == K_COUNT; i++)
+        if (s->key[i] == k && k != SDL_SCANCODE_UNKNOWN && !s->key_mod[i]) a = i;
     switch (a) {
     case K_MENU: open_menu(s, PAGE_MAIN, I_RESUME); break;
     case K_PAUSE:
@@ -1379,6 +1778,8 @@ static void key_pressed(sdl *s, SDL_Scancode k, SDL_Keymod mod, int repeat)
         break;
     case K_STEP: if (SDL_AtomicGet(&s->paused)) SDL_AtomicSet(&s->step, 1); break;
     case K_SHOT: screenshot(s); break;
+    case K_REPLAY: (void)save_replay(s); break;
+    case K_RECORD: record(s); break;
     case K_VOL_DOWN: case K_VOL_UP:
         SDL_AtomicSet(&s->volume, clamp(SDL_AtomicGet(&s->volume) + (a == K_VOL_UP ? VOLUME_STEP : -VOLUME_STEP), 0, 100));
         mdrt_settings_set_int(s->set, "audio.volume", SDL_AtomicGet(&s->volume));
@@ -1409,6 +1810,12 @@ static void pad_pressed(sdl *s, SDL_GameControllerButton b)
     if (in >= 0) menu_input(s, in);
 }
 
+/* a control's key held (with its Shift, Ctrl or Alt) */
+static int control_held(sdl *s, int c)
+{
+    return s->key[c] != SDL_SCANCODE_UNKNOWN && s->down[s->key[c]] && (!s->key_mod[c] || (SDL_GetModState() & s->key_mod[c]));
+}
+
 static void read_buttons(sdl *s)
 {
     int turbo_on = (int)(SDL_GetTicks() * (Uint32)s->turbo_rate * 2 / 1000) % 2 == 0;   /* (pressed half the time) */
@@ -1428,8 +1835,8 @@ static void read_buttons(sdl *s)
         b |= pad & ~s->pad_ignore[p];
         SDL_AtomicSet(&s->buttons[p], s->menu_open ? 0 : b);
     }
-    SDL_AtomicSet(&s->rewind, s->key[K_REWIND] != SDL_SCANCODE_UNKNOWN && s->down[s->key[K_REWIND]]);
-    SDL_AtomicSet(&s->fast, s->key[K_FAST] != SDL_SCANCODE_UNKNOWN && s->down[s->key[K_FAST]]);
+    SDL_AtomicSet(&s->rewind, control_held(s, K_REWIND));
+    SDL_AtomicSet(&s->fast, control_held(s, K_FAST));
 }
 
 /* ---- the picture ------------------------------------------------------------------------------- */
@@ -1654,6 +2061,12 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
     cfg->audio_rate = s->rate;
     for (int i = 0; i < SDL_NumJoysticks(); i++) ctrl_added(s, i);
     s->lock = SDL_CreateMutex();
+    s->cap_lock = SDL_CreateMutex();
+    s->save_lock = SDL_CreateMutex();
+    s->cap = mdrt_capture_new(0);
+    s->ffmpeg_ok = -1;
+    if (!s->cap) s->replay = 0;
+    else capture_set(s);
     cfg->platform = (mdrt_platform){ .user = s, .present = present, .audio = audio, .wait = wait, .input = input, .requests = requests,
                                      .request_path = request_path };
     mdrt_menu_init(&s->menu);
@@ -1686,6 +2099,8 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
         read_buttons(s);
         draw(s);
         check_pending(s);
+        check_saves(s, 0);
+        capture_status(s);
         if (s->quitting && s->pending < 0) quit(s);       /* (quick resume's state saved, or not to be) */
         if (s->notice_until) title_now(s);
         if (mdrt_settings_dirty(s->set) && SDL_GetTicks() - s->set_saved > 1000) settings_write(s);
@@ -1699,12 +2114,20 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
         if (stopped) SDL_WaitThread(s->thread, NULL);
         else SDL_DetachThread(s->thread);                 /* (it would not stop: the process ends it) */
     }
+    if (s->rec) record(s);                                /* (a recording at quitting: saved) */
+    if (saving_percent(s) >= 0) { printf("finishing the video...\n"); fflush(stdout); }
+    check_saves(s, 1);
     if (s->dev) SDL_CloseAudioDevice(s->dev);
     mdrt_settings_free(s->set);
     mdrt_menu_free(&s->menu);
     free_entries(s);
     free(s->frame); free(s->blended); free(s->big); free(s->big_scratch); free(s->pending_pic);
-    if (stopped) { mdrt_free(s->m); SDL_DestroyMutex(s->lock); free(s->loud); free(s->rom); free(s); }   /* (else the thread still has them) */
+    if (stopped) {                                        /* (else the thread still has them) */
+        mdrt_free(s->m);
+        mdrt_capture_free(s->cap);
+        SDL_DestroyMutex(s->lock); SDL_DestroyMutex(s->cap_lock); SDL_DestroyMutex(s->save_lock);
+        free(s->loud); free(s->rom); free(s);
+    }
     SDL_Quit();
     return 0;
 }

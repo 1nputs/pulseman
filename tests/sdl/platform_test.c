@@ -12,7 +12,10 @@
  * controllers given to players 1 and 3, a button moved, a turbo button, the stick's dead zone, a
  * controller pulled out, the Players page and a controller button changed by pressing it; and the
  * save slots (F9, F10, the Save and Load pages, a save out of play that changes nothing) and quick
- * resume (the state at quitting, back at the next start; none when quitting out of play). */
+ * resume (the state at quitting, back at the next start; none when quitting out of play); and
+ * captures: the replay saved by Shift+F12, a recording by Ctrl+F12, and from the menu with MP4
+ * chosen and no ffmpeg (a GIF), each GIF read back, a control's key set with Ctrl by pressing it;
+ * with ffmpeg on the machine, an MP4. */
 #include <SDL2/SDL.h>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -30,6 +33,7 @@
 #include <string.h>
 #include "check.h"
 #include "mdrt/platform_sdl2.h"
+#include "mdrt/gif.h"
 #include "mdrt/png.h"
 
 #define BACKDROP 0x0E42                                   /* the picture: the backdrop's colour */
@@ -59,6 +63,19 @@ static void key(SDL_Scancode k, int down)
 }
 
 static void press(SDL_Scancode k) { key(k, 1); key(k, 0); }
+
+static void press_mod(SDL_Scancode k, Uint16 mod)        /* with Shift or Ctrl held */
+{
+    SDL_Event e;
+    SDL_zero(e);
+    e.type = SDL_KEYDOWN;
+    e.key.state = SDL_PRESSED;
+    e.key.keysym.scancode = k;
+    e.key.keysym.sym = SDL_GetKeyFromScancode(k);
+    e.key.keysym.mod = mod;
+    SDL_PushEvent(&e);
+    key(k, 0);
+}
 
 static void focus(int gained)
 {
@@ -171,7 +188,7 @@ static int menu_player(void *user)
     CHECK_EQ(SDL_AtomicGet(&starts), 1);
     CHECK(!strcmp(rom_seen, "GOOD-good"));
     CHECK(SDL_AtomicGet(&frame) > 10);
-    /* the menu: [Resume, Game ROM, Reset, Save, Load, Video, Sound, Options, Keys, Quit] */
+    /* the menu: [Resume, Game ROM, Reset, Save, Load, Video, Capture, Sound, Players, Options, Keys, Quit] */
     keys(SDL_SCANCODE_ESCAPE, 1);
     SDL_Delay(200);
     int f0 = SDL_AtomicGet(&frame);
@@ -191,7 +208,7 @@ static int menu_player(void *user)
     keys(SDL_SCANCODE_DOWN, 1);
     keys(SDL_SCANCODE_LEFT, 1);                           /* and a shadow mask: off, round to the last) */
     keys(SDL_SCANCODE_ESCAPE, 1);
-    keys(SDL_SCANCODE_DOWN, 1);
+    keys(SDL_SCANCODE_DOWN, 2);
     keys(SDL_SCANCODE_RETURN, 1);                         /* Sound: [Volume, Mute, FM core, FM chip, Back] */
     keys(SDL_SCANCODE_DOWN, 2);
     keys(SDL_SCANCODE_RIGHT, 1);                          /* the next FM core */
@@ -220,7 +237,7 @@ static int menu_player(void *user)
     CHECK_EQ(SDL_AtomicGet(&starts), 3);
     CHECK(!strcmp(rom_seen, "GOOD-other"));
     keys(SDL_SCANCODE_ESCAPE, 1);
-    keys(SDL_SCANCODE_DOWN, 9);
+    keys(SDL_SCANCODE_DOWN, 10);
     keys(SDL_SCANCODE_RETURN, 1);                         /* Keys: pad 1's up, down ... */
     keys(SDL_SCANCODE_DOWN, 7);
     keys(SDL_SCANCODE_RETURN, 1);                         /* Pad 1 Start: press the new key */
@@ -280,9 +297,9 @@ static int players(void *user)
     vbutton(c1, SDL_CONTROLLER_BUTTON_Y, 1);
     CHECK_EQ(SDL_AtomicGet(&pads4[2]) & 0xFF, MDRT_PAD_C);   /* (Y too: still the pad's Y, which a 3-button pad lacks) */
     vbutton(c1, SDL_CONTROLLER_BUTTON_Y, 0);
-    /* the menu: [Resume, Reset, Save, Load, Video, Sound, Players, Options, Keys, Quit] */
+    /* the menu: [Resume, Reset, Save, Load, Video, Capture, Sound, Players, Options, Keys, Quit] */
     keys(SDL_SCANCODE_ESCAPE, 1);
-    keys(SDL_SCANCODE_DOWN, 6);
+    keys(SDL_SCANCODE_DOWN, 7);
     keys(SDL_SCANCODE_RETURN, 1);                         /* Players: [Controllers, Player 1-4, Controller buttons ...] */
     keys(SDL_SCANCODE_DOWN, 1);
     keys(SDL_SCANCODE_RIGHT, 1);                          /* player 1: controller 2 -> 3 */
@@ -357,6 +374,104 @@ static int slots(void *user)
     return 0;
 }
 
+/* runs 8 and 9: captures. 8: the replay (Shift+F12), a recording of a second (Ctrl+F12 twice),
+ * then MP4 chosen in the menu with no ffmpeg to be found (a GIF instead) and the replay saved from
+ * there; 9 (with ffmpeg on the machine): the replay as MP4 */
+static int capturer(void *user)
+{
+    (void)user;
+    until_frame(150);
+    if (run == 9) {
+        press_mod(SDL_SCANCODE_F12, KMOD_LSHIFT);
+        SDL_Delay(300);
+        quit_event();                                     /* (the video finished before the end) */
+        return 0;
+    }
+    press_mod(SDL_SCANCODE_F12, KMOD_LSHIFT);
+    SDL_Delay(1000);
+    press_mod(SDL_SCANCODE_F12, KMOD_RCTRL);
+    SDL_Delay(1000);
+    press_mod(SDL_SCANCODE_F12, KMOD_RCTRL);
+    SDL_Delay(1000);
+    /* the menu: [Resume, Reset, Save, Load, Video, Capture ...]; Capture: [Save the replay, Start
+     * recording, Replay kept, Saved as, GIF size, Back] */
+    keys(SDL_SCANCODE_ESCAPE, 1);
+    keys(SDL_SCANCODE_DOWN, 5);
+    keys(SDL_SCANCODE_RETURN, 1);
+    keys(SDL_SCANCODE_DOWN, 3);
+    keys(SDL_SCANCODE_RIGHT, 1);                          /* GIF -> MP4 */
+    keys(SDL_SCANCODE_UP, 3);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* the replay, from the menu */
+    SDL_Delay(1500);
+    keys(SDL_SCANCODE_ESCAPE, 1);
+    keys(SDL_SCANCODE_DOWN, 4);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* Keys: [pads' keys ..., Record, Menu, Back] */
+    keys(SDL_SCANCODE_UP, 3);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* Record: Ctrl waits for its key, then F11 */
+    keys(SDL_SCANCODE_LCTRL, 1);
+    press_mod(SDL_SCANCODE_F11, KMOD_LCTRL);
+    SDL_Delay(100);
+    keys(SDL_SCANCODE_ESCAPE, 2);
+    quit_event();
+    return 0;
+}
+
+static char *slurp(const char *path, long *len);
+
+/* a GIF's screen, its frames, the first frame's first pixel's colour (0 when it is not one) */
+static int gif_read(const char *path, int *w, int *h, uint32_t *first)
+{
+    long len = 0;
+    uint8_t *b = (uint8_t *)slurp(path, &len), *code = b ? malloc((size_t)len) : NULL;
+    int frames = 0;
+    if (!b || len < 13 || memcmp(b, "GIF89a", 6)) { free(b); free(code); return 0; }
+    *w = b[6] | b[7] << 8;
+    *h = b[8] | b[9] << 8;
+    long p = 13;
+    while (p < len && b[p] != 0x3B) {
+        if (b[p] == 0x21) {                               /* an extension: its blocks */
+            p += 2;
+            while (p < len && b[p]) p += 1 + b[p];
+            p++;
+        } else if (b[p] == 0x2C && p + 10 < len) {        /* an image */
+            int fw = b[p + 5] | b[p + 6] << 8, fh = b[p + 7] | b[p + 8] << 8, flags = b[p + 9];
+            const uint8_t *table = b + p + 10;
+            p += 10 + ((flags & 0x80) ? 3 << ((flags & 7) + 1) : 0);
+            int bits = b[p++];
+            size_t n = 0;
+            while (p < len && b[p]) { memcpy(code + n, b + p + 1, b[p]); n += b[p]; p += 1 + b[p]; }
+            p++;
+            if (!frames++) {
+                uint8_t *idx = malloc((size_t)fw * fh);
+                *first = idx && mdrt_gif_unlzw(code, n, bits, idx, (size_t)fw * fh)
+                         ? (uint32_t)table[3 * idx[0]] << 16 | (uint32_t)table[3 * idx[0] + 1] << 8 | table[3 * idx[0] + 2] : 0xFFFFFFFF;
+                free(idx);
+            }
+        } else break;
+    }
+    if (p >= len || b[p] != 0x3B) frames = 0;
+    free(b);
+    free(code);
+    return frames;
+}
+
+static int by_name(const void *a, const void *b) { return strcmp(a, b); }
+
+/* the videos' directory: its files of a kind, in order of name (up to 8) */
+static int videos(const char *ext, char names[8][300])
+{
+    DIR *d = opendir("videos");
+    struct dirent *e;
+    int n = 0;
+    while (d && (e = readdir(d)))
+        if (strcmp(e->d_name, ".") && strcmp(e->d_name, "..") && strlen(e->d_name) > strlen(ext)
+            && !strcmp(e->d_name + strlen(e->d_name) - strlen(ext), ext) && n < 8)
+            snprintf(names[n++], 300, "videos/%s", e->d_name);
+    if (d) closedir(d);
+    qsort(names, (size_t)n, 300, by_name);
+    return n;
+}
+
 static const char *rom_check(const uint8_t *rom, size_t size, void *user)
 {
     (void)user;
@@ -382,7 +497,8 @@ static void game(mdrt *m, void *user)
     mdrt_psg_port(m, 100, 254 >> 4);
     mdrt_psg_port(m, 200, 0x90);
     SDL_Thread *t = run <= 2 ? SDL_CreateThread(player, "player", NULL) : run == 5 ? SDL_CreateThread(players, "players", NULL)
-                  : run >= 6 ? SDL_CreateThread(slots, "slots", NULL) : NULL;
+                  : run == 6 || run == 7 ? SDL_CreateThread(slots, "slots", NULL)
+                  : run >= 8 ? SDL_CreateThread(capturer, "capturer", NULL) : NULL;
     for (;;) {
         mdrt_vblank_end(m);
         if (mdrt_wait_vblank(m)) break;
@@ -529,6 +645,9 @@ int main(int argc, char **argv)
             remove(p);
         }
     remove_dir("states");
+    char names[8][300], others[8][300];
+    for (int i = 0, n = videos("", names); i < n; i++) remove(names[i]);   /* (last time's captures: a folder too) */
+    remove_dir("videos");
     DIR *d = opendir(shots);                              /* (last time's screenshots) */
     struct dirent *e;
     char path[1024];
@@ -619,5 +738,49 @@ int main(int argc, char **argv)
     run = 7;
     CHECK_EQ(play(), 0);
     CHECK(!exists("states/resume.state"));                /* (quit out of play: none to come back to) */
+    /* captures: the replay, a recording, MP4 with no ffmpeg (a GIF), and with ffmpeg if there is one */
+    t = slurp(settings_path, &len);
+    if (t) {
+        char *ed = malloc((size_t)len + 128);
+        snprintf(ed, (size_t)len + 128, "%scapture.replay = 10\ncapture.format = gif\ncapture.ffmpeg = no-such-ffmpeg-here\n", t);
+        spit(settings_path, ed);
+        free(ed);
+        free(t);
+    }
+    run = 8;
+    CHECK_EQ(play(), 0);
+    int n = videos(".gif", names), gw = 0, gh = 0, frames[3] = { 0 };
+    CHECK_EQ(n, 3);
+    CHECK_EQ(videos(".mp4", others), 0);
+    CHECK_EQ(videos(".clip", others) + videos(".wav", others), 0);   /* (the recording's file and the sound: gone) */
+    for (int i = 0; i < n && i < 3; i++) {
+        uint32_t first = 0;
+        frames[i] = gif_read(names[i], &gw, &gh, &first);
+        CHECK(gw == 320 && gh == 224 && first == mdrt_vdp_rgb(BACKDROP, MDRT_RGB_CONSOLE));   /* (run 3's colours) */
+    }
+    printf("  captures: GIFs of %d, %d and %d frames\n", frames[0], frames[1], frames[2]);
+    CHECK(frames[0] >= 60 && frames[0] <= 120);           /* ~2.5 s at 30 a second */
+    CHECK(frames[1] >= 15 && frames[1] <= 45);            /* the recording: ~1 s */
+    CHECK(frames[2] >= 20);                               /* the replay since the first */
+    t = slurp(settings_path, &len);
+    CHECK(t && strstr(t, "capture.format = mp4\n") && strstr(t, "key.save_replay = Shift+F12\n") && strstr(t, "key.record = Ctrl+F11\n"));
+    if (system("ffmpeg -version >/dev/null 2>&1") == 0 && t) {
+        char *at = strstr(t, "capture.ffmpeg = no-such-ffmpeg-here\n");
+        if (at) {                                         /* ("no-such-ffmpeg-here" -> "ffmpeg") */
+            memmove(at + 23, at + 36, strlen(at + 36) + 1);
+            memcpy(at + 17, "ffmpeg", 6);
+        }
+        spit(settings_path, t);
+        for (int i = 0, k = videos("", names); i < k; i++) remove(names[i]);
+        run = 9;
+        CHECK_EQ(play(), 0);
+        CHECK_EQ(videos(".mp4", names), 1);
+        long ml = 0;
+        char *mp4 = videos(".mp4", names) ? slurp(names[0], &ml) : NULL;
+        CHECK(mp4 && ml > 1000 && !memcmp(mp4 + 4, "ftyp", 4));
+        printf("  captures: an MP4 of %ld bytes\n", ml);
+        free(mp4);
+    } else printf("  captures: no ffmpeg here, so no MP4 made\n");
+    free(t);
     return check_done("platform_test");
 }
