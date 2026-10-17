@@ -155,7 +155,9 @@ This README carries the status.
   window's size, place and full screen remembered;
   volume and mute, the sound device and latency; fast-forward held (4 times by default), slow
   motion, a frame at a time while paused, pausing when the window loses focus (the keys let go);
-  screenshots as PNG at the console's resolution (`mdrt/png.h`); sharp (whole multiple, then
+  screenshots as PNG at the console's resolution (`mdrt/png.h`, which also writes indexed
+  pictures and reads any PNG back, deflate both ways with no zlib; `tests/png_unit.c` reads PNGs of
+  every kind made by `tools/gen_png_cases.py` and damaged ones); sharp (whole multiple, then
   smooth), integer and fit scaling, square or 4:3 (`mdrt/view.h`), hi-DPI. Changes show for a
   moment in the window's title. `tests/platform_unit.c` checks the settings, the placements and
   the PNG decoded back; `make sdl-check` plays the platform from a thread pressing keys under SDL's

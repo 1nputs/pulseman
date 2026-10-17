@@ -49,8 +49,10 @@ own records); NULL keeps `sram_path`.
 
 The pieces with no SDL in them are there for another platform (a browser's) to use:
 `mdrt/settings.h` (the file's text, read and written back with its comments and unknown keys),
-`mdrt/view.h` (where the picture goes in a window for each scaling), `mdrt/png.h` (a
-screenshot's PNG, in memory), `mdrt/menu.h` (the menu's pages, inputs and drawing, with
+`mdrt/view.h` (where the picture goes in a window for each scaling), `mdrt/png.h` (PNGs
+in memory: a screenshot's; an indexed picture's, deflated; any PNG read back, every colour type,
+bit depth and interlacing, checked so that a file from anywhere is safe to read; and deflate both
+ways, `mdrt_deflate` and `mdrt_inflate`), `mdrt/menu.h` (the menu's pages, inputs and drawing, with
 pulseman's own font), `mdrt/upscale.h` (Scale2x, Scale3x and MMPX: the picture magnified as
 pixel art, before the window's scaling), `mdrt/look.h` (dithering blended, and a picture
 tube's scanlines and mask as an overlay to multiply the picture by), `mdrt/gif.h` (animated GIFs
