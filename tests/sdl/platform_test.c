@@ -16,7 +16,7 @@
  * captures: the replay saved by F10, a recording by F11, the replay from the menu, each GIF read
  * back, and a control's key set with Ctrl by pressing it; and an older build's keys taken out of
  * the settings; and the client's own options page (a preset changing another value, the values
- * given at each power on, kept in the file). */
+ * given at each power on, kept in the file, and the save RAM in the file the values name). */
 #include <SDL2/SDL.h>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -453,7 +453,7 @@ static int gif_read(const char *path, int *w, int *h, uint32_t *first)
 }
 
 /* run 9: the client's own options page: a choice whose last value is a preset (it sets the number)
- * and a number; the values at each power on */
+ * and a number; the values at each power on, and the save RAM file they name */
 static const char *const opt_names[3] = { "first", "second", "third" };
 static const mdrt_sdl_option test_options[2] = {
     { "test.choice", "A choice", 3, opt_names, NULL, 0, 0, 0, 0 },
@@ -461,6 +461,8 @@ static const mdrt_sdl_option test_options[2] = {
 };
 static void options_use(const int *v, void *user) { (void)user; SDL_AtomicSet(&opt_seen[0], v[0]); SDL_AtomicSet(&opt_seen[1], v[1]); SDL_AtomicAdd(&opt_uses, 1); }
 static int options_changed(int which, int *v, void *user) { (void)user; if (which == 0 && v[0] == 2) { v[1] = 9; return 1; } return 0; }
+/* the save RAM's file follows the choice (a league's own records) */
+static const char *sram_file(void *user) { (void)user; static char path[32]; snprintf(path, sizeof path, "options-%d.srm", SDL_AtomicGet(&opt_seen[0])); return path; }
 
 static int rules_player(void *user)
 {
@@ -534,6 +536,7 @@ static void game(mdrt *m, void *user)
         mdrt_vblank_end(m);
         if (mdrt_wait_vblank(m)) break;
         SDL_AtomicAdd(&game_frame, 1);                    /* the game's own count: what a state holds */
+        if (run == 9) mdrt_sram_write8(mdrt_get_sram(m), 1, (uint8_t)SDL_AtomicGet(&game_frame));   /* (save RAM written: kept) */
         unsigned req = mdrt_requests(m);
         const char *path = mdrt_request_path(m);
         if ((req & MDRT_REQUEST_SAVE) && path && !SDL_AtomicGet(&refuse_saves)) {
@@ -591,6 +594,11 @@ static int play(void)
         o.noptions = 2;
         o.options_use = options_use;
         o.options_changed = options_changed;
+        o.sram_path = "options.srm";
+        o.sram_file = sram_file;
+        c.sram_size = 0x2000;
+        remove("options-0.srm");
+        remove("options-2.srm");
         t = SDL_CreateThread(rules_player, "rules", NULL);   /* (out of the game, which a reset restarts) */
     }
     if (run == 3 || run == 4) {
@@ -812,5 +820,12 @@ int main(int argc, char **argv)
     t = slurp(settings_path, &len);
     CHECK(t && strstr(t, "test.choice = third\n") && strstr(t, "test.number = 8\n"));
     free(t);
+    FILE *f0 = fopen("options-0.srm", "rb"), *f2 = fopen("options-2.srm", "rb"), *fo = fopen("options.srm", "rb");
+    CHECK(f0 && f2 && !fo);                               /* each game's save RAM in the file its options named */
+    if (f0) fclose(f0);
+    if (f2) fclose(f2);
+    if (fo) fclose(fo);
+    remove("options-0.srm");
+    remove("options-2.srm");
     return check_done("platform_test");
 }

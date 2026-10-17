@@ -88,6 +88,9 @@ typedef struct mdrt_sdl_options {
     int noptions;
     void (*options_use)(const int *values, void *user);
     int (*options_changed)(int which, int *values, void *user);
+    /* the save RAM's file for the game about to start, asked after options_use (so it can follow
+     * the client's options: another save for another league); NULL, or a NULL return: sram_path */
+    const char *(*sram_file)(void *user);
 } mdrt_sdl_options;
 
 /* the client's game: runs on the game thread with the console made from the configuration; when

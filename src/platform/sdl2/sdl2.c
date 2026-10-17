@@ -157,6 +157,7 @@ typedef struct sdl {
     int turbo_rate, dead_zone;  /* turbo presses a second; the stick's dead zone, in % */
     char ctrl_label[SLOTS + 1][64];
     const char *ctrl_choice[SLOTS + 1];
+    char sram_file[1024];     /* this game's save RAM file ("": none): sram_file, else sram_path */
     /* save slots and quick resume (states/slotN.state with slotN.png; states/resume.state) */
     char req_path[1100], game_path[1100];   /* the file the next SAVE / LOAD names (s->lock); the game thread's copy */
     int pending;                /* a save asked for: its slot (0 quick resume), -1 none */
@@ -207,8 +208,8 @@ typedef struct sdl {
 static void sram_save(sdl *s)
 {
     mdrt_sram *r = mdrt_get_sram(s->m);
-    if (!s->o->sram_path || !r->size || !r->dirty) return;
-    FILE *f = fopen(s->o->sram_path, "wb");
+    if (!s->sram_file[0] || !r->size || !r->dirty) return;
+    FILE *f = fopen(s->sram_file, "wb");
     if (!f) return;
     if (fwrite(r->bytes, 1, r->size, f) == r->size) r->dirty = 0;
     fclose(f);
@@ -217,10 +218,10 @@ static void sram_save(sdl *s)
 static void sram_load(sdl *s)
 {
     mdrt_sram *r = mdrt_get_sram(s->m);
-    if (!s->o->sram_path || !r->size) return;
-    FILE *f = fopen(s->o->sram_path, "rb");
+    if (!s->sram_file[0] || !r->size) return;
+    FILE *f = fopen(s->sram_file, "rb");
     if (!f) return;
-    if (fread(r->bytes, 1, r->size, f) != r->size) fprintf(stderr, "%s: short save RAM file\n", s->o->sram_path);
+    if (fread(r->bytes, 1, r->size, f) != r->size) fprintf(stderr, "%s: short save RAM file\n", s->sram_file);
     fclose(f);
 }
 
@@ -348,6 +349,8 @@ static int start_game(sdl *s)
     if (!s->m) return 0;
     mdrt_pads_set_adaptor(mdrt_get_pads(s->m), s->adaptor);   /* (in the ports at power on) */
     if (s->o->options_use && s->opt_values) s->o->options_use(s->opt_values, s->user);   /* (the client's, for this game) */
+    const char *save = s->o->sram_file ? s->o->sram_file(s->user) : NULL;
+    snprintf(s->sram_file, sizeof s->sram_file, "%s", save ? save : s->o->sram_path ? s->o->sram_path : "");
     s->waits = s->queued = 0;
     s->next_tick = 0;
     if (s->dev) { SDL_PauseAudioDevice(s->dev, 1); SDL_ClearQueuedAudio(s->dev); }
