@@ -128,8 +128,11 @@ void mdrt_vdp_beam_to(mdrt_vdp_beam *b, uint32_t t);    /* now = t, the lines st
  * draws) */
 int mdrt_vdp_lines(const mdrt_vdp *v);
 uint32_t mdrt_vdp_line_start(const mdrt_vdp *v, int n);
-/* a bus format colour to 0x00RRGGBB, 3-bit levels expanded by the curve (0 linear: level x 255 / 7,
- * 1 the levels x 34 Genesis Plus GX uses for normal colours) */
+/* a bus format colour to 0x00RRGGBB, 3-bit levels expanded by the curve: linear (level x 255 / 7),
+ * the levels x 34 Genesis Plus GX uses for normal colours, or the console's own (its video output
+ * measured, as published on Sega Retro's palette page: 0 52 87 116 144 172 206 255, the steps
+ * larger at the ends than in the middle) */
+enum { MDRT_RGB_LINEAR, MDRT_RGB_GPGX, MDRT_RGB_CONSOLE };
 uint32_t mdrt_vdp_rgb(uint16_t colour, int curve);
 
 #endif

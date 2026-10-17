@@ -42,8 +42,9 @@ The pieces with no SDL in them are there for another platform (a browser's) to u
 `mdrt/settings.h` (the file's text, read and written back with its comments and unknown keys),
 `mdrt/view.h` (where the picture goes in a window for each scaling), `mdrt/png.h` (a
 screenshot's PNG, in memory), `mdrt/menu.h` (the menu's pages, inputs and drawing, with
-pulseman's own font) and `mdrt/upscale.h` (Scale2x, Scale3x and MMPX: the picture magnified as
-pixel art, before the window's scaling).
+pulseman's own font), `mdrt/upscale.h` (Scale2x, Scale3x and MMPX: the picture magnified as
+pixel art, before the window's scaling) and `mdrt/look.h` (dithering blended, and a picture
+tube's scanlines and mask as an overlay to multiply the picture by).
 
 Without a window, fill `c.platform` (present, audio, wait, input: any may be NULL), create the
 console with `mdrt_new(&c)` and call the game yourself.

@@ -20,6 +20,7 @@
 #define get_cwd getcwd
 #define SEP '/'
 #endif
+#include "mdrt/look.h"
 #include "mdrt/menu.h"
 #include "mdrt/platform_sdl2.h"
 #include "mdrt/png.h"
@@ -73,6 +74,15 @@ static const char *const scale_name[3] = { "sharp", "integer", "fit" };
 static const char *const aspect_name[2] = { "square", "4:3" };
 static const char *const aspect_label[2] = { "square pixels", "4:3" };
 static const char *const off_on[2] = { "off", "on" };
+/* the colours' levels (mdrt_vdp_rgb's curves), and the looks (mdrt/look.h) */
+static const char *const colours_name[3] = { "standard", "full", "console" };
+static const char *const colours_label[3] = { "standard", "full range", "the console's" };
+static const int colours_curve[3] = { MDRT_RGB_GPGX, MDRT_RGB_LINEAR, MDRT_RGB_CONSOLE };
+static const char *const blend_name[MDRT_BLEND_COUNT] = { "off", "dither", "soft" };
+static const char *const blend_label[MDRT_BLEND_COUNT] = { "off", "dithering", "everything" };
+static const char *const scanlines_name[MDRT_SCANLINES_COUNT] = { "off", "light", "medium", "heavy" };
+static const char *const mask_name[MDRT_MASK_COUNT] = { "off", "aperture", "slot", "dot" };
+static const char *const mask_label[MDRT_MASK_COUNT] = { "off", "aperture grille", "slot mask", "shadow mask" };
 static const char *const chip_name[2] = { "YM2612", "YM3438" };
 static const int fast_speeds[6] = { 2, 3, 4, 6, 8, 0 };
 static const char *const fast_label[6] = { "2x", "3x", "4x", "6x", "8x", "as fast as it goes" };
@@ -84,7 +94,7 @@ static const char *const fast_label[6] = { "2x", "3x", "4x", "6x", "8x", "as fas
 enum { PAGE_MAIN, PAGE_VIDEO, PAGE_SOUND, PAGE_OPTIONS, PAGE_KEYS, PAGE_ROM, PAGE_PLAYERS, PAGE_CBUTTONS, PAGE_SAVE, PAGE_LOAD };
 enum { SLOT_COUNT = 8 };                                  /* save slots; 0 is quick resume's */
 enum { I_RESUME = 1, I_ROM, I_RESET, I_SAVE, I_LOAD, I_VIDEO, I_SOUND, I_OPTIONS, I_KEYS, I_QUIT, I_BACK,
-       I_UPSCALE, I_SCALE, I_ASPECT, I_FULL, I_VOLUME, I_MUTE, I_FM_CORE, I_FM_CHIP, I_FOCUS, I_FAST, I_UP,
+       I_UPSCALE, I_SCALE, I_ASPECT, I_FULL, I_COLOURS, I_BLEND, I_SCANLINES, I_MASK, I_VOLUME, I_MUTE, I_FM_CORE, I_FM_CHIP, I_FOCUS, I_FAST, I_UP,
        I_PLAYERS, I_ADAPTOR, I_TURBO, I_DEADZONE, I_CBUTTONS, I_RESUME_OPT,
        I_SLOT = 800,             /* + slot (1-8) */
        I_PLAYER = 900,           /* + player (0-3) */
@@ -105,7 +115,9 @@ typedef struct sdl {
     SDL_atomic_t fast_speed;    /* fast-forward's times the speed (0: as fast as it goes) */
     SDL_mutex *lock;
     uint32_t picture[320 * 240];
+    uint16_t raw[320 * 240];    /* the picture's VDP colours (made RGB again when the colours change) */
     int width, height, fresh, redraw;
+    SDL_atomic_t curve;         /* the colours' levels: mdrt_vdp_rgb's curve */
     SDL_atomic_t buttons[MDRT_PADS], quit, stop, paused, in_menu, done;
     SDL_atomic_t saves, loads, rewind;      /* presses of the state keys since the game last asked; held */
     SDL_atomic_t fast, slow, step, volume, mute;
@@ -145,7 +157,10 @@ typedef struct sdl {
     uint32_t thumb[320 * 240];  /* the menu's picture of the slot selected */
     int scale, aspect, focus_pause, auto_paused;
     int upscale;                /* MDRT_UPSCALE_: the game's frames through it, before the scaling */
-    uint32_t *frame, *big, *big_scratch;   /* the frame taken from the game thread; it upscaled; mmpx4x's halfway */
+    int colours, blend, scanlines, mask;   /* colours_*; MDRT_BLEND_, _SCANLINES_, _MASK_ */
+    uint32_t *frame, *blended, *big, *big_scratch;   /* the frame taken from the game thread; it blended; upscaled; mmpx4x's halfway */
+    SDL_Texture *tube;          /* the scanlines and mask over the picture, for: */
+    int tube_w, tube_h, tube_cols, tube_lines, tube_scan, tube_mask;
     SDL_Texture *big_tex;       /* the upscaled frame, big_f times the picture's texture */
     int big_f;
     const char *upscale_label[MDRT_UPSCALE_COUNT];
@@ -190,9 +205,14 @@ static void sram_load(sdl *s)
 static void present(void *user, const uint16_t *px, int w, int h, int pitch)
 {
     sdl *s = user;
+    int curve = SDL_AtomicGet(&s->curve);
     SDL_LockMutex(s->lock);
     for (int y = 0; y < h; y++)
-        for (int x = 0; x < w; x++) s->picture[y * 320 + x] = 0xFF000000u | mdrt_vdp_rgb(px[y * pitch + x], 1);
+        for (int x = 0; x < w; x++) {
+            uint16_t c = px[y * pitch + x];
+            s->raw[y * 320 + x] = c;
+            s->picture[y * 320 + x] = 0xFF000000u | mdrt_vdp_rgb(c, curve);
+        }
     s->width = w;
     s->height = h;
     s->fresh = 1;
@@ -451,7 +471,10 @@ static void settings_load(sdl *s)
             "# Backspace, Escape, Left Shift, Right Ctrl, Keypad 8, PageUp, or the key's own sign (, . - =).\n"
             "# On a Mac the function keys need Fn held, unless they are set to act as F1, F2 ...\n"
             "# video.upscaler: off, scale2x, scale3x, mmpx2x or mmpx4x (pixel-art magnification, before the\n"
-            "# scaling). video.scale: sharp, integer or fit. video.aspect: square or 4:3. audio.volume: 0-100.\n"
+            "# scaling). video.scale: sharp, integer or fit. video.aspect: square or 4:3. video.colours:\n"
+            "# standard, full or console (the levels a console puts out). video.blend: off, dither or soft.\n"
+            "# video.scanlines: off, light, medium or heavy. video.mask: off, aperture, slot or dot.\n"
+            "# audio.volume: 0-100.\n"
             "# audio.device: empty for the default. audio.latency: frames of sound queued (1-10).\n"
             "# audio.fm_core: nuked or ymfm. audio.fm_chip: YM2612 or YM3438.\n"
             "# general.fast_forward: times the speed while it is held (0: as fast as it goes).\n";
@@ -460,7 +483,8 @@ static void settings_load(sdl *s)
     const char *defaults[][2] = {
         { "game.rom", "" },
         { "window.width", "960" }, { "window.height", "672" }, { "window.fullscreen", "0" },
-        { "video.upscaler", "off" }, { "video.scale", "sharp" }, { "video.aspect", "square" },
+        { "video.upscaler", "off" }, { "video.scale", "sharp" }, { "video.aspect", "square" }, { "video.colours", "standard" },
+        { "video.blend", "off" }, { "video.scanlines", "off" }, { "video.mask", "off" },
         { "audio.volume", "100" }, { "audio.mute", "0" }, { "audio.device", "" }, { "audio.latency", "3" },
         { "audio.fm_core", mdrt_fm_core() }, { "audio.fm_chip", "YM2612" },
         { "general.pause_on_focus_loss", "1" }, { "general.fast_forward", "4" }, { "general.screenshots", "screenshots" },
@@ -507,6 +531,11 @@ static void settings_load(sdl *s)
         s->upscale_label[i] = mdrt_upscale_label(i);
         if (up && !strcmp(up, mdrt_upscale_name(i))) s->upscale = i;
     }
+    s->colours = named(mdrt_settings_get(s->set, "video.colours"), colours_name, 3, 0);
+    SDL_AtomicSet(&s->curve, colours_curve[s->colours]);
+    s->blend = named(mdrt_settings_get(s->set, "video.blend"), blend_name, MDRT_BLEND_COUNT, MDRT_BLEND_OFF);
+    s->scanlines = named(mdrt_settings_get(s->set, "video.scanlines"), scanlines_name, MDRT_SCANLINES_COUNT, MDRT_SCANLINES_OFF);
+    s->mask = named(mdrt_settings_get(s->set, "video.mask"), mask_name, MDRT_MASK_COUNT, MDRT_MASK_OFF);
     s->aspect = o->aspect ? MDRT_ASPECT_4_3 : named(mdrt_settings_get(s->set, "video.aspect"), aspect_name, 2, MDRT_ASPECT_SQUARE);
     SDL_AtomicSet(&s->volume, clamp(mdrt_settings_get_int(s->set, "audio.volume", 100), 0, 100));
     SDL_AtomicSet(&s->mute, mdrt_settings_get_int(s->set, "audio.mute", 0) != 0);
@@ -838,6 +867,10 @@ static void build_page(sdl *s, int page, int select)
         mdrt_menu_add_choice(m, I_UPSCALE, "Upscaler", s->upscale_label, MDRT_UPSCALE_COUNT, s->upscale);
         mdrt_menu_add_choice(m, I_SCALE, "Scaling", scale_name, 3, s->scale);
         mdrt_menu_add_choice(m, I_ASPECT, "Aspect", aspect_label, 2, s->aspect);
+        mdrt_menu_add_choice(m, I_COLOURS, "Colours", colours_label, 3, s->colours);
+        mdrt_menu_add_choice(m, I_BLEND, "Blend", blend_label, MDRT_BLEND_COUNT, s->blend);
+        mdrt_menu_add_choice(m, I_SCANLINES, "Scanlines", scanlines_name, MDRT_SCANLINES_COUNT, s->scanlines);
+        mdrt_menu_add_choice(m, I_MASK, "Mask", mask_label, MDRT_MASK_COUNT, s->mask);
         mdrt_menu_add_choice(m, I_FULL, "Full screen", off_on, 2, is_fullscreen(s));
         mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
         snprintf(m->subtitle, sizeof m->subtitle, "Sharp: smooth edges. Integer: even pixels. Fit: fills.");
@@ -1207,6 +1240,28 @@ static void act(sdl *s, int id)
         s->aspect = it->value;
         mdrt_settings_set(s->set, "video.aspect", aspect_name[s->aspect]);
         return;
+    case I_COLOURS:                                       /* (the picture under the menu made again) */
+        s->colours = it->value;
+        mdrt_settings_set(s->set, "video.colours", colours_name[s->colours]);
+        SDL_AtomicSet(&s->curve, colours_curve[s->colours]);
+        SDL_LockMutex(s->lock);
+        for (int y = 0; y < s->height; y++)
+            for (int x = 0; x < s->width; x++) s->picture[y * 320 + x] = 0xFF000000u | mdrt_vdp_rgb(s->raw[y * 320 + x], colours_curve[s->colours]);
+        s->fresh = 1;
+        SDL_UnlockMutex(s->lock);
+        return;
+    case I_BLEND:                                         /* (these three: from when the menu closes) */
+        s->blend = it->value;
+        mdrt_settings_set(s->set, "video.blend", blend_name[s->blend]);
+        return;
+    case I_SCANLINES:
+        s->scanlines = it->value;
+        mdrt_settings_set(s->set, "video.scanlines", scanlines_name[s->scanlines]);
+        return;
+    case I_MASK:
+        s->mask = it->value;
+        mdrt_settings_set(s->set, "video.mask", mask_name[s->mask]);
+        return;
     case I_FULL: set_fullscreen(s, it->value); return;
     case I_VOLUME:
         SDL_AtomicSet(&s->volume, it->value);
@@ -1379,55 +1434,94 @@ static void read_buttons(sdl *s)
 
 /* ---- the picture ------------------------------------------------------------------------------- */
 
+/* room for the game's frame taken out and blended */
+static int frame_ready(sdl *s)
+{
+    if (!s->frame) s->frame = malloc(320 * 240 * sizeof *s->frame);
+    if (!s->blended) s->blended = malloc(320 * 240 * sizeof *s->blended);
+    return s->frame && s->blended;
+}
+
 /* room for the upscaled frame at factor f (the buffers once, at the largest; a texture for f) */
 static int big_ready(sdl *s, int f)
 {
-    if (!s->frame) s->frame = malloc(320 * 240 * sizeof *s->frame);
     if (!s->big) s->big = malloc(320 * 240 * 16 * sizeof *s->big);
     if (!s->big_scratch) s->big_scratch = malloc(320 * 240 * 4 * sizeof *s->big_scratch);
     if (s->big_tex && s->big_f != f) { SDL_DestroyTexture(s->big_tex); s->big_tex = NULL; }
     if (!s->big_tex) s->big_tex = SDL_CreateTexture(s->ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, 320 * f, 240 * f);
     s->big_f = f;
-    return s->frame && s->big && s->big_scratch && s->big_tex;
+    return s->big && s->big_scratch && s->big_tex;
 }
 
+/* the scanlines and mask for a picture of cols x lines shown w x h (made again when either changes) */
+static int tube_ready(sdl *s, int w, int h, int cols, int lines)
+{
+    if (s->tube && s->tube_w == w && s->tube_h == h && s->tube_cols == cols && s->tube_lines == lines
+        && s->tube_scan == s->scanlines && s->tube_mask == s->mask) return 1;
+    if (s->tube) { SDL_DestroyTexture(s->tube); s->tube = NULL; }
+    uint32_t *px = w > 0 && h > 0 ? malloc((size_t)w * (size_t)h * sizeof *px) : NULL;
+    if (px) {
+        mdrt_look_overlay(s->scanlines, s->mask, w, h, cols, lines, px, w);
+        s->tube = SDL_CreateTexture(s->ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, w, h);
+        if (s->tube) { SDL_UpdateTexture(s->tube, NULL, px, w * 4); SDL_SetTextureBlendMode(s->tube, SDL_BLENDMODE_MOD); }
+    }
+    free(px);
+    s->tube_w = w; s->tube_h = h; s->tube_cols = cols; s->tube_lines = lines;
+    s->tube_scan = s->scanlines; s->tube_mask = s->mask;
+    return s->tube != NULL;
+}
+
+/* the game's frame through the looks: blended, upscaled, scaled to the window, then the tube's
+ * scanlines and mask multiplied in and the picture added again at their lift (the menu: as it is) */
 static void draw(sdl *s)
 {
-    int method = s->menu_open ? MDRT_UPSCALE_OFF : s->upscale, f = mdrt_upscale_factor(method);
+    int game = !s->menu_open, method = game ? s->upscale : MDRT_UPSCALE_OFF, blend = game ? s->blend : MDRT_BLEND_OFF;
+    int tube = game && mdrt_look_tube(s->scanlines, s->mask);
+    if ((method || blend) && !frame_ready(s)) method = blend = 0;
+    int f = mdrt_upscale_factor(method);
     if (method && !big_ready(s, f)) { method = MDRT_UPSCALE_OFF; f = 1; }
+    int work = method || blend;
     SDL_LockMutex(s->lock);
     int fresh = s->fresh, w = s->width, h = s->height;
     if (s->menu_open && (fresh || s->redraw)) {          /* the menu over the picture as it stands */
         if (!w) { w = 320; h = 224; memset(s->menu_px, 0, sizeof s->menu_px); }
         else for (int y = 0; y < h; y++) memcpy(s->menu_px + y * 320, s->picture + y * 320, (size_t)w * 4);
-    } else if (fresh && method) {                         /* (taken, then upscaled outside the lock) */
+    } else if (fresh && work) {                           /* (taken, then worked on outside the lock) */
         for (int y = 0; y < h; y++) memcpy(s->frame + y * 320, s->picture + y * 320, (size_t)w * 4);
     } else if (fresh) SDL_UpdateTexture(s->tex, NULL, s->picture, 320 * 4);
     s->fresh = 0;
     SDL_UnlockMutex(s->lock);
     if ((!fresh && !s->redraw) || (!w && !s->menu_open)) return;
     SDL_Texture *tex = s->tex;
+    int cols = w, lines = h;                              /* (the picture's own size, for the scanlines) */
     if (s->menu_open) {
         if (!w) { w = 320; h = 224; }
         mdrt_menu_draw(&s->menu, s->menu_px, w, h, 320);
         SDL_UpdateTexture(s->tex, NULL, s->menu_px, 320 * 4);
-    } else if (method) {                                  /* the game's frame, magnified */
+    } else if (work) {
         if (fresh) {
-            mdrt_upscale(method, s->frame, w, h, 320, s->big, w * f, s->big_scratch);
-            SDL_Rect r = { 0, 0, w * f, h * f };
-            SDL_UpdateTexture(s->big_tex, &r, s->big, w * f * 4);
+            const uint32_t *px = s->frame;
+            if (blend) { mdrt_look_blend(blend, s->frame, w, h, 320, s->blended, 320); px = s->blended; }
+            if (method) {                                 /* the game's frame, magnified */
+                mdrt_upscale(method, px, w, h, 320, s->big, w * f, s->big_scratch);
+                SDL_Rect r = { 0, 0, w * f, h * f };
+                SDL_UpdateTexture(s->big_tex, &r, s->big, w * f * 4);
+            } else {
+                SDL_Rect r = { 0, 0, w, h };
+                SDL_UpdateTexture(s->tex, &r, px, 320 * 4);
+            }
         }
-        tex = s->big_tex;
-        w *= f;
-        h *= f;
+        if (method) { tex = s->big_tex; w *= f; h *= f; }
     }
     s->redraw = 0;
     int ww, wh;
     SDL_GetRendererOutputSize(s->ren, &ww, &wh);
     mdrt_view v = mdrt_view_place(ww, wh, w, h, s->scale, s->aspect);
-    SDL_Rect src = { 0, 0, w, h }, dst = { v.x, v.y, v.w, v.h };
+    SDL_Rect src = { 0, 0, w, h }, dst = { v.x, v.y, v.w, v.h }, *from = &src;
     SDL_SetRenderDrawColor(s->ren, 0, 0, 0, 255);
     SDL_RenderClear(s->ren);
+    SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_NONE);
+    SDL_SetTextureScaleMode(tex, s->scale == MDRT_SCALE_SHARP ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
     if (s->scale == MDRT_SCALE_SHARP && v.prescale > 1 && s->targets) {
         int pw = w * v.prescale, ph = h * v.prescale;     /* enlarged by a whole multiple first, then smoothly */
         if (!s->pre || s->pre_w != pw || s->pre_h != ph) {
@@ -1442,13 +1536,22 @@ static void draw(sdl *s)
             SDL_SetRenderTarget(s->ren, s->pre);
             SDL_RenderCopy(s->ren, tex, &src, NULL);
             SDL_SetRenderTarget(s->ren, NULL);
-            SDL_RenderCopy(s->ren, s->pre, NULL, &dst);
-            SDL_RenderPresent(s->ren);
-            return;
+            tex = s->pre;
+            from = NULL;
+            SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_NONE);
         }
     }
-    SDL_SetTextureScaleMode(tex, s->scale == MDRT_SCALE_SHARP ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
-    SDL_RenderCopy(s->ren, tex, &src, &dst);
+    SDL_RenderCopy(s->ren, tex, from, &dst);
+    int lift = tube ? mdrt_look_lift(s->scanlines, s->mask) : 0;
+    if (tube && tube_ready(s, v.w, v.h, cols, lines)) {
+        SDL_RenderCopy(s->ren, s->tube, NULL, &dst);
+        if (lift) {                                       /* (the light they took, given back) */
+            SDL_SetTextureBlendMode(tex, SDL_BLENDMODE_ADD);
+            SDL_SetTextureColorMod(tex, (Uint8)lift, (Uint8)lift, (Uint8)lift);
+            SDL_RenderCopy(s->ren, tex, from, &dst);
+            SDL_SetTextureColorMod(tex, 255, 255, 255);
+        }
+    }
     SDL_RenderPresent(s->ren);
 }
 
@@ -1600,7 +1703,7 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
     mdrt_settings_free(s->set);
     mdrt_menu_free(&s->menu);
     free_entries(s);
-    free(s->frame); free(s->big); free(s->big_scratch); free(s->pending_pic);
+    free(s->frame); free(s->blended); free(s->big); free(s->big_scratch); free(s->pending_pic);
     if (stopped) { mdrt_free(s->m); SDL_DestroyMutex(s->lock); free(s->loud); free(s->rom); free(s); }   /* (else the thread still has them) */
     SDL_Quit();
     return 0;

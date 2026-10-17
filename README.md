@@ -83,6 +83,19 @@ This README carries the status.
   chosen last; quick resume saves at quitting and loads at the next start, or forgets when no state
   could be taken. `make sdl-check`: F9, the Save and Load pages, F10, a save the game refuses, a
   state at quitting and the next start back at it, and quitting out of play leaving none.
+- 2026-10-16, the looks in the SDL2 platform's Video page: the colours' levels (`mdrt_vdp_rgb`'s
+  curves: Genesis Plus GX's as before, full range, or the console's own, measured at its video
+  output), dithering blended as a television blended it (only where a column of one colour stands
+  between two of another with its colour again beyond, so lines and edges stay sharp; or every
+  pixel softened across), and a picture tube's scanlines (light, medium, heavy: at the picture's own
+  lines at any size) and mask (aperture grille, slot mask, shadow mask: at the window's pixels).
+  `mdrt/look.h` has no SDL: the platform blends the frame before any upscaler, then multiplies the
+  scaled picture by an overlay the size of the picture in the window and adds the picture again at
+  the lift, which gives back on average the light the tube takes, so the brightest colours still
+  reach white. The game's frames only, never the menu; screenshots stay as the console made them.
+  `platform_unit` checks the levels, the blend on hand-made rows, the scanlines' rows at 2x, 3x
+  and an uneven size, each mask's pattern, and the light kept on average; `make sdl-check` turns
+  them on from the menu and plays with them.
 - 2026-10-16, the review's small findings: PAL's master clock (`MDRT_MASTER_CLOCK_PAL`,
   `mdrt_master_clock`) in the mixer and the platform; the default HV counter through the VDP's
   counter mapping; `mdrt_vdp_reg` and a rule for what in the structs is API; the mixer's gains in

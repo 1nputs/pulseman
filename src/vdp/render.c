@@ -235,6 +235,7 @@ uint32_t mdrt_vdp_rgb(uint16_t colour, int curve)
 {
     static const uint8_t linear[8] = { 0, 36, 73, 109, 146, 182, 219, 255 };
     static const uint8_t gpgx[8] = { 0, 34, 68, 102, 136, 170, 204, 238 };
-    const uint8_t *t = curve ? gpgx : linear;
+    static const uint8_t console[8] = { 0, 52, 87, 116, 144, 172, 206, 255 };
+    const uint8_t *t = curve == MDRT_RGB_CONSOLE ? console : curve == MDRT_RGB_GPGX ? gpgx : linear;
     return (uint32_t)t[(colour >> 1) & 7] << 16 | (uint32_t)t[(colour >> 5) & 7] << 8 | t[(colour >> 9) & 7];
 }

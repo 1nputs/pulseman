@@ -4,15 +4,20 @@
  * deflate blocks, Adler-32, every pixel); and the menu: its moves and values, a long list's pages,
  * its drawing (MDRT_MENU_PNG=FILE writes a page as a PNG to look at); and the upscalers: hand-worked
  * cases, their outputs on generated pixel art against hashes of the MMPX authors' reference code's
- * (MDRT_UPSCALE_DUMP=DIR writes the inputs for that code), Scale3x against a second formulation. */
+ * (MDRT_UPSCALE_DUMP=DIR writes the inputs for that code), Scale3x against a second formulation;
+ * and the looks: the console's colour levels, dithering blended where it is and nowhere else, the
+ * soft blend, the scanlines' rows at whole and uneven sizes, the masks' stripes, slots and dots, and
+ * the light they take made up on average by the lift. */
 #include <stdlib.h>
 #include <string.h>
 #include "check.h"
 #include <stdio.h>
+#include "mdrt/look.h"
 #include "mdrt/menu.h"
 #include "mdrt/png.h"
 #include "mdrt/settings.h"
 #include "mdrt/upscale.h"
+#include "mdrt/vdp.h"
 #include "mdrt/view.h"
 
 static void settings(void)
@@ -353,6 +358,106 @@ static void upscalers(void)
     }
 }
 
+/* ---- the looks ------------------------------------------------------------------------------- */
+
+/* a channel (16 red, 8 green, 0 blue) of the overlay at x, y */
+static int ch(const uint32_t *o, int pitch, int x, int y, int sh) { return (int)(o[y * pitch + x] >> sh & 0xFF); }
+
+static void looks(void)
+{
+    /* the colours' levels: level 1 and 7 of each curve */
+    CHECK_EQ(mdrt_vdp_rgb(0x0002, MDRT_RGB_CONSOLE), 52u << 16);
+    CHECK_EQ(mdrt_vdp_rgb(0x0E00, MDRT_RGB_CONSOLE), 255);
+    CHECK_EQ(mdrt_vdp_rgb(0x00A0, MDRT_RGB_CONSOLE), 172u << 8);
+    CHECK_EQ(mdrt_vdp_rgb(0x0EEE, MDRT_RGB_GPGX), 0xEEEEEE);
+    CHECK_EQ(mdrt_vdp_rgb(0x0EEE, MDRT_RGB_LINEAR), 0xFFFFFF);
+
+    /* dithering: columns A B A B A B mixed; a lone column (A A B A A), a flat run, and two columns
+     * of B (B B A A B B) left; a short dither (A B A B between C's) mixed inside, its ends kept */
+    enum { A = 0xFF000000, B = 0xFFFFFFFF, C = 0xFF0000FF, M = 0xFF808080 };
+    static const uint32_t rows[4][8] = {
+        { A, B, A, B, A, B, A, B }, { A, A, A, B, A, A, A, A }, { B, B, A, A, B, B, A, A }, { C, A, B, A, B, C, C, C },
+    };
+    static const uint32_t want[4][8] = {
+        { A, M, M, M, M, M, M, B }, { A, A, A, B, A, A, A, A }, { B, B, A, A, B, B, A, A }, { C, A, M, M, B, C, C, C },
+    };
+    uint32_t out[64];
+    mdrt_look_blend(MDRT_BLEND_DITHER, &rows[0][0], 8, 4, 8, out, 8);
+    for (int y = 0; y < 4; y++)
+        for (int x = 0; x < 8; x++)
+            if (out[y * 8 + x] != want[y][x]) { printf("  blend: row %d x %d: %08X, not %08X\n", y, x, out[y * 8 + x], want[y][x]); CHECK(0); }
+    mdrt_look_blend(MDRT_BLEND_OFF, &rows[0][0], 8, 4, 8, out, 8);
+    CHECK(!memcmp(out, rows, sizeof rows));
+    mdrt_look_blend(MDRT_BLEND_SOFT, &rows[1][0], 8, 1, 8, out, 8);   /* a quarter each side: 0 0 40 80 40 0 0 0 */
+    CHECK_EQ(out[2], 0xFF404040);
+    CHECK_EQ(out[3], M);
+    CHECK_EQ(out[4], 0xFF404040);
+    CHECK_EQ(out[0], A);
+
+    /* nothing on: no overlay, no lift */
+    CHECK(!mdrt_look_tube(MDRT_SCANLINES_OFF, MDRT_MASK_OFF));
+    CHECK(mdrt_look_tube(MDRT_SCANLINES_LIGHT, MDRT_MASK_OFF) && mdrt_look_tube(MDRT_SCANLINES_OFF, MDRT_MASK_DOT));
+    CHECK(!mdrt_look_tube(99, -1));
+    CHECK_EQ(mdrt_look_lift(MDRT_SCANLINES_OFF, MDRT_MASK_OFF), 0);
+
+    /* scanlines at 3x (a 10 x 10 picture in 30 x 30): every line's three rows alike, the last
+     * darkest, the first the brightest; and on average, with the lift, as bright as without */
+    static uint32_t ov[160 * 160];
+    for (int sl = MDRT_SCANLINES_LIGHT; sl < MDRT_SCANLINES_COUNT; sl++) {
+        mdrt_look_overlay(sl, MDRT_MASK_OFF, 30, 30, 10, 10, ov, 30);
+        int lift = mdrt_look_lift(sl, MDRT_MASK_OFF), same = 1;
+        for (int y = 0; y < 30; y++)
+            for (int x = 0; x < 30; x++) same &= ov[y * 30 + x] == ov[(y % 3) * 30] && ch(ov, 30, x, y, 16) == ch(ov, 30, x, y, 0);
+        CHECK(same);
+        CHECK(ch(ov, 30, 0, 0, 8) > ch(ov, 30, 0, 2, 8) && ch(ov, 30, 0, 0, 8) >= ch(ov, 30, 0, 1, 8));
+        double mean = (ch(ov, 30, 0, 0, 8) + ch(ov, 30, 0, 1, 8) + ch(ov, 30, 0, 2, 8)) / 3.0 + lift;
+        if (mean < 245 || mean > 265) { printf("  scanlines %d: on average %.1f / 255\n", sl, mean); CHECK(0); }
+        CHECK(lift > 0);
+    }
+    /* at 2x one row in two darker; at an uneven size (224 lines in 500 rows) every line darker at
+     * its end than its start, and the rows' average the same as at 3x within a little */
+    mdrt_look_overlay(MDRT_SCANLINES_MEDIUM, MDRT_MASK_OFF, 20, 20, 10, 10, ov, 20);
+    CHECK(ch(ov, 20, 0, 0, 8) > ch(ov, 20, 0, 1, 8) + 40 && ov[0] == ov[2 * 20] && ov[20] == ov[3 * 20]);
+    {
+        static uint32_t tall[500];
+        mdrt_look_overlay(MDRT_SCANLINES_MEDIUM, MDRT_MASK_OFF, 1, 500, 1, 224, tall, 1);
+        int ok = 1;
+        double sum = 0;
+        for (int y = 0; y < 500; y++) sum += ch(tall, 1, 0, y, 8);
+        for (int line = 0; line < 223; line++) {
+            int first = (line * 500 + 223) / 224, last = ((line + 1) * 500) / 224 - 1;   /* (rows wholly in the line) */
+            if (last > first && ch(tall, 1, 0, first, 8) <= ch(tall, 1, 0, last, 8)) ok = 0;
+        }
+        CHECK(ok);
+        mdrt_look_overlay(MDRT_SCANLINES_MEDIUM, MDRT_MASK_OFF, 1, 30, 1, 10, ov, 1);
+        double sum3 = 0;
+        for (int y = 0; y < 30; y++) sum3 += ch(ov, 1, 0, y, 8);
+        CHECK(sum / 500 > sum3 / 30 - 4 && sum / 500 < sum3 / 30 + 4);
+    }
+
+    /* the aperture grille at 4x: red, green, blue stripes a pixel each, every row alike; at 2x
+     * magenta and green; the slot mask's breaks every fourth row, staggered between triads; the
+     * shadow mask's triads offset on odd rows; each with the lift, as bright as without on average */
+    mdrt_look_overlay(MDRT_SCANLINES_OFF, MDRT_MASK_APERTURE, 40, 8, 10, 2, ov, 40);
+    CHECK(ch(ov, 40, 0, 0, 16) > ch(ov, 40, 0, 0, 8) && ch(ov, 40, 0, 0, 8) == ch(ov, 40, 0, 0, 0));
+    CHECK(ch(ov, 40, 1, 0, 8) > ch(ov, 40, 1, 0, 16) && ch(ov, 40, 2, 0, 0) > ch(ov, 40, 2, 0, 8));
+    CHECK(ov[3] == ov[0] && ov[5 * 40 + 7] == ov[7]);
+    mdrt_look_overlay(MDRT_SCANLINES_OFF, MDRT_MASK_APERTURE, 20, 4, 10, 2, ov, 20);
+    CHECK(ch(ov, 20, 0, 0, 16) == ch(ov, 20, 0, 0, 0) && ch(ov, 20, 0, 0, 16) > ch(ov, 20, 0, 0, 8));
+    CHECK(ch(ov, 20, 1, 0, 8) > ch(ov, 20, 1, 0, 16) && ov[2] == ov[0]);
+    mdrt_look_overlay(MDRT_SCANLINES_OFF, MDRT_MASK_SLOT, 40, 8, 10, 2, ov, 40);
+    CHECK(ch(ov, 40, 0, 3, 16) < ch(ov, 40, 0, 0, 16) && ch(ov, 40, 3, 1, 16) < ch(ov, 40, 3, 0, 16) && ov[3] == ov[0]);
+    mdrt_look_overlay(MDRT_SCANLINES_OFF, MDRT_MASK_DOT, 40, 8, 10, 2, ov, 40);
+    CHECK(ch(ov, 40, 0, 0, 16) > ch(ov, 40, 0, 0, 8) && ch(ov, 40, 1, 1, 16) > ch(ov, 40, 1, 1, 8) && ov[2 * 40] == ov[0]);
+    for (int mk = MDRT_MASK_APERTURE; mk < MDRT_MASK_COUNT; mk++) {
+        mdrt_look_overlay(MDRT_SCANLINES_LIGHT, mk, 120, 120, 30, 30, ov, 120);
+        double sum = 0;
+        for (int i = 0; i < 120 * 120; i++) sum += ch(ov, 120, i % 120, i / 120, 8 * (i % 3));
+        double mean = sum / (120 * 120) + mdrt_look_lift(MDRT_SCANLINES_LIGHT, mk);
+        if (mean < 240 || mean > 270) { printf("  mask %d: on average %.1f / 255\n", mk, mean); CHECK(0); }
+    }
+}
+
 int main(void)
 {
     settings();
@@ -360,5 +465,6 @@ int main(void)
     png();
     menu();
     upscalers();
+    looks();
     return check_done("platform_unit");
 }

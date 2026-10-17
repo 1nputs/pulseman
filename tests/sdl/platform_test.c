@@ -5,7 +5,8 @@
  * volume and mute in the sound written to disk; the settings kept in the file in the directory it
  * runs in, with its comment and an unknown key; run again, keys bound in that file by hand; and
  * the menu: a ROM chosen in its browser (one the client turns down first), the upscaler (MMPX 4x
- * from then on, and on the next start), the scaling and FM chip
+ * from then on, and on the next start) and the looks (the console's colours, dithering blended,
+ * scanlines and a shadow mask, from then on too), the scaling and FM chip
  * changed, a reset, another ROM while playing, a key changed by pressing it, and the ROM chosen
  * last found again on the next start; and four players: EA's 4 Way Play in the ports, two virtual
  * controllers given to players 1 and 3, a button moved, a turbo button, the stick's dead zone, a
@@ -177,10 +178,18 @@ static int menu_player(void *user)
     SDL_Delay(300);
     CHECK_EQ(SDL_AtomicGet(&frame), f0);                  /* the game waits */
     keys(SDL_SCANCODE_DOWN, 5);
-    keys(SDL_SCANCODE_RETURN, 1);                         /* Video: [Upscaler, Scaling, Aspect, Full screen, Back] */
+    keys(SDL_SCANCODE_RETURN, 1);                         /* Video: [Upscaler, Scaling, Aspect, Colours, Blend, Scanlines, Mask, Full screen, Back] */
     keys(SDL_SCANCODE_RIGHT, 4);                          /* off -> scale2x -> scale3x -> mmpx2x -> mmpx4x (from here on) */
     keys(SDL_SCANCODE_DOWN, 1);
     keys(SDL_SCANCODE_RIGHT, 1);                          /* integer (run 1's file) -> fit */
+    keys(SDL_SCANCODE_DOWN, 2);
+    keys(SDL_SCANCODE_RIGHT, 2);                          /* the colours: standard -> full range -> the console's */
+    keys(SDL_SCANCODE_DOWN, 1);
+    keys(SDL_SCANCODE_RIGHT, 1);                          /* blend dithering (and from here on, with: */
+    keys(SDL_SCANCODE_DOWN, 1);
+    keys(SDL_SCANCODE_RIGHT, 2);                          /* medium scanlines */
+    keys(SDL_SCANCODE_DOWN, 1);
+    keys(SDL_SCANCODE_LEFT, 1);                           /* and a shadow mask: off, round to the last) */
     keys(SDL_SCANCODE_ESCAPE, 1);
     keys(SDL_SCANCODE_DOWN, 1);
     keys(SDL_SCANCODE_RETURN, 1);                         /* Sound: [Volume, Mute, FM core, FM chip, Back] */
@@ -558,7 +567,8 @@ int main(int argc, char **argv)
     CHECK_EQ(play(), 0);
     t = slurp(settings_path, &len);
     CHECK(t && strstr(t, "game.rom = roms/other.gen\n") && strstr(t, "video.scale = fit\n") && strstr(t, "pad1.start = Home\n"));
-    CHECK(t && strstr(t, "video.upscaler = mmpx4x\n"));
+    CHECK(t && strstr(t, "video.upscaler = mmpx4x\n") && strstr(t, "video.colours = console\n") && strstr(t, "video.blend = dither\n"));
+    CHECK(t && strstr(t, "video.scanlines = medium\n") && strstr(t, "video.mask = dot\n"));
     if (t && mdrt_fm_cores(1)) { char want[64]; snprintf(want, sizeof want, "audio.fm_core = %s\n", mdrt_fm_cores(1)); CHECK(strstr(t, want) != NULL); }
     free(t);
     run = 4;
