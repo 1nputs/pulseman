@@ -97,18 +97,20 @@ This README carries the status.
   and an uneven size, each mask's pattern, and the light kept on average; `make sdl-check` turns
   them on from the menu and plays with them.
 - 2026-10-16, captures in the SDL2 platform: the replay (the last 20 seconds always kept, saved
-  by Shift+F12 or the menu's Capture page) and recordings (Ctrl+F12 to start and to stop), saved
-  in `videos/` as a GIF made here (lossless, 30 frames a second) or as an MP4 made by ffmpeg when
-  it is installed (H.264 and AAC, the picture 4 times its size with no smoothing; without ffmpeg,
-  a GIF and a word why). `mdrt/gif.h` (each frame's own exact colours, GIF's LZW) and
-  `mdrt/capture.h` (frames kept compressed with their sound: about 8 KB a frame; a clip read into
-  a GIF, RGB frames and a WAV kept in time with them) have no SDL. The game thread hands each frame
-  over as it is made (0.4 ms); clips are saved on a thread of their own while the game plays on.
-  A control's key may have Shift, Ctrl or Alt. `platform_unit` checks the LZW back and forth, the
-  frames kept and taken, a recording's file, the GIF's frames and times and the WAV; Pillow read
-  real NHL '94 frames and 49 hard cases back exactly; `make sdl-check` saves the replay, records
-  a second, saves from the menu with MP4 and no ffmpeg, reads each GIF back, binds a key with Ctrl
-  by pressing it, and makes an MP4 when ffmpeg is there.
+  by F10 or the menu's Capture page) and recordings (F11 to start and to stop), saved in `videos/`
+  as GIFs made here (lossless, 30 frames a second: GIF's times are in hundredths and players show
+  a hundredth as a tenth, so 60 cannot be had; WebP or APNG could, with a library, left for now).
+  `mdrt/gif.h` (each frame's own exact colours, GIF's LZW) and `mdrt/capture.h` (frames kept
+  compressed, about 8 KB a frame; a clip read into a GIF) have no SDL. The game thread hands each
+  frame over as it is made (0.4 ms); clips are saved on a thread of their own while the game
+  plays on. The keys moved with them: F9 is free, F10 the replay, F11 recording, F12 a
+  screenshot; states are saved and loaded from the menu, full screen is the menu's and
+  Alt+Enter's, and an older build's keys leave the settings (`mdrt_settings_remove`). A control's
+  key may have Shift, Ctrl or Alt. `platform_unit` checks the LZW back and forth, the frames kept
+  and taken, a recording's file, the GIF's frames and times; Pillow read real NHL '94 frames and
+  49 hard cases back exactly; `make sdl-check` saves the replay, records a second, saves from the
+  menu, reads each GIF back, saves and loads states from the menu, and binds a key with Ctrl by
+  pressing it.
 - 2026-10-16, the review's small findings: PAL's master clock (`MDRT_MASTER_CLOCK_PAL`,
   `mdrt_master_clock`) in the mixer and the platform; the default HV counter through the VDP's
   counter mapping; `mdrt_vdp_reg` and a rule for what in the structs is API; the mixer's gains in

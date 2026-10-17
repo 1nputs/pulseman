@@ -14,10 +14,7 @@
 #define make_dir(d) _mkdir(d)
 #define get_cwd _getcwd
 #define SEP '\\'
-#define popen _popen
-#define pclose _pclose
 #else
-#include <signal.h>
 #include <unistd.h>
 #define make_dir(d) mkdir(d, 0777)
 #define get_cwd getcwd
@@ -35,17 +32,16 @@
 /* ---- the keys: what each does, its setting and its default ------------------------------------ */
 
 /* the controls on the function keys, in the keyboard's groups of four: the sound and rewind;
- * time (pause, fast-forward, slow motion, a frame); states, the window and screenshots, with
- * Shift the replay and with Ctrl a recording (a control's key may have Shift, Ctrl or Alt) */
-enum { K_MUTE, K_VOL_DOWN, K_VOL_UP, K_REWIND, K_PAUSE, K_FAST, K_SLOW, K_STEP, K_SAVE, K_LOAD,
-       K_FULLSCREEN, K_SHOT, K_REPLAY, K_RECORD, K_MENU, K_COUNT };
+ * time (pause, fast-forward, slow motion, a frame); captures (F9 free: the replay, recording, a
+ * screenshot). States and full screen are the menu's (and Alt+Enter). A control's key may have
+ * Shift, Ctrl or Alt. */
+enum { K_MUTE, K_VOL_DOWN, K_VOL_UP, K_REWIND, K_PAUSE, K_FAST, K_SLOW, K_STEP, K_REPLAY, K_RECORD, K_SHOT, K_MENU, K_COUNT };
 static const char *const key_setting[K_COUNT][3] = {
     { "key.mute", "F1", "Mute" }, { "key.volume_down", "F2", "Volume down" }, { "key.volume_up", "F3", "Volume up" },
     { "key.rewind", "F4", "Rewind (held)" }, { "key.pause", "F5", "Pause" },
     { "key.fast_forward", "F6", "Fast-forward (held)" }, { "key.slow_motion", "F7", "Slow motion" },
-    { "key.frame_step", "F8", "A frame, while paused" }, { "key.save_state", "F9", "Save a state" },
-    { "key.load_state", "F10", "Load the state" }, { "key.fullscreen", "F11", "Full screen" }, { "key.screenshot", "F12", "Screenshot" },
-    { "key.save_replay", "Shift+F12", "Save the replay" }, { "key.record", "Ctrl+F12", "Record (again: stop)" },
+    { "key.frame_step", "F8", "A frame, while paused" }, { "key.save_replay", "F10", "Save the replay" },
+    { "key.record", "F11", "Record (again: stop)" }, { "key.screenshot", "F12", "Screenshot" },
     { "key.menu", "Escape", "Menu" },
 };
 enum { BUTTONS = 12 };
@@ -91,11 +87,9 @@ static const char *const mask_name[MDRT_MASK_COUNT] = { "off", "aperture", "slot
 static const char *const mask_label[MDRT_MASK_COUNT] = { "off", "aperture grille", "slot mask", "shadow mask" };
 static const char *const chip_name[2] = { "YM2612", "YM3438" };
 static const struct { const char *name; Uint16 mod; } key_mods[3] = { { "Shift+", KMOD_SHIFT }, { "Ctrl+", KMOD_CTRL }, { "Alt+", KMOD_ALT } };
-/* captures: the replay's seconds, the format, a GIF's size */
+/* captures: the replay's seconds, a GIF's size */
 static const int replay_secs[5] = { 0, 10, 20, 30, 60 };
 static const char *const replay_label[5] = { "off", "10 seconds", "20 seconds", "30 seconds", "60 seconds" };
-static const char *const format_name[2] = { "gif", "mp4" };
-static const char *const format_label[2] = { "GIF", "MP4 (with ffmpeg)" };
 static const char *const gif_scale_label[3] = { "1x", "2x", "3x" };
 static const int fast_speeds[6] = { 2, 3, 4, 6, 8, 0 };
 static const char *const fast_label[6] = { "2x", "3x", "4x", "6x", "8x", "as fast as it goes" };
@@ -109,7 +103,7 @@ enum { SLOT_COUNT = 8 };                                  /* save slots; 0 is qu
 enum { I_RESUME = 1, I_ROM, I_RESET, I_SAVE, I_LOAD, I_VIDEO, I_SOUND, I_OPTIONS, I_KEYS, I_QUIT, I_BACK,
        I_UPSCALE, I_SCALE, I_ASPECT, I_FULL, I_COLOURS, I_BLEND, I_SCANLINES, I_MASK, I_VOLUME, I_MUTE, I_FM_CORE, I_FM_CHIP, I_FOCUS, I_FAST, I_UP,
        I_PLAYERS, I_ADAPTOR, I_TURBO, I_DEADZONE, I_CBUTTONS, I_RESUME_OPT,
-       I_CAPTURE, I_CAP_REPLAY, I_CAP_RECORD, I_CAP_SECONDS, I_CAP_FORMAT, I_CAP_GIFSCALE,
+       I_CAPTURE, I_CAP_REPLAY, I_CAP_RECORD, I_CAP_SECONDS, I_CAP_GIFSCALE,
        I_SLOT = 800,             /* + slot (1-8) */
        I_PLAYER = 900,           /* + player (0-3) */
        I_PAD = 1000,             /* + pad * BUTTONS + button */
@@ -168,7 +162,7 @@ typedef struct sdl {
     long pending_size;          /* its file's size when last seen growing (-1: not there yet) */
     uint32_t *pending_pic;      /* the picture when it was asked for */
     int pending_w, pending_h;
-    int slot, resume, quitting; /* F9 / F10's slot (the one chosen last); quick resume; quitting once it is saved */
+    int slot, resume, quitting; /* the slot chosen last; quick resume; quitting once it is saved */
     uint32_t thumb[320 * 240];  /* the menu's picture of the slot selected */
     int scale, aspect, focus_pause, auto_paused;
     int upscale;                /* MDRT_UPSCALE_: the game's frames through it, before the scaling */
@@ -184,12 +178,11 @@ typedef struct sdl {
     SDL_mutex *cap_lock, *save_lock;
     mdrt_capture *cap;
     SDL_atomic_t capturing;     /* the replay on, or a recording */
-    int replay, format, gif_scale; /* replay_secs' index; format_name's; a GIF's size - 1 */
+    int replay, gif_scale;      /* replay_secs' index; a GIF's size - 1 */
     FILE *rec;                  /* the recording's file, */
     char rec_path[1100];
     uint32_t rec_since, status_at;
     struct clip_save *clips[4]; /* clips being saved */
-    int ffmpeg_ok;              /* whether ffmpeg runs: 1, 0, -1 not asked yet */
     char title[200];
     uint32_t notice_until;
     uint8_t *rom;               /* the game's ROM (given to the client by rom_use) */
@@ -256,11 +249,6 @@ static int held(sdl *s) { return SDL_AtomicGet(&s->paused) || SDL_AtomicGet(&s->
 static void audio(void *user, const int16_t *samples, int frames)
 {
     sdl *s = user;
-    if (SDL_AtomicGet(&s->capturing)) {                   /* (the frame's sound, as the game made it) */
-        SDL_LockMutex(s->cap_lock);
-        mdrt_capture_sound(s->cap, samples, frames);
-        SDL_UnlockMutex(s->cap_lock);
-    }
     if (!s->dev || SDL_AtomicGet(&s->fast) || SDL_AtomicGet(&s->slow) || held(s)) return;
     int vol = SDL_AtomicGet(&s->mute) ? 0 : SDL_AtomicGet(&s->volume);
     if (vol < 100) {
@@ -523,9 +511,8 @@ static void settings_load(sdl *s)
             "# audio.device: empty for the default. audio.latency: frames of sound queued (1-10).\n"
             "# audio.fm_core: nuked or ymfm. audio.fm_chip: YM2612 or YM3438.\n"
             "# general.fast_forward: times the speed while it is held (0: as fast as it goes).\n"
-            "# capture.replay: the seconds kept for the replay (0: off). capture.format: gif or mp4 (made\n"
-            "# by ffmpeg, capture.ffmpeg, which must be installed). capture.gif_scale: 1-3. A control's key\n"
-            "# may have Shift+, Ctrl+ or Alt+ before it.\n";
+            "# capture.replay: the seconds kept for the replay (0: off). capture.gif_scale: 1-3. A\n"
+            "# control's key may have Shift+, Ctrl+ or Alt+ before it.\n";
         mdrt_settings_parse(s->set, head, sizeof head - 1);
     }
     const char *defaults[][2] = {
@@ -597,14 +584,13 @@ static void settings_load(sdl *s)
     s->resume = mdrt_settings_get_int(s->set, "general.resume", 1) != 0;
     s->pending = -1;
     mdrt_settings_default(s->set, "capture.replay", "20");
-    mdrt_settings_default(s->set, "capture.format", "mp4");
     mdrt_settings_default(s->set, "capture.gif_scale", "1");
-    mdrt_settings_default(s->set, "capture.video_scale", "4");
-    mdrt_settings_default(s->set, "capture.ffmpeg", "ffmpeg");
     mdrt_settings_default(s->set, "general.videos", "videos");
     int secs = mdrt_settings_get_int(s->set, "capture.replay", 20);
     for (int i = 0; i < 5; i++) if (replay_secs[i] <= secs) s->replay = i;   /* (the nearest below) */
-    s->format = named(mdrt_settings_get(s->set, "capture.format"), format_name, 2, 1);
+    static const char *const gone[] = { "key.save_state", "key.load_state", "key.fullscreen", "capture.format", "capture.ffmpeg",
+                                        "capture.video_scale" };
+    for (size_t i = 0; i < sizeof gone / sizeof *gone; i++) mdrt_settings_remove(s->set, gone[i]);   /* (an older build's) */
     s->gif_scale = clamp(mdrt_settings_get_int(s->set, "capture.gif_scale", 1), 1, 3) - 1;
     settings_write(s);                                    /* (a new file, or new settings: written now) */
 }
@@ -625,7 +611,7 @@ static void title_now(sdl *s)
         n += (size_t)snprintf(s->title + n, sizeof s->title - n, " - recording %u:%02u", t / 60, t % 60);
     }
     int pc = saving_percent(s);
-    if (pc >= 0 && n < sizeof s->title) snprintf(s->title + n, sizeof s->title - n, " - saving the video, %d%%", pc);
+    if (pc >= 0 && n < sizeof s->title) snprintf(s->title + n, sizeof s->title - n, " - saving the GIF, %d%%", pc);
     SDL_SetWindowTitle(s->win, s->title);
 }
 
@@ -713,15 +699,13 @@ static void capture_set(sdl *s)
     SDL_AtomicSet(&s->capturing, s->replay > 0 || s->rec != NULL);
 }
 
-/* a clip being saved, on a thread of its own (one saves at a time, under save_lock) */
+/* a clip being saved as a GIF, on a thread of its own (one saves at a time, under save_lock) */
 typedef struct clip_save {
     mdrt_clip *clip;
     FILE *src;                  /* a recording's file (closed and removed after), or NULL */
-    char src_path[1100], path[1100], wav[1110], ffmpeg[600], msg[1300];
-    const char *note;           /* said after the file's name */
-    int mp4, curve, gif_scale, video_scale;
+    char src_path[1100], path[1100], msg[1200];
+    int curve, gif_scale;
     double fps;
-    uint32_t rate;
     volatile long frames, done; /* (how far, for the title) */
     SDL_mutex *lock;
     SDL_Thread *thread;
@@ -730,83 +714,22 @@ typedef struct clip_save {
 
 static void put_file(void *user, const void *b, size_t n) { (void)fwrite(b, 1, n, user); }   /* (ferror at the end) */
 
-/* whether ffmpeg runs (its version asked for, the answer thrown away) */
-static int have_ffmpeg(const char *cmd)
-{
-    char line[700];
-#ifdef _WIN32
-    snprintf(line, sizeof line, "\"\"%s\" -version >NUL 2>&1\"", cmd);
-#else
-    snprintf(line, sizeof line, "\"%s\" -version >/dev/null 2>&1", cmd);
-#endif
-    return system(line) == 0;
-}
-
-/* the frames to ffmpeg as RGB through a pipe, the sound beside them as a WAV file; its answer */
-static int save_mp4(clip_save *v)
-{
-    int w, h;
-    mdrt_clip_frames(v->clip, &w, &h);
-    FILE *wav = fopen(v->wav, "wb");
-    if (!wav) return 0;
-    mdrt_clip_wav(v->clip, v->rate, v->fps, put_file, wav);
-    int wrote = !ferror(wav);
-    fclose(wav);
-    if (!wrote) return 0;
-    char cmd[4200];
-    snprintf(cmd, sizeof cmd,
-#ifdef _WIN32
-             "\""
-#endif
-             "\"%s\" -hide_banner -loglevel error -y -f rawvideo -pix_fmt rgb24 -s %dx%d -framerate %.6f -i - -i \"%s\" "
-             "-vf scale=iw*%d:ih*%d:flags=neighbor -c:v libx264 -pix_fmt yuv420p -crf 18 -preset veryfast "
-             "-c:a aac -b:a 192k -movflags +faststart -shortest \"%s\""
-#ifdef _WIN32
-             "\""
-#endif
-             , v->ffmpeg, w, h, v->fps, v->wav, v->video_scale, v->video_scale, v->path);
-#ifdef _WIN32
-    FILE *p = popen(cmd, "wb");
-#else
-    signal(SIGPIPE, SIG_IGN);                             /* (ffmpeg stopping early is an answer, not the end of the game) */
-    FILE *p = popen(cmd, "w");
-#endif
-    if (!p) return 0;
-    uint8_t *rgb = malloc((size_t)w * h * 3);
-    mdrt_capture_frame f;
-    int ok = rgb != NULL;
-    mdrt_clip_rewind(v->clip);
-    for (long i = 0; ok && mdrt_clip_next(v->clip, &f); i++) {
-        ok = mdrt_clip_rgb(&f, v->curve, w, h, rgb) && fwrite(rgb, 1, (size_t)w * h * 3, p) == (size_t)w * h * 3;
-        v->done = i + 1;
-    }
-    free(rgb);
-    return pclose(p) == 0 && ok;                          /* (0: ffmpeg ended well) */
-}
-
 static int save_thread(void *user)
 {
     clip_save *v = user;
     SDL_LockMutex(v->lock);
     long frames = mdrt_clip_frames(v->clip, NULL, NULL);
     v->frames = frames > 0 ? frames : 1;
+    FILE *f = fopen(v->path, "wb");
     int ok = 0;
-    const char *note = v->note;
-    if (v->mp4) {
-        ok = save_mp4(v);
-        remove(v->wav);
-        if (!ok) note = " (ffmpeg could not make it)";
-    } else {
-        FILE *f = fopen(v->path, "wb");
-        if (f) {
-            ok = mdrt_clip_gif(v->clip, v->curve, v->gif_scale, v->fps, put_file, f, &v->done);
-            ok = !ferror(f) && ok;
-            fclose(f);
-        }
+    if (f) {
+        ok = mdrt_clip_gif(v->clip, v->curve, v->gif_scale, v->fps, put_file, f, &v->done);
+        ok = !ferror(f) && ok;
+        fclose(f);
     }
     if (!ok) remove(v->path);
-    if (ok) snprintf(v->msg, sizeof v->msg, "saved: %s%s", v->path, note);
-    else snprintf(v->msg, sizeof v->msg, "could not save the video%s", note);
+    if (ok) snprintf(v->msg, sizeof v->msg, "saved: %s", v->path);
+    else snprintf(v->msg, sizeof v->msg, "could not save the GIF");
     mdrt_clip_free(v->clip);
     if (v->src) { fclose(v->src); remove(v->src_path); }
     SDL_UnlockMutex(v->lock);
@@ -814,21 +737,17 @@ static int save_thread(void *user)
     return 0;
 }
 
-/* a clip saved (from the replay, or a recording's file at src_path) as the format chosen; 0 when
- * it cannot be started */
+/* a clip saved (from the replay, or a recording's file at src_path); 0 when it cannot be started */
 static int start_saving(sdl *s, mdrt_clip *clip, FILE *src, const char *src_path)
 {
     int slot = 0;
     while (slot < 4 && s->clips[slot]) slot++;
     clip_save *v = slot < 4 ? calloc(1, sizeof *v) : NULL;
-    const char *dir = mdrt_settings_get(s->set, "general.videos"), *ff = mdrt_settings_get(s->set, "capture.ffmpeg");
+    const char *dir = mdrt_settings_get(s->set, "general.videos");
     if (!dir || !*dir) dir = ".";
-    if (!ff || !*ff) ff = "ffmpeg";
-    if (v && s->format == 1 && s->ffmpeg_ok < 0) s->ffmpeg_ok = have_ffmpeg(ff);   /* (asked once a run) */
-    int mp4 = s->format == 1 && s->ffmpeg_ok == 1;
-    FILE *f = v ? new_file(s, dir, "", mp4 ? ".mp4" : ".gif", v->path, sizeof v->path) : NULL;
+    FILE *f = v ? new_file(s, dir, "", ".gif", v->path, sizeof v->path) : NULL;
     if (!f) {
-        notice(s, slot < 4 ? "cannot write a video there" : "still saving the last ones");
+        notice(s, slot < 4 ? "cannot write a GIF there" : "still saving the last ones");
         free(v);
         mdrt_clip_free(clip);
         if (src) { fclose(src); remove(src_path); }
@@ -838,15 +757,9 @@ static int start_saving(sdl *s, mdrt_clip *clip, FILE *src, const char *src_path
     v->clip = clip;
     v->src = src;
     if (src_path) snprintf(v->src_path, sizeof v->src_path, "%s", src_path);
-    snprintf(v->wav, sizeof v->wav, "%s.wav", v->path);
-    snprintf(v->ffmpeg, sizeof v->ffmpeg, "%s", ff);
-    v->mp4 = mp4;
-    v->note = s->format == 1 && !mp4 ? " (MP4 needs ffmpeg installed)" : "";
     v->curve = SDL_AtomicGet(&s->curve);
     v->gif_scale = s->gif_scale + 1;
-    v->video_scale = clamp(mdrt_settings_get_int(s->set, "capture.video_scale", 4), 1, 8);
     v->fps = frame_rate(s);
-    v->rate = s->rate;
     v->lock = s->save_lock;
     v->thread = SDL_CreateThread(save_thread, "capture", v);
     if (!v->thread) { remove(v->path); free(v); mdrt_clip_free(clip); if (src) { fclose(src); remove(src_path); } return 0; }
@@ -1188,8 +1101,8 @@ static void build_page(sdl *s, int page, int select)
             put_text(it->detail, sizeof it->detail, s->rom ? base_name(s->rom_name) : "none", 1);
         if (running) {
             mdrt_menu_add(m, I_RESET, MDRT_ITEM_ACTION, "Reset");
-            if ((it = mdrt_menu_add(m, I_SAVE, MDRT_ITEM_ACTION, "Save a state"))) control_detail(s, K_SAVE, it->detail, sizeof it->detail);
-            if ((it = mdrt_menu_add(m, I_LOAD, MDRT_ITEM_ACTION, "Load the state"))) control_detail(s, K_LOAD, it->detail, sizeof it->detail);
+            mdrt_menu_add(m, I_SAVE, MDRT_ITEM_ACTION, "Save a state");
+            mdrt_menu_add(m, I_LOAD, MDRT_ITEM_ACTION, "Load a state");
         }
         mdrt_menu_add(m, I_VIDEO, MDRT_ITEM_ACTION, "Video");
         mdrt_menu_add(m, I_CAPTURE, MDRT_ITEM_ACTION, "Capture");
@@ -1226,7 +1139,6 @@ static void build_page(sdl *s, int page, int select)
             snprintf(it->detail, sizeof it->detail, "%u:%02u", t / 60, t % 60);
         }
         mdrt_menu_add_choice(m, I_CAP_SECONDS, "Replay kept", replay_label, 5, s->replay);
-        mdrt_menu_add_choice(m, I_CAP_FORMAT, "Saved as", format_label, 2, s->format);
         mdrt_menu_add_choice(m, I_CAP_GIFSCALE, "GIF size", gif_scale_label, 3, s->gif_scale);
         mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
         control_detail(s, K_REPLAY, a, sizeof a);
@@ -1591,10 +1503,6 @@ static void act(sdl *s, int id)
         capture_set(s);
         build_page(s, PAGE_CAPTURE, I_CAP_SECONDS);
         return;
-    case I_CAP_FORMAT:
-        s->format = it->value;
-        mdrt_settings_set(s->set, "capture.format", format_name[s->format]);
-        return;
     case I_CAP_GIFSCALE:
         s->gif_scale = it->value;
         mdrt_settings_set_int(s->set, "capture.gif_scale", s->gif_scale + 1);
@@ -1752,7 +1660,6 @@ static void key_pressed(sdl *s, SDL_Scancode k, SDL_Keymod mod, int repeat)
                  k == SDL_SCANCODE_ESCAPE || k == SDL_SCANCODE_BACKSPACE || k == s->key[K_MENU] ? MDRT_MENU_BACK : -1;
         if (in == MDRT_MENU_OK || in == MDRT_MENU_BACK) { if (repeat) return; }
         if (in >= 0) menu_input(s, in);
-        else if (k == s->key[K_FULLSCREEN] && !repeat) set_fullscreen(s, !is_fullscreen(s));
         return;
     }
     if (repeat) return;
@@ -1769,9 +1676,6 @@ static void key_pressed(sdl *s, SDL_Scancode k, SDL_Keymod mod, int repeat)
         s->notice_until = 0;
         title_now(s);
         break;
-    case K_FULLSCREEN: set_fullscreen(s, !is_fullscreen(s)); break;
-    case K_SAVE: ask_save(s, s->slot); break;
-    case K_LOAD: ask_load(s, s->slot); break;
     case K_SLOW:
         SDL_AtomicSet(&s->slow, !SDL_AtomicGet(&s->slow));
         notice(s, SDL_AtomicGet(&s->slow) ? "slow motion" : "full speed");
@@ -2064,7 +1968,6 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
     s->cap_lock = SDL_CreateMutex();
     s->save_lock = SDL_CreateMutex();
     s->cap = mdrt_capture_new(0);
-    s->ffmpeg_ok = -1;
     if (!s->cap) s->replay = 0;
     else capture_set(s);
     cfg->platform = (mdrt_platform){ .user = s, .present = present, .audio = audio, .wait = wait, .input = input, .requests = requests,
@@ -2115,7 +2018,7 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
         else SDL_DetachThread(s->thread);                 /* (it would not stop: the process ends it) */
     }
     if (s->rec) record(s);                                /* (a recording at quitting: saved) */
-    if (saving_percent(s) >= 0) { printf("finishing the video...\n"); fflush(stdout); }
+    if (saving_percent(s) >= 0) { printf("finishing the GIF...\n"); fflush(stdout); }
     check_saves(s, 1);
     if (s->dev) SDL_CloseAudioDevice(s->dev);
     mdrt_settings_free(s->set);

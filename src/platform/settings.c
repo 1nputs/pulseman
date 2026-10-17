@@ -124,6 +124,17 @@ void mdrt_settings_default(mdrt_settings *s, const char *key, const char *value)
     if (!find(s, key)) mdrt_settings_set(s, key, value);
 }
 
+void mdrt_settings_remove(mdrt_settings *s, const char *key)
+{
+    line *l = find(s, key);
+    if (!l) return;
+    free(l->key);
+    free(l->value);
+    memmove(l, l + 1, (size_t)(s->l + s->n - (l + 1)) * sizeof *l);
+    s->n--;
+    s->dirty = 1;
+}
+
 size_t mdrt_settings_format(const mdrt_settings *s, char *out, size_t size)
 {
     size_t need = 1;

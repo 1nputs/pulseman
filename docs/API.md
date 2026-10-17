@@ -45,9 +45,8 @@ screenshot's PNG, in memory), `mdrt/menu.h` (the menu's pages, inputs and drawin
 pulseman's own font), `mdrt/upscale.h` (Scale2x, Scale3x and MMPX: the picture magnified as
 pixel art, before the window's scaling), `mdrt/look.h` (dithering blended, and a picture
 tube's scanlines and mask as an overlay to multiply the picture by), `mdrt/gif.h` (animated GIFs
-with each frame's exact colours) and `mdrt/capture.h` (frames and sound kept as they come, the
-last seconds in memory or every one in a file, and read out as a GIF or as RGB frames and a WAV
-file for a video encoder).
+with each frame's exact colours) and `mdrt/capture.h` (frames kept as they come, the last
+seconds in memory or every one in a file, and read out as a GIF).
 
 Without a window, fill `c.platform` (present, audio, wait, input: any may be NULL), create the
 console with `mdrt_new(&c)` and call the game yourself.
@@ -172,7 +171,7 @@ coroutine on its own stack could keep that stack too; nothing here needs it yet.
 The player's requests reach the client through the platform: `mdrt_platform.requests` returns
 MDRT_REQUEST_SAVE and MDRT_REQUEST_LOAD once for each press and MDRT_REQUEST_REWIND while it is
 held; `mdrt_requests(m)` gives the client what the last handshake brought (the SDL2 platform:
-F9, F10, F4 by default). The client decides what to do and when. `mdrt_request_path(m)` is the
+the menu's Save and Load pages, and F4 held). The client decides what to do and when. `mdrt_request_path(m)` is the
 file a SAVE or LOAD names, when the platform names one (the SDL2 platform's save slots and quick
 resume: `states/slotN.state.new` to write, `states/slotN.state` to read); NULL leaves the file to
 the client. A client that can take a state only at some points (NHL '94: in play) does nothing

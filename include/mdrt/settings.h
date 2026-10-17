@@ -21,6 +21,8 @@ void mdrt_settings_set(mdrt_settings *s, const char *key, const char *value);
 void mdrt_settings_set_int(mdrt_settings *s, const char *key, int value);
 /* add a key with its default when it is absent (so a new file lists every setting) */
 void mdrt_settings_default(mdrt_settings *s, const char *key, const char *value);
+/* a key taken out (one a build no longer has); dirty when it was there */
+void mdrt_settings_remove(mdrt_settings *s, const char *key);
 /* the text: written into out when size is enough (with its terminating 0); returns the size it needs */
 size_t mdrt_settings_format(const mdrt_settings *s, char *out, size_t size);
 /* changed since it was last written (mdrt_settings_clean after writing it) */

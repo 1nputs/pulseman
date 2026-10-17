@@ -1,24 +1,22 @@
-/* Captures (mdrt/capture.h). A frame's record: a head of 16 bytes (width, height, colours as
- * 16-bit numbers; the code size; a byte unused; the code stream's length and the sound's stereo
- * pairs as 32-bit numbers, all in the machine's byte order: a recording is read back where it was
- * made), the palette, the code stream (made even), the sound. */
+/* Captures (mdrt/capture.h). A frame's record: a head of 12 bytes (width, height, colours as
+ * 16-bit numbers; the code size; a byte unused; the code stream's length as a 32-bit number, all
+ * in the machine's byte order: a recording is read back where it was made), the palette, the code
+ * stream. */
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
 #include "mdrt/capture.h"
 #include "mdrt/vdp.h"
 
-enum { HEAD = 16, MAX_W = 320, MAX_H = 240 };
+enum { HEAD = 12, MAX_W = 320, MAX_H = 240 };
 
-typedef struct head { uint16_t w, h, colours; uint8_t bits, unused; uint32_t code_len, sound_frames; } head;
+typedef struct head { uint16_t w, h, colours; uint8_t bits, unused; uint32_t code_len; } head;
 
-static size_t body_size(const head *hd) { return hd->colours * 2u + ((hd->code_len + 1) & ~1u) + hd->sound_frames * 4u; }
+static size_t body_size(const head *hd) { return hd->colours * 2u + hd->code_len; }
 
 struct mdrt_capture {
     uint8_t **ring;             /* the frames kept, the oldest at start */
     int keep, start, count;
-    uint8_t *open;              /* the frame being made: its head, palette and code, the sound to come */
-    size_t open_len;
     uint8_t idx[MAX_W * MAX_H];
     uint8_t *code;
     FILE *rec;
@@ -30,8 +28,7 @@ mdrt_capture *mdrt_capture_new(int keep)
     mdrt_capture *c = calloc(1, sizeof *c);
     if (!c) return NULL;
     c->code = malloc(mdrt_gif_lzw_bound(MAX_W * MAX_H));
-    c->open = malloc(HEAD + 512 + mdrt_gif_lzw_bound(MAX_W * MAX_H) + 2);
-    if (!c->code || !c->open) { mdrt_capture_free(c); return NULL; }
+    if (!c->code) { mdrt_capture_free(c); return NULL; }
     mdrt_capture_keep(c, keep);
     return c;
 }
@@ -63,42 +60,22 @@ void mdrt_capture_free(mdrt_capture *c)
     while (c->count) drop_oldest(c);
     free(c->ring);
     free(c->code);
-    free(c->open);
     free(c);
 }
 
 void mdrt_capture_picture(mdrt_capture *c, const uint16_t *px, int w, int h, int pitch)
 {
-    c->open_len = 0;
-    if (w <= 0 || h <= 0 || w > MAX_W || h > MAX_H) return;
+    if ((!c->keep && !c->rec) || w <= 0 || h <= 0 || w > MAX_W || h > MAX_H) return;
     uint16_t pal[256];
     int colours = mdrt_gif_palette(px, w, h, pitch, c->idx, pal), bits = mdrt_gif_bits(colours);
     size_t len = mdrt_gif_lzw(c->idx, (size_t)w * h, bits, c->code, mdrt_gif_lzw_bound(MAX_W * MAX_H));
-    if (!len) return;
-    head hd = { (uint16_t)w, (uint16_t)h, (uint16_t)colours, (uint8_t)bits, 0, (uint32_t)len, 0 };
-    uint8_t *p = c->open;
-    memcpy(p, &hd, HEAD);
-    memcpy(p + HEAD, pal, (size_t)colours * 2);
-    memcpy(p + HEAD + colours * 2, c->code, len);
-    if (len & 1) p[HEAD + colours * 2 + len++] = 0;
-    c->open_len = HEAD + (size_t)colours * 2 + len;
-}
-
-void mdrt_capture_sound(mdrt_capture *c, const int16_t *samples, int frames)
-{
-    if (!c->open_len) return;
-    if (frames < 0 || !samples) frames = 0;
-    size_t len = c->open_len + (size_t)frames * 4;
-    c->open_len = 0;
-    if (!c->keep && !c->rec) return;
-    uint8_t *r = malloc(len);
+    uint8_t *r = len ? malloc(HEAD + (size_t)colours * 2 + len) : NULL;
     if (!r) return;
-    head hd;
-    memcpy(&hd, c->open, HEAD);
-    hd.sound_frames = (uint32_t)frames;
+    head hd = { (uint16_t)w, (uint16_t)h, (uint16_t)colours, (uint8_t)bits, 0, (uint32_t)len };
     memcpy(r, &hd, HEAD);
-    memcpy(r + HEAD, c->open + HEAD, len - (size_t)frames * 4 - HEAD);
-    memcpy(r + len - (size_t)frames * 4, samples, (size_t)frames * 4);
+    memcpy(r + HEAD, pal, (size_t)colours * 2);
+    memcpy(r + HEAD + colours * 2, c->code, len);
+    len += HEAD + (size_t)colours * 2;
     if (c->rec) {
         if (fwrite(r, 1, len, c->rec) == len) c->recorded++;
         else { c->rec = NULL; c->recorded = -1; }
@@ -168,8 +145,7 @@ void mdrt_clip_rewind(mdrt_clip *clip)
 static int sane(const head *hd)
 {
     return hd->w && hd->h && hd->w <= MAX_W && hd->h <= MAX_H && hd->colours && hd->colours <= 256
-        && hd->bits >= 2 && hd->bits <= 8 && hd->code_len && hd->code_len <= mdrt_gif_lzw_bound(MAX_W * MAX_H)
-        && hd->sound_frames < 48000;
+        && hd->bits >= 2 && hd->bits <= 8 && hd->code_len && hd->code_len <= mdrt_gif_lzw_bound(MAX_W * MAX_H);
 }
 
 /* the next record's head, and with body its palette, code and sound */
@@ -207,8 +183,6 @@ int mdrt_clip_next(mdrt_clip *clip, mdrt_capture_frame *f)
     f->palette = (const uint16_t *)(const void *)b;
     f->code = b + hd.colours * 2;
     f->code_len = hd.code_len;
-    f->sound = (const int16_t *)(const void *)(f->code + ((hd.code_len + 1) & ~1u));
-    f->sound_frames = (int)hd.sound_frames;
     return 1;
 }
 
@@ -272,55 +246,4 @@ int mdrt_clip_gif(mdrt_clip *clip, int curve, int scale, double fps, mdrt_gif_pu
     free(idx);
     free(code);
     return ok;
-}
-
-int mdrt_clip_rgb(const mdrt_capture_frame *f, int curve, int w, int h, uint8_t *rgb)
-{
-    static _Thread_local uint8_t idx[MAX_W * MAX_H];
-    if (w <= 0 || h <= 0 || (size_t)w * h > sizeof idx || !indices(f, w, h, idx)) return 0;
-    uint32_t pal[256];
-    for (int k = 0; k < 256; k++) pal[k] = k < f->colours ? mdrt_vdp_rgb(f->palette[k], curve) : 0;
-    for (size_t i = 0; i < (size_t)w * h; i++) {
-        uint32_t c = pal[idx[i]];
-        *rgb++ = (uint8_t)(c >> 16);
-        *rgb++ = (uint8_t)(c >> 8);
-        *rgb++ = (uint8_t)c;
-    }
-    return 1;
-}
-
-static void le16(uint8_t *p, unsigned v) { p[0] = (uint8_t)v; p[1] = (uint8_t)(v >> 8); }
-static void le32(uint8_t *p, uint32_t v) { le16(p, v & 0xFFFF); le16(p + 2, v >> 16); }
-
-void mdrt_clip_wav(mdrt_clip *clip, uint32_t rate, double fps, mdrt_gif_put put, void *user)
-{
-    long n = mdrt_clip_frames(clip, NULL, NULL);
-    if (fps <= 0) fps = 60;
-    uint32_t total = (uint32_t)llround((double)n * rate / fps), bytes = total * 4;
-    uint8_t h[44] = "RIFF....WAVEfmt ";
-    le32(h + 4, 36 + bytes);
-    le32(h + 16, 16);
-    le16(h + 20, 1);                                        /* PCM, two channels, 16 bits */
-    le16(h + 22, 2);
-    le32(h + 24, rate);
-    le32(h + 28, rate * 4);
-    le16(h + 32, 4);
-    le16(h + 34, 16);
-    memcpy(h + 36, "data", 4);
-    le32(h + 40, bytes);
-    put(user, h, 44);
-    mdrt_capture_frame f;
-    uint8_t buf[4096];
-    for (long i = 0; mdrt_clip_next(clip, &f); i++) {
-        long want = llround((double)(i + 1) * rate / fps) - llround((double)i * rate / fps);
-        for (long k = 0; k < want;) {
-            int m = 0;
-            for (; m < (int)sizeof buf / 4 && k < want; m++, k++) {
-                int16_t l = k < f.sound_frames ? f.sound[2 * k] : 0, r = k < f.sound_frames ? f.sound[2 * k + 1] : 0;
-                le16(buf + 4 * m, (uint16_t)l);
-                le16(buf + 4 * m + 2, (uint16_t)r);
-            }
-            put(user, buf, (size_t)m * 4);
-        }
-    }
 }

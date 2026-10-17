@@ -10,7 +10,7 @@
  * the light they take made up on average by the lift; and captures: GIF's palettes and code sizes,
  * its LZW back and forth (noise at every code size, through the dictionary's fresh starts; long
  * runs; one pixel; none), the last frames kept and taken in order, a recording's file read back, a
- * clip as RGB stretched, as a GIF (its frames and their times) and its sound as WAV, kept in time. */
+ * clip as a GIF (its frames and their times), and a setting taken out. */
 #include <stdlib.h>
 #include <string.h>
 #include "check.h"
@@ -54,6 +54,12 @@ static void settings(void)
     CHECK(!strcmp(again, want));
     mdrt_settings_clean(s);
     CHECK(!mdrt_settings_dirty(s));
+    mdrt_settings_remove(s, "mystery.key");                           /* a key taken out: the rest as they were */
+    mdrt_settings_remove(s, "no.such.key");
+    CHECK(mdrt_settings_dirty(s) && !mdrt_settings_get(s, "mystery.key"));
+    mdrt_settings_format(s, out, n);
+    CHECK(!strcmp(out, "# my settings\nvideo.scale = integer\n\naudio.volume = 70\nnot a setting\naudio.mute = 0\naudio.device =\n"));
+    mdrt_settings_clean(s);
     const char *keys = "key.volume_up = =\nkey.slow = ,\nkey.none =\n";      /* keys that are signs, and none */
     CHECK_EQ(mdrt_settings_parse(t, keys, strlen(keys)), 3);
     const char *up = mdrt_settings_get(t, "key.volume_up"), *slow = mdrt_settings_get(t, "key.slow"), *none = mdrt_settings_get(t, "key.none");
@@ -509,7 +515,7 @@ static void captures(void)
     CHECK_EQ(mdrt_gif_lzw(in, N, 8, code, 100), 0);            /* (no room) */
     CHECK(!mdrt_gif_unlzw(code, 3, 8, back, N));               /* (cut short) */
 
-    /* a capture keeping 5 frames, of 8: frame k all red k % 7 + 1 at 4 x 2, its sound k pairs of k */
+    /* a capture keeping 5 frames, of 8: frame k all red k % 7 + 1 at 4 x 2 */
     mdrt_capture *c = mdrt_capture_new(5);
     FILE *rec = tmpfile();
     CHECK(c && rec);
@@ -517,11 +523,8 @@ static void captures(void)
     mdrt_capture_record(c, rec);
     for (int k = 0; k < 8; k++) {
         uint16_t f[8];
-        int16_t snd[16];
         for (int i = 0; i < 8; i++) f[i] = (uint16_t)((k % 7 + 1) << 1);
-        for (int i = 0; i < 16; i++) snd[i] = (int16_t)k;
         mdrt_capture_picture(c, f, 4, 2, 4);
-        mdrt_capture_sound(c, snd, k);
     }
     CHECK_EQ(mdrt_capture_kept(c), 5);
     CHECK_EQ(mdrt_capture_recorded(c), 8);
@@ -537,13 +540,10 @@ static void captures(void)
     CHECK(w == 4 && h == 2);
     mdrt_capture_frame f;
     for (int k = 4; mdrt_clip_next(clip, &f); k++)             /* frames 4-7, the oldest first */
-        order &= f.colours == 1 && f.palette[0] == (uint16_t)((k % 7 + 1) << 1) && f.sound_frames == k && f.sound[0] == k;
+        order &= f.colours == 1 && f.palette[0] == (uint16_t)((k % 7 + 1) << 1) && f.w == 4 && f.h == 2;
     CHECK(order);
-    mdrt_clip_rewind(clip);
-    uint8_t rgb[8 * 4 * 3];
-    CHECK(mdrt_clip_next(clip, &f) && mdrt_clip_rgb(&f, MDRT_RGB_LINEAR, 8, 4, rgb));   /* (stretched twice) */
-    CHECK(rgb[0] == 182 && rgb[1] == 0 && rgb[2] == 0 && rgb[31 * 3] == 182);          /* (red 5 of 7) */
-    /* as a GIF at 60 frames a second: frames 0 and 2 kept, 3 and 4 hundredths each; twice the size */
+    /* as a GIF at 60 frames a second: frames 0 and 2 kept, 3 and 4 hundredths each; twice the size,
+     * its first pixel red 5 of 7 */
     struct mem { uint8_t *p; size_t n, cap; } gif = { NULL, 0, 0 };
     CHECK(mdrt_clip_gif(clip, MDRT_RGB_LINEAR, 2, 60, put_mem, &gif, NULL));
     int frames = 0, delays[4] = { 0 };
@@ -551,22 +551,18 @@ static void captures(void)
         if (gif.p[i] == 0x21 && gif.p[i + 1] == 0xF9 && frames < 4) delays[frames++] = gif.p[i + 4] | gif.p[i + 5] << 8;
     CHECK(gif.p && gif.n > 40 && !memcmp(gif.p, "GIF89a", 6) && gif.p[6] == 8 && gif.p[8] == 4 && gif.p[gif.n - 1] == 0x3B);
     CHECK(frames == 2 && delays[0] == 3 && delays[1] == 4);
+    for (size_t i = 13; gif.p && i + 13 < gif.n; i++)
+        if (gif.p[i] == 0x2C && gif.p[i + 5] == 8 && gif.p[i + 7] == 4) {   /* the first image: its table's first colour */
+            CHECK((gif.p[i + 9] & 0x80) && gif.p[i + 10] == 182 && gif.p[i + 11] == 0 && gif.p[i + 12] == 0);
+            break;
+        }
     free(gif.p);
-    /* its sound: 4 frames of 800 at 48000 (each frame's own pairs, then silence) */
-    struct mem wav = { NULL, 0, 0 };
-    mdrt_clip_wav(clip, 48000, 60, put_mem, &wav);
-    CHECK(wav.p && wav.n == 44 + 3200 * 4 && !memcmp(wav.p, "RIFF", 4) && !memcmp(wav.p + 36, "data", 4));
-    if (wav.p && wav.n == 44 + 3200 * 4) {
-        const uint8_t *d = wav.p + 44;
-        CHECK(d[0] == 4 && d[4 * 3] == 4 && d[4 * 4] == 0 && d[4 * 800] == 5 && d[4 * 805] == 0);
-    }
-    free(wav.p);
     mdrt_clip_free(clip);
     /* the recording's file: all 8 frames, read back the same */
     mdrt_clip *file = mdrt_clip_file(rec);
     order = 1;
     CHECK_EQ(mdrt_clip_frames(file, &w, &h), 8);
-    for (int k = 0; mdrt_clip_next(file, &f); k++) order &= f.palette[0] == (uint16_t)((k % 7 + 1) << 1) && f.sound_frames == k;
+    for (int k = 0; mdrt_clip_next(file, &f); k++) order &= f.palette[0] == (uint16_t)((k % 7 + 1) << 1);
     CHECK(order);
     mdrt_clip_free(file);
     fclose(rec);

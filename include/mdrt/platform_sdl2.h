@@ -8,9 +8,9 @@
  * The menu (Esc, or a controller's Back or Guide button; the game waits while it is open): the
  * game's ROM (a file browser; the client checks each one), a reset, states saved and loaded in
  * eight slots (states/slotN.state, each with its picture, slotN.png, shown beside the list), the
- * video (a pixel-art upscaler for the game's frames: mdrt/upscale.h; scaling, aspect, full
- * screen), the sound (volume, mute, the FM core and chip, changed as
- * the game plays), the players (two pads, or EA's 4 Way Play for four, from the next power on;
+ * video (a pixel-art upscaler for the game's frames: mdrt/upscale.h; scaling, aspect, the
+ * looks: mdrt/look.h; full screen), captures (the replay and recordings as GIFs: mdrt/capture.h),
+ * the sound (volume, mute, the FM core and chip, changed as the game plays), the players (two pads, or EA's 4 Way Play for four, from the next power on;
  * each player's controller; the controllers' buttons, turbo A / B / C, the stick's dead zone),
  * options (pausing when the window loses focus, fast-forward's speed) and every key, each changed
  * by pressing the new one (a controller's button, on a controller). Arrows and Enter work it, or a controller's d-pad, A
@@ -22,8 +22,9 @@
  *   pad 2  I J K L, Q / W / E = A / B / C, Tab = Start
  *   pads 3 and 4, and turbo A / B / C on each pad: no keys until given some
  *   F1 mute, F2 / F3 volume down / up, F4 held to step back (mdrt_requests); F5 pause, F6 held
- *   fast-forward, F7 slow motion, F8 one frame while paused; F9 / F10 ask the game to save /
- *   load a state (the slot chosen last), F11 or Alt+Enter full screen, F12 a screenshot; Esc the menu
+ *   fast-forward, F7 slow motion, F8 one frame while paused; F9 none; F10 saves the replay (the
+ *   last 20 seconds, kept as they are played) as a GIF, F11 starts and stops recording one, F12
+ *   a screenshot; Esc the menu; Alt+Enter full screen. States are saved and loaded from the menu.
  * Saves and loads reach the client as MDRT_REQUEST_SAVE / LOAD with the slot's file
  * (mdrt_request_path); a save is written to slotN.state.new and kept only when the client writes it
  * (a game that takes states only in play leaves the slot as it was). Quick resume (on by default):
@@ -40,7 +41,8 @@
  * sound device and how many frames of sound are queued (latency), the FM core and chip, the
  * adaptor in the ports, each player's controller, the controllers' buttons, turbo's speed, the
  * stick's dead zone, pausing when the window loses focus, fast-forward's speed, the states'
- * directory, the slot chosen last, quick resume, the screenshots' directory and every key. */
+ * directory, the slot chosen last, quick resume, the screenshots' directory, the looks, the
+ * replay's length, a GIF's size, the videos' directory and every key. */
 #ifndef MDRT_PLATFORM_SDL2_H
 #define MDRT_PLATFORM_SDL2_H
 #include "mdrt/mdrt.h"

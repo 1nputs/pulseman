@@ -11,11 +11,11 @@
  * last found again on the next start; and four players: EA's 4 Way Play in the ports, two virtual
  * controllers given to players 1 and 3, a button moved, a turbo button, the stick's dead zone, a
  * controller pulled out, the Players page and a controller button changed by pressing it; and the
- * save slots (F9, F10, the Save and Load pages, a save out of play that changes nothing) and quick
+ * save slots (the menu's Save and Load pages, a save out of play that changes nothing) and quick
  * resume (the state at quitting, back at the next start; none when quitting out of play); and
- * captures: the replay saved by Shift+F12, a recording by Ctrl+F12, and from the menu with MP4
- * chosen and no ffmpeg (a GIF), each GIF read back, a control's key set with Ctrl by pressing it;
- * with ffmpeg on the machine, an MP4. */
+ * captures: the replay saved by F10, a recording by F11, the replay from the menu, each GIF read
+ * back, and a control's key set with Ctrl by pressing it; and an older build's keys taken out of
+ * the settings. */
 #include <SDL2/SDL.h>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -340,11 +340,14 @@ static int slots(void *user)
         quit_event();
         return 0;
     }
-    press(SDL_SCANCODE_F9);                               /* slot 1 */
+    /* the menu: [Resume, Reset, Save a state, Load a state, Video ...]; Save: [slot 1-8, Back], the
+     * slot chosen last selected */
+    keys(SDL_SCANCODE_ESCAPE, 1);
+    keys(SDL_SCANCODE_DOWN, 2);
+    keys(SDL_SCANCODE_RETURN, 2);                         /* slot 1 */
     SDL_Delay(500);
     int s1 = state_in("states/slot1.state");
     CHECK(s1 > 0 && exists("states/slot1.png") && !exists("states/slot1.state.new"));
-    /* the menu: [Resume, Reset, Save a state, Load the state, Video ...]; Save: [slot 1-8, Back] */
     keys(SDL_SCANCODE_ESCAPE, 1);
     keys(SDL_SCANCODE_DOWN, 2);
     keys(SDL_SCANCODE_RETURN, 1);
@@ -354,18 +357,22 @@ static int slots(void *user)
     int s2 = state_in("states/slot2.state");
     CHECK(s2 > s1 && exists("states/slot2.png"));
     SDL_Delay(300);
-    press(SDL_SCANCODE_F10);                              /* slot 2 again: the one chosen last */
+    keys(SDL_SCANCODE_ESCAPE, 1);
+    keys(SDL_SCANCODE_DOWN, 3);
+    keys(SDL_SCANCODE_RETURN, 2);                         /* Load: slot 2, the one chosen last */
     SDL_Delay(200);
     CHECK(SDL_AtomicGet(&game_frame) >= s2 && SDL_AtomicGet(&game_frame) < s2 + 20);
     keys(SDL_SCANCODE_ESCAPE, 1);
     keys(SDL_SCANCODE_DOWN, 3);
-    keys(SDL_SCANCODE_RETURN, 1);                         /* Load: slot 2 selected */
+    keys(SDL_SCANCODE_RETURN, 1);
     keys(SDL_SCANCODE_UP, 1);
     keys(SDL_SCANCODE_RETURN, 1);                         /* slot 1 */
     SDL_Delay(200);
     CHECK(SDL_AtomicGet(&game_frame) >= s1 && SDL_AtomicGet(&game_frame) < s1 + 20);
     SDL_AtomicSet(&refuse_saves, 1);                      /* out of play: slot 1 as it was */
-    press(SDL_SCANCODE_F9);
+    keys(SDL_SCANCODE_ESCAPE, 1);
+    keys(SDL_SCANCODE_DOWN, 2);
+    keys(SDL_SCANCODE_RETURN, 2);
     SDL_Delay(1800);
     CHECK_EQ(state_in("states/slot1.state"), s1);
     CHECK(!exists("states/slot1.state.new"));
@@ -374,39 +381,28 @@ static int slots(void *user)
     return 0;
 }
 
-/* runs 8 and 9: captures. 8: the replay (Shift+F12), a recording of a second (Ctrl+F12 twice),
- * then MP4 chosen in the menu with no ffmpeg to be found (a GIF instead) and the replay saved from
- * there; 9 (with ffmpeg on the machine): the replay as MP4 */
+/* run 8: captures: the replay (F10), a recording of a second (F11 twice), the replay from the menu;
+ * then Record's key set to Ctrl+F11 by pressing it */
 static int capturer(void *user)
 {
     (void)user;
     until_frame(150);
-    if (run == 9) {
-        press_mod(SDL_SCANCODE_F12, KMOD_LSHIFT);
-        SDL_Delay(300);
-        quit_event();                                     /* (the video finished before the end) */
-        return 0;
-    }
-    press_mod(SDL_SCANCODE_F12, KMOD_LSHIFT);
+    press(SDL_SCANCODE_F10);
     SDL_Delay(1000);
-    press_mod(SDL_SCANCODE_F12, KMOD_RCTRL);
+    press(SDL_SCANCODE_F11);
     SDL_Delay(1000);
-    press_mod(SDL_SCANCODE_F12, KMOD_RCTRL);
+    press(SDL_SCANCODE_F11);
     SDL_Delay(1000);
     /* the menu: [Resume, Reset, Save, Load, Video, Capture ...]; Capture: [Save the replay, Start
-     * recording, Replay kept, Saved as, GIF size, Back] */
+     * recording, Replay kept, GIF size, Back] */
     keys(SDL_SCANCODE_ESCAPE, 1);
     keys(SDL_SCANCODE_DOWN, 5);
-    keys(SDL_SCANCODE_RETURN, 1);
-    keys(SDL_SCANCODE_DOWN, 3);
-    keys(SDL_SCANCODE_RIGHT, 1);                          /* GIF -> MP4 */
-    keys(SDL_SCANCODE_UP, 3);
-    keys(SDL_SCANCODE_RETURN, 1);                         /* the replay, from the menu */
+    keys(SDL_SCANCODE_RETURN, 2);                         /* the replay, from the menu */
     SDL_Delay(1500);
     keys(SDL_SCANCODE_ESCAPE, 1);
     keys(SDL_SCANCODE_DOWN, 4);
-    keys(SDL_SCANCODE_RETURN, 1);                         /* Keys: [pads' keys ..., Record, Menu, Back] */
-    keys(SDL_SCANCODE_UP, 3);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* Keys: [pads' keys ..., Record, Screenshot, Menu, Back] */
+    keys(SDL_SCANCODE_UP, 4);
     keys(SDL_SCANCODE_RETURN, 1);                         /* Record: Ctrl waits for its key, then F11 */
     keys(SDL_SCANCODE_LCTRL, 1);
     press_mod(SDL_SCANCODE_F11, KMOD_LCTRL);
@@ -498,7 +494,7 @@ static void game(mdrt *m, void *user)
     mdrt_psg_port(m, 200, 0x90);
     SDL_Thread *t = run <= 2 ? SDL_CreateThread(player, "player", NULL) : run == 5 ? SDL_CreateThread(players, "players", NULL)
                   : run == 6 || run == 7 ? SDL_CreateThread(slots, "slots", NULL)
-                  : run >= 8 ? SDL_CreateThread(capturer, "capturer", NULL) : NULL;
+                  : run == 8 ? SDL_CreateThread(capturer, "capturer", NULL) : NULL;
     for (;;) {
         mdrt_vblank_end(m);
         if (mdrt_wait_vblank(m)) break;
@@ -621,11 +617,12 @@ static void check_settings(void)
     static const char *const want[] = {
         "# the test's own comment\n", "mystery.key = kept\n", "general.screenshots = shots\n", "general.fast_forward = 4\n",
         "audio.volume = 80\n", "audio.mute = 1\n", "video.scale = integer\n", "video.aspect = square\n",
-        "pad1.start = Return\n", "pad2.a = Q\n", "key.screenshot = F12\n", "key.slow_motion = F7\n", "key.pause = F5\n", "key.save_state = F9\n", "key.mute = F1\n",
+        "pad1.start = Return\n", "pad2.a = Q\n", "key.screenshot = F12\n", "key.slow_motion = F7\n", "key.pause = F5\n", "key.save_replay = F10\n", "key.record = F11\n", "key.mute = F1\n",
         "key.menu = Escape\n", "game.rom =\n",
     };
     for (size_t i = 0; i < sizeof want / sizeof *want; i++)
         if (!strstr(t, want[i])) { printf("  settings: no \"%s\"\n", want[i]); CHECK(0); }
+    CHECK(!strstr(t, "key.save_state") && !strstr(t, "key.fullscreen") && !strstr(t, "capture.format"));   /* (an older build's: gone) */
     free(t);
 }
 
@@ -654,7 +651,8 @@ int main(int argc, char **argv)
     while (d && (e = readdir(d))) if (strstr(e->d_name, ".png")) { snprintf(path, sizeof path, "%s/%s", shots, e->d_name); remove(path); }
     if (d) closedir(d);
     char text[1024];
-    snprintf(text, sizeof text, "# the test's own comment\nmystery.key = kept\ngeneral.screenshots = %s\nvideo.scale = integer\ngeneral.resume = 0\n", shots);
+    snprintf(text, sizeof text, "# the test's own comment\nmystery.key = kept\ngeneral.screenshots = %s\nvideo.scale = integer\ngeneral.resume = 0\n"
+             "key.save_state = F9\nkey.fullscreen = F11\ncapture.format = mp4\n", shots);   /* (the last three: an older build's) */
     spit(settings_path, text);
     run = 1;
     CHECK_EQ(play(), 0);
@@ -738,11 +736,11 @@ int main(int argc, char **argv)
     run = 7;
     CHECK_EQ(play(), 0);
     CHECK(!exists("states/resume.state"));                /* (quit out of play: none to come back to) */
-    /* captures: the replay, a recording, MP4 with no ffmpeg (a GIF), and with ffmpeg if there is one */
+    /* captures: the replay, a recording, the replay from the menu */
     t = slurp(settings_path, &len);
     if (t) {
-        char *ed = malloc((size_t)len + 128);
-        snprintf(ed, (size_t)len + 128, "%scapture.replay = 10\ncapture.format = gif\ncapture.ffmpeg = no-such-ffmpeg-here\n", t);
+        char *ed = malloc((size_t)len + 64);
+        snprintf(ed, (size_t)len + 64, "%scapture.replay = 10\n", t);
         spit(settings_path, ed);
         free(ed);
         free(t);
@@ -751,8 +749,7 @@ int main(int argc, char **argv)
     CHECK_EQ(play(), 0);
     int n = videos(".gif", names), gw = 0, gh = 0, frames[3] = { 0 };
     CHECK_EQ(n, 3);
-    CHECK_EQ(videos(".mp4", others), 0);
-    CHECK_EQ(videos(".clip", others) + videos(".wav", others), 0);   /* (the recording's file and the sound: gone) */
+    CHECK_EQ(videos(".clip", others), 0);                 /* (the recording's file: gone) */
     for (int i = 0; i < n && i < 3; i++) {
         uint32_t first = 0;
         frames[i] = gif_read(names[i], &gw, &gh, &first);
@@ -763,24 +760,7 @@ int main(int argc, char **argv)
     CHECK(frames[1] >= 15 && frames[1] <= 45);            /* the recording: ~1 s */
     CHECK(frames[2] >= 20);                               /* the replay since the first */
     t = slurp(settings_path, &len);
-    CHECK(t && strstr(t, "capture.format = mp4\n") && strstr(t, "key.save_replay = Shift+F12\n") && strstr(t, "key.record = Ctrl+F11\n"));
-    if (system("ffmpeg -version >/dev/null 2>&1") == 0 && t) {
-        char *at = strstr(t, "capture.ffmpeg = no-such-ffmpeg-here\n");
-        if (at) {                                         /* ("no-such-ffmpeg-here" -> "ffmpeg") */
-            memmove(at + 23, at + 36, strlen(at + 36) + 1);
-            memcpy(at + 17, "ffmpeg", 6);
-        }
-        spit(settings_path, t);
-        for (int i = 0, k = videos("", names); i < k; i++) remove(names[i]);
-        run = 9;
-        CHECK_EQ(play(), 0);
-        CHECK_EQ(videos(".mp4", names), 1);
-        long ml = 0;
-        char *mp4 = videos(".mp4", names) ? slurp(names[0], &ml) : NULL;
-        CHECK(mp4 && ml > 1000 && !memcmp(mp4 + 4, "ftyp", 4));
-        printf("  captures: an MP4 of %ld bytes\n", ml);
-        free(mp4);
-    } else printf("  captures: no ffmpeg here, so no MP4 made\n");
+    CHECK(t && strstr(t, "key.save_replay = F10\n") && strstr(t, "key.record = Ctrl+F11\n"));
     free(t);
     return check_done("platform_test");
 }
