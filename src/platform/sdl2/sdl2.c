@@ -98,18 +98,20 @@ static const char *const fast_label[6] = { "2x", "3x", "4x", "6x", "8x", "as fas
 #define ROM_MAX (16u << 20)                               /* (no cartridge is larger) */
 
 /* the menu's pages and items */
-enum { PAGE_MAIN, PAGE_VIDEO, PAGE_SOUND, PAGE_OPTIONS, PAGE_KEYS, PAGE_ROM, PAGE_PLAYERS, PAGE_CBUTTONS, PAGE_SAVE, PAGE_LOAD, PAGE_CAPTURE };
+enum { PAGE_MAIN, PAGE_VIDEO, PAGE_SOUND, PAGE_OPTIONS, PAGE_KEYS, PAGE_ROM, PAGE_PLAYERS, PAGE_CBUTTONS, PAGE_SAVE, PAGE_LOAD, PAGE_CAPTURE,
+       PAGE_CLIENT };
 enum { SLOT_COUNT = 8 };                                  /* save slots; 0 is quick resume's */
 enum { I_RESUME = 1, I_ROM, I_RESET, I_SAVE, I_LOAD, I_VIDEO, I_SOUND, I_OPTIONS, I_KEYS, I_QUIT, I_BACK,
        I_UPSCALE, I_SCALE, I_ASPECT, I_FULL, I_COLOURS, I_BLEND, I_SCANLINES, I_MASK, I_VOLUME, I_MUTE, I_FM_CORE, I_FM_CHIP, I_FOCUS, I_FAST, I_UP,
        I_PLAYERS, I_ADAPTOR, I_TURBO, I_DEADZONE, I_CBUTTONS, I_RESUME_OPT,
-       I_CAPTURE, I_CAP_REPLAY, I_CAP_RECORD, I_CAP_SECONDS, I_CAP_GIFSCALE,
+       I_CAPTURE, I_CAP_REPLAY, I_CAP_RECORD, I_CAP_SECONDS, I_CAP_GIFSCALE, I_CLIENT,
        I_SLOT = 800,             /* + slot (1-8) */
        I_PLAYER = 900,           /* + player (0-3) */
        I_PAD = 1000,             /* + pad * BUTTONS + button */
        I_CONTROL = 2000,         /* + K_ */
        I_TURBOKEY = 2500,        /* + pad * TURBOS + turbo */
        I_CBUTTON = 3000,         /* + a controller button (cbutton_*) */
+       I_COPTION = 4000,         /* + one of the client's options */
        I_ENTRY = 10000 };        /* + a directory entry's index */
 
 typedef struct sdl {
@@ -183,6 +185,7 @@ typedef struct sdl {
     char rec_path[1100];
     uint32_t rec_since, status_at;
     struct clip_save *clips[4]; /* clips being saved */
+    int *opt_values;            /* the client's options (mdrt_sdl_options.options): a choice's index or a number */
     char title[200];
     uint32_t notice_until;
     uint8_t *rom;               /* the game's ROM (given to the client by rom_use) */
@@ -344,6 +347,7 @@ static int start_game(sdl *s)
     s->m = mdrt_new(s->cfg);
     if (!s->m) return 0;
     mdrt_pads_set_adaptor(mdrt_get_pads(s->m), s->adaptor);   /* (in the ports at power on) */
+    if (s->o->options_use && s->opt_values) s->o->options_use(s->opt_values, s->user);   /* (the client's, for this game) */
     s->waits = s->queued = 0;
     s->next_tick = 0;
     if (s->dev) { SDL_PauseAudioDevice(s->dev, 1); SDL_ClearQueuedAudio(s->dev); }
@@ -583,6 +587,19 @@ static void settings_load(sdl *s)
     s->slot = clamp(mdrt_settings_get_int(s->set, "general.slot", 1), 1, SLOT_COUNT);
     s->resume = mdrt_settings_get_int(s->set, "general.resume", 1) != 0;
     s->pending = -1;
+    if (o->noptions > 0) s->opt_values = calloc((size_t)o->noptions, sizeof *s->opt_values);
+    for (int i = 0; s->opt_values && i < o->noptions; i++) {   /* the client's options */
+        const mdrt_sdl_option *op = &o->options[i];
+        if (op->count > 0) {
+            mdrt_settings_default(s->set, op->key, op->names[clamp(op->def, 0, op->count - 1)]);
+            s->opt_values[i] = named(mdrt_settings_get(s->set, op->key), op->names, op->count, clamp(op->def, 0, op->count - 1));
+        } else {
+            char v[24];
+            snprintf(v, sizeof v, "%d", op->def);
+            mdrt_settings_default(s->set, op->key, v);
+            s->opt_values[i] = clamp(mdrt_settings_get_int(s->set, op->key, op->def), op->min, op->max);
+        }
+    }
     mdrt_settings_default(s->set, "capture.replay", "20");
     mdrt_settings_default(s->set, "capture.gif_scale", "1");
     mdrt_settings_default(s->set, "general.videos", "videos");
@@ -1108,6 +1125,7 @@ static void build_page(sdl *s, int page, int select)
         mdrt_menu_add(m, I_CAPTURE, MDRT_ITEM_ACTION, "Capture");
         mdrt_menu_add(m, I_SOUND, MDRT_ITEM_ACTION, "Sound");
         mdrt_menu_add(m, I_PLAYERS, MDRT_ITEM_ACTION, "Players");
+        if (s->opt_values && s->o->options_title) mdrt_menu_add(m, I_CLIENT, MDRT_ITEM_ACTION, s->o->options_title);
         mdrt_menu_add(m, I_OPTIONS, MDRT_ITEM_ACTION, "Options");
         mdrt_menu_add(m, I_KEYS, MDRT_ITEM_ACTION, "Keys");
         mdrt_menu_add(m, I_QUIT, MDRT_ITEM_ACTION, "Quit");
@@ -1125,6 +1143,16 @@ static void build_page(sdl *s, int page, int select)
         mdrt_menu_add_choice(m, I_FULL, "Full screen", off_on, 2, is_fullscreen(s));
         mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
         snprintf(m->subtitle, sizeof m->subtitle, "Sharp: smooth edges. Integer: even pixels. Fit: fills.");
+        break;
+    case PAGE_CLIENT:                                     /* the client's own options */
+        mdrt_menu_page(m, s->o->options_title);
+        if (s->o->options_note) put_text(m->subtitle, sizeof m->subtitle, s->o->options_note, 0);
+        for (int i = 0; i < s->o->noptions; i++) {
+            const mdrt_sdl_option *op = &s->o->options[i];
+            if (op->count > 0) mdrt_menu_add_choice(m, I_COPTION + i, op->label, op->labels ? op->labels : op->names, op->count, s->opt_values[i]);
+            else mdrt_menu_add_number(m, I_COPTION + i, op->label, s->opt_values[i], op->min, op->max, op->step > 0 ? op->step : 1, NULL);
+        }
+        mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
         break;
     case PAGE_CAPTURE: {
         char a[64], b[64];
@@ -1486,6 +1514,7 @@ static void act(sdl *s, int id)
         return;
     case I_VIDEO: build_page(s, PAGE_VIDEO, I_UPSCALE); return;
     case I_CAPTURE: build_page(s, PAGE_CAPTURE, s->replay ? I_CAP_REPLAY : I_CAP_RECORD); return;
+    case I_CLIENT: build_page(s, PAGE_CLIENT, I_COPTION); return;
     case I_CAP_REPLAY:                                    /* (saved while the menu stays) */
         snprintf(s->menu.message, sizeof s->menu.message, "%s", save_replay(s));
         return;
@@ -1529,7 +1558,8 @@ static void act(sdl *s, int id)
     case I_QUIT: if (!running || confirmed(s, id, "quit")) request_quit(s); return;
     case I_BACK:
         if (s->page == PAGE_CBUTTONS) { build_page(s, PAGE_PLAYERS, I_CBUTTONS); return; }
-        build_page(s, PAGE_MAIN, s->page == PAGE_VIDEO ? I_VIDEO : s->page == PAGE_CAPTURE ? I_CAPTURE : s->page == PAGE_SOUND ? I_SOUND : s->page == PAGE_OPTIONS ? I_OPTIONS
+        build_page(s, PAGE_MAIN, s->page == PAGE_VIDEO ? I_VIDEO : s->page == PAGE_CAPTURE ? I_CAPTURE : s->page == PAGE_CLIENT ? I_CLIENT
+                                 : s->page == PAGE_SOUND ? I_SOUND : s->page == PAGE_OPTIONS ? I_OPTIONS
                                  : s->page == PAGE_PLAYERS ? I_PLAYERS : s->page == PAGE_SAVE ? I_SAVE : s->page == PAGE_LOAD ? I_LOAD : I_KEYS);
         return;
     case I_UPSCALE:                                       /* (the frame is upscaled again when the menu closes) */
@@ -1625,6 +1655,17 @@ static void act(sdl *s, int id)
         s->player_ctrl[id - I_PLAYER] = it->value;
         snprintf(k, sizeof k, "player%d.controller", id - I_PLAYER + 1);
         mdrt_settings_set_int(s->set, k, it->value);
+    } else if (id >= I_COPTION && id < I_COPTION + s->o->noptions && s->opt_values) {   /* one of the client's options */
+        int which = id - I_COPTION, changed = 0;
+        s->opt_values[which] = it->value;
+        if (s->o->options_changed) changed = s->o->options_changed(which, s->opt_values, s->user);
+        for (int i = 0; i < s->o->noptions; i++) {        /* (into the settings: a preset may change them all) */
+            const mdrt_sdl_option *op = &s->o->options[i];
+            if (op->count > 0) mdrt_settings_set(s->set, op->key, op->names[clamp(s->opt_values[i], 0, op->count - 1)]);
+            else mdrt_settings_set_int(s->set, op->key, s->opt_values[i]);
+        }
+        if (changed) build_page(s, PAGE_CLIENT, id);
+        if (running) snprintf(s->menu.message, sizeof s->menu.message, "From the next game: Reset");
     } else if (id >= I_CBUTTON && id < I_CBUTTON + CBUTTONS) {   /* a controller button to change */
         s->binding = id;
         snprintf(s->menu.message, sizeof s->menu.message, "Press a controller's button for %s", it->label);
@@ -2024,7 +2065,7 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
     mdrt_settings_free(s->set);
     mdrt_menu_free(&s->menu);
     free_entries(s);
-    free(s->frame); free(s->blended); free(s->big); free(s->big_scratch); free(s->pending_pic);
+    free(s->frame); free(s->blended); free(s->big); free(s->big_scratch); free(s->pending_pic); free(s->opt_values);
     if (stopped) {                                        /* (else the thread still has them) */
         mdrt_free(s->m);
         mdrt_capture_free(s->cap);

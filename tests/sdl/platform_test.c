@@ -15,7 +15,8 @@
  * resume (the state at quitting, back at the next start; none when quitting out of play); and
  * captures: the replay saved by F10, a recording by F11, the replay from the menu, each GIF read
  * back, and a control's key set with Ctrl by pressing it; and an older build's keys taken out of
- * the settings. */
+ * the settings; and the client's own options page (a preset changing another value, the values
+ * given at each power on, kept in the file). */
 #include <SDL2/SDL.h>
 #include <dirent.h>
 #include <sys/stat.h>
@@ -39,7 +40,7 @@
 #define BACKDROP 0x0E42                                   /* the picture: the backdrop's colour */
 
 static const char *const shots = "shots", *const sound = "sound.raw", *const settings_path = "settings.ini";
-static SDL_atomic_t frame, held, starts, fm_second, pads4[MDRT_PADS], adaptor, game_frame, refuse_saves;
+static SDL_atomic_t frame, held, starts, fm_second, pads4[MDRT_PADS], adaptor, game_frame, refuse_saves, opt_seen[2], opt_uses;
 static int run;
 static char rom_seen[16];                                 /* the start of the ROM the client was given */
 
@@ -451,6 +452,40 @@ static int gif_read(const char *path, int *w, int *h, uint32_t *first)
     return frames;
 }
 
+/* run 9: the client's own options page: a choice whose last value is a preset (it sets the number)
+ * and a number; the values at each power on */
+static const char *const opt_names[3] = { "first", "second", "third" };
+static const mdrt_sdl_option test_options[2] = {
+    { "test.choice", "A choice", 3, opt_names, NULL, 0, 0, 0, 0 },
+    { "test.number", "A number", 0, NULL, NULL, 1, 9, 1, 4 },
+};
+static void options_use(const int *v, void *user) { (void)user; SDL_AtomicSet(&opt_seen[0], v[0]); SDL_AtomicSet(&opt_seen[1], v[1]); SDL_AtomicAdd(&opt_uses, 1); }
+static int options_changed(int which, int *v, void *user) { (void)user; if (which == 0 && v[0] == 2) { v[1] = 9; return 1; } return 0; }
+
+static int rules_player(void *user)
+{
+    (void)user;
+    until_frame(20);
+    CHECK(SDL_AtomicGet(&opt_uses) == 1 && SDL_AtomicGet(&opt_seen[0]) == 0 && SDL_AtomicGet(&opt_seen[1]) == 4);   /* the defaults */
+    /* the menu: [Resume, Reset, Save, Load, Video, Capture, Sound, Players, Test rules, Options ...] */
+    keys(SDL_SCANCODE_ESCAPE, 1);
+    keys(SDL_SCANCODE_DOWN, 8);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* [A choice, A number, Back] */
+    keys(SDL_SCANCODE_RIGHT, 2);                          /* first -> second -> third: the preset sets the number to 9 */
+    keys(SDL_SCANCODE_DOWN, 1);
+    keys(SDL_SCANCODE_LEFT, 1);                           /* 9 -> 8 */
+    SDL_Delay(100);
+    CHECK_EQ(SDL_AtomicGet(&opt_uses), 1);                /* (not until the next power on) */
+    keys(SDL_SCANCODE_ESCAPE, 1);
+    keys(SDL_SCANCODE_UP, 7);
+    keys(SDL_SCANCODE_RETURN, 2);                         /* Reset, asked again */
+    SDL_Delay(500);
+    printf("  options: %d power ons, the last with %d and %d\n", SDL_AtomicGet(&opt_uses), SDL_AtomicGet(&opt_seen[0]), SDL_AtomicGet(&opt_seen[1]));
+    CHECK(SDL_AtomicGet(&opt_uses) == 2 && SDL_AtomicGet(&opt_seen[0]) == 2 && SDL_AtomicGet(&opt_seen[1]) == 8);
+    quit_event();
+    return 0;
+}
+
 static int by_name(const void *a, const void *b) { return strcmp(a, b); }
 
 /* the videos' directory: its files of a kind, in order of name (up to 8) */
@@ -549,6 +584,15 @@ static int play(void)
     c.audio_rate = 48000;
     mdrt_sdl_options o = { .title = "platform test", .app = "platform-test" };   /* (settings.ini here) */
     SDL_Thread *t = NULL;
+    if (run == 9) {
+        o.options_title = "Test rules";
+        o.options_note = "For the next game";
+        o.options = test_options;
+        o.noptions = 2;
+        o.options_use = options_use;
+        o.options_changed = options_changed;
+        t = SDL_CreateThread(rules_player, "rules", NULL);   /* (out of the game, which a reset restarts) */
+    }
     if (run == 3 || run == 4) {
         o.rom_default = "missing.gen";
         o.rom_check = rom_check;
@@ -761,6 +805,12 @@ int main(int argc, char **argv)
     CHECK(frames[2] >= 20);                               /* the replay since the first */
     t = slurp(settings_path, &len);
     CHECK(t && strstr(t, "key.save_replay = F10\n") && strstr(t, "key.record = Ctrl+F11\n"));
+    free(t);
+    /* the client's options */
+    run = 9;
+    CHECK_EQ(play(), 0);
+    t = slurp(settings_path, &len);
+    CHECK(t && strstr(t, "test.choice = third\n") && strstr(t, "test.number = 8\n"));
     free(t);
     return check_done("platform_test");
 }

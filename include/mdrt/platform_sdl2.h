@@ -12,7 +12,8 @@
  * looks: mdrt/look.h; full screen), captures (the replay and recordings as GIFs: mdrt/capture.h),
  * the sound (volume, mute, the FM core and chip, changed as the game plays), the players (two pads, or EA's 4 Way Play for four, from the next power on;
  * each player's controller; the controllers' buttons, turbo A / B / C, the stick's dead zone),
- * options (pausing when the window loses focus, fast-forward's speed) and every key, each changed
+ * the client's own options (a page it describes: mdrt_sdl_option), the platform's options (pausing
+ * when the window loses focus, fast-forward's speed) and every key, each changed
  * by pressing the new one (a controller's button, on a controller). Arrows and Enter work it, or a controller's d-pad, A
  * and B. It is drawn over the picture at the console's resolution (mdrt/menu.h).
  *
@@ -47,6 +48,18 @@
 #define MDRT_PLATFORM_SDL2_H
 #include "mdrt/mdrt.h"
 
+/* one of the client's own options (a game's rules, say), on its page of the menu: a choice of
+ * some named values, or a number; kept in the settings file under its key */
+typedef struct mdrt_sdl_option {
+    const char *key;            /* its setting ("rules.period_lengths") */
+    const char *label;          /* on the page */
+    int count;                  /* choices (names and labels, count of each); 0: a number */
+    const char *const *names;   /* the choices as the settings file has them */
+    const char *const *labels;  /* and as the page shows them (NULL: the names) */
+    int min, max, step;         /* a number's range and step */
+    int def;                    /* the default: the choice's index, or the number */
+} mdrt_sdl_option;
+
 typedef struct mdrt_sdl_options {
     const char *title;
     int scale;                  /* window size in multiples of the picture (0: the settings', or 3) */
@@ -63,6 +76,18 @@ typedef struct mdrt_sdl_options {
     const char *rom_path, *rom_default, *rom_hint;
     const char *(*rom_check)(const uint8_t *rom, size_t size, void *user);
     void (*rom_use)(const uint8_t *rom, size_t size, void *user);
+    /* the client's own options (noptions of them; none: no page): a page of the menu called
+     * options_title, with options_note under it. The client gets their values (each option's
+     * choice index or number, in order) through options_use before every power on, on the
+     * window's thread while the game is stopped, so they hold for the whole of a game; a change
+     * made while one is played shows from the next (the menu says so). options_changed (may be
+     * NULL) hears of each change on the page and may change the other values (a preset); nonzero
+     * when it did. */
+    const char *options_title, *options_note;
+    const mdrt_sdl_option *options;
+    int noptions;
+    void (*options_use)(const int *values, void *user);
+    int (*options_changed)(int which, int *values, void *user);
 } mdrt_sdl_options;
 
 /* the client's game: runs on the game thread with the console made from the configuration; when

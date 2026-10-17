@@ -38,6 +38,13 @@ when none will do, opens the menu on a file browser. The menu's reset and a new 
 must then start from scratch, as at power on, whatever it kept in its own statics (NHL '94's
 `make golden-check` runs a restart against a fresh power on, frame by frame).
 
+A client with options of its own (a game's rules) describes them in `options` (`mdrt_sdl_option`:
+a key, a label, named choices or a number's range, a default) with `options_title`: the menu
+gets a page of them, the settings file keeps them, and `options_use` hands the client their
+values before every power on, on the window's thread with the game stopped. Read them there and
+keep them for the game: a change made in play shows from the next power on. `options_changed`
+can answer a change by changing other values (a preset).
+
 The pieces with no SDL in them are there for another platform (a browser's) to use:
 `mdrt/settings.h` (the file's text, read and written back with its comments and unknown keys),
 `mdrt/view.h` (where the picture goes in a window for each scaling), `mdrt/png.h` (a

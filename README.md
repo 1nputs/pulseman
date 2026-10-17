@@ -111,6 +111,12 @@ This README carries the status.
   49 hard cases back exactly; `make sdl-check` saves the replay, records a second, saves from the
   menu, reads each GIF back, saves and loads states from the menu, and binds a key with Ctrl by
   pressing it.
+- 2026-10-17, a page of the client's own options in the SDL2 platform's menu
+  (`mdrt_sdl_options.options`, `mdrt_sdl_option`): choices or numbers it describes, kept in the
+  settings file under its keys, handed to the client before every power on (`options_use`) so
+  they hold for a whole game (a change in play waits for the next, and the menu says so), and a
+  hook for presets (`options_changed`). For a game's rules: NHL '94's are the first. `make
+  sdl-check` works such a page, a preset included, and sees the values at the next power on.
 - 2026-10-16, the review's small findings: PAL's master clock (`MDRT_MASTER_CLOCK_PAL`,
   `mdrt_master_clock`) in the mixer and the platform; the default HV counter through the VDP's
   counter mapping; `mdrt_vdp_reg` and a rule for what in the structs is API; the mixer's gains in
