@@ -4,7 +4,8 @@
  * deflate blocks, Adler-32, every pixel); and the menu: its moves and values, a long list's pages,
  * its drawing (MDRT_MENU_PNG=FILE writes a page as a PNG to look at); and the upscalers: hand-worked
  * cases, their outputs on generated pixel art against hashes of the MMPX authors' reference code's
- * (MDRT_UPSCALE_DUMP=DIR writes the inputs for that code), Scale3x against a second formulation;
+ * (MDRT_UPSCALE_DUMP=DIR writes the inputs for that code), Scale3x against a second formulation,
+ * xBR against the hashes of its shader's sums done exactly;
  * and the looks: the console's colour levels, dithering blended where it is and nowhere else, the
  * soft blend, the scanlines' rows at whole and uneven sizes, the masks' stripes, slots and dots, and
  * the light they take made up on average by the lift; and captures: GIF's palettes and code sizes,
@@ -366,7 +367,32 @@ static void upscalers(void)
                 for (int k = 0; k < 9; k++) again[(3 * y + k / 3) * IW * 3 + 3 * x + k % 3] = e[k];
             }
         CHECK(!memcmp(out, again, (size_t)IW * IH * 9 * 4));
+        /* xBR at 2x, 3x, 4x against the hashes of the shader's sums done exactly (a line-by-line
+         * transcription of Hyllian's GLSL in exact fractions; Mesa's GPU running the shader itself
+         * agrees but for a level here and there and its own way with exact ties) */
+        static const uint64_t want_xbr[IMAGES][3] = {
+            { 0xe044f3c61bf9899bull, 0x87e5e1ccb5f406e1ull, 0x3adc96aae2fce11dull },
+            { 0xbf646f8f78e7371dull, 0x008f218641afc7c1ull, 0x933bf23895f87734ull },
+            { 0x2b776de19ea928f4ull, 0x8175deb83587cef8ull, 0x370e809426c8aafcull },
+            { 0x6dfe47fff8b3a0b8ull, 0x170da207be6af631ull, 0xe10308cbefab2b5cull },
+            { 0x9ae5b5e32b95e115ull, 0xb09517c312e22f85ull, 0xd022e481ad269cc5ull },
+        };
+        for (int k = 0; k < 3; k++) {
+            int m = MDRT_UPSCALE_XBR2X + k, f = mdrt_upscale_factor(m);
+            mdrt_upscale(m, in, IW, IH, IW, out, IW * f, k == 1 ? NULL : scratch);   /* (its own room, and the caller's) */
+            uint64_t h = fnv(out, (size_t)IW * IH * f * f);
+            if (h != want_xbr[n][k]) printf("  upscale: image %d, %s: %016llx, the exact sums %016llx\n", n, mdrt_upscale_name(m),
+                                            (unsigned long long)h, (unsigned long long)want_xbr[n][k]);
+            CHECK(h == want_xbr[n][k]);
+        }
     }
+    /* xBR blends: the staircase's steps at 2x get colours between black and white */
+    mdrt_upscale(MDRT_UPSCALE_XBR2X, s, 4, 4, 4, out, 8, NULL);
+    int between = 0;
+    for (int i = 0; i < 64; i++) between += out[i] != 0xFF000000 && out[i] != 0xFFFFFFFF && (out[i] & 0xFF) == (out[i] >> 8 & 0xFF);
+    CHECK(between > 0);
+    CHECK_EQ(mdrt_upscale_factor(MDRT_UPSCALE_XBR3X), 3);
+    CHECK(!strcmp(mdrt_upscale_name(MDRT_UPSCALE_XBR4X), "xbr4x") && !strcmp(mdrt_upscale_label(MDRT_UPSCALE_XBR2X), "xBR 2x"));
 }
 
 /* ---- the looks ------------------------------------------------------------------------------- */

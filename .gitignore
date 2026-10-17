@@ -15,3 +15,8 @@
 *.smd
 # working notes, kept outside the repository
 /docs/WORKPLAN.md
+# what a game run from here writes beside itself
+/settings.ini
+/screenshots/
+/states/
+/videos/

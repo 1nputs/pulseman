@@ -740,7 +740,7 @@ int main(int argc, char **argv)
     t = slurp(settings_path, &len);
     if (t) {
         char *ed = malloc((size_t)len + 64);
-        snprintf(ed, (size_t)len + 64, "%scapture.replay = 10\n", t);
+        snprintf(ed, (size_t)len + 64, "%scapture.replay = 10\nvideo.upscaler = xbr3x\n", t);   /* (and xBR from here) */
         spit(settings_path, ed);
         free(ed);
         free(t);

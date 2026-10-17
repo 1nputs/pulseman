@@ -176,6 +176,15 @@ This README carries the status.
   `platform_unit` checks hand-worked cases, Scale3x against a second formulation, and the outputs
   on generated pixel art (noise, blocks and lines at every slope, text, a dither) against hashes
   of the authors' own code; `make sdl-check` plays with MMPX 4x on.
+- 2026-10-16, xBR 2x, 3x and 4x (Hyllian's xBR-lv2, following his MIT-licensed shader at its
+  defaults): it blends along the edges it finds, so curves and text come out smooth (new colours
+  between). Its decisions are made in whole numbers: a console's colour levels are evenly spaced,
+  so the shader's comparisons often come out exactly equal, where float arithmetic lets the last
+  bit decide. `platform_unit` checks it against hashes of a line-by-line transcription of the
+  shader in exact fractions (identical, pixel for pixel, at every size, on the generated pictures
+  and real NHL '94 frames); Mesa's software GPU running the shader itself agrees but for a level
+  here and there and the exact ties, where a GPU's rounding goes its own way. 3.4 ms at 2x and
+  4.8 ms at 4x for a 256 x 224 frame; `make sdl-check` plays with xBR 3x for a run.
 
 `make check` (GCC, sanitizers; both FM cores, each against the vectors); `make sdl-check` (the SDL2
 platform, about 15 s in real time; `MODE=release` to time fast-forward too); `CC=clang CXX=clang++
@@ -193,5 +202,6 @@ failure rather than a skip. The test ROM is assembled with `tests/rom/build.sh` 
 default is the one built in `../ninety-four/ref/`).
 
 Third-party code: Nuked-OPN2 (LGPL-2.1) and ymfm (BSD-3) in `third_party/`; MMPX (MIT, Copyright
-2020 Morgan McGuire & Mara Gagiu) in `src/platform/upscale.c`, which follows their reference code
-and carries their notice. A binary that includes them ships their licences.
+2020 Morgan McGuire & Mara Gagiu) and xBR (MIT, Copyright 2011-2016 Hyllian) in
+`src/platform/upscale.c`, which follows their reference code and carries their notices. A binary
+that includes them ships their licences.
