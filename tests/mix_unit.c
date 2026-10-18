@@ -1,4 +1,4 @@
-/* WP4: the mixer: the PSG at its gain against the FM, the DC blocker, the resampler (a tone keeps
+/* The mixer: the PSG at its gain against the FM, the DC blocker, the resampler (a tone keeps
  * its pitch and level, one above the output's Nyquist frequency is gone), the output's length. */
 #include <math.h>
 #include <stdlib.h>

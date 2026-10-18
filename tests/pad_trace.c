@@ -1,4 +1,4 @@
-/* WP5: replay every .padtrace in $MDRT_VECTORS: the buttons each frame, the game's writes to the
+/* Replay every .padtrace in $MDRT_VECTORS: the buttons each frame, the game's writes to the
  * I/O ports, and every read must return what the oracle returned (version 1: two pads; 2: four,
  * and what is in the ports, EA's 4 Way Play among them). Format: docs/VECTORS.md ("MDPT"). Also
  * the 6-button sequence, the 4 Way Play's protocol, old states and save RAM by hand. */
@@ -83,7 +83,7 @@ static void six_button(void)
     CHECK_EQ(mdrt_pad_read(&p, 0xA10003) & 0xC0, 0xC0);
 }
 
-/* EA's 4 Way Play as NHL '94 drives it: found with $7C on port 2, then each pad chosen in turn */
+/* EA's 4 Way Play as a game drives it: found with $7C on port 2, then each pad chosen in turn */
 static void four_way(void)
 {
     mdrt_pads p;

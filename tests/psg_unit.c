@@ -1,4 +1,4 @@
-/* WP3: the PSG model against the documented behaviour (SMS Power "SN76489", Sega's manual): the
+/* The PSG model against the documented behaviour (SMS Power "SN76489", Sega's manual): the
  * byte protocol, tone frequencies, the 2 dB attenuation steps, the noise register. */
 #include <math.h>
 #include <stdlib.h>

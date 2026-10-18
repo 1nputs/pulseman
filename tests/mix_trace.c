@@ -1,4 +1,4 @@
-/* WP4: every sound trace in $MDRT_VECTORS recorded from power on with both chips in the oracle's
+/* Every sound trace in $MDRT_VECTORS recorded from power on with both chips in the oracle's
  * audio: the YM2612 and PSG writes replayed at their master clocks through the FM chip, the PSG and
  * the mixer at the oracle's rate, compared with the oracle's audio side by side (tests/spectrum.h:
  * the balance of the two chips shows in the loudness and the spectrum), and no sample clipped.

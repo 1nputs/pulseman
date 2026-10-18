@@ -6,7 +6,7 @@
  * that is not an output counts as 0), choose what port 1 reads. D6 low: pad D5-D4 (0-3), a 3-button
  * pad under port 1's TH. D6 high: the adaptor itself, D1-D0 low and D5-D2 high (games write $7C to
  * port 2 and look for D1-D0 clear on port 1 to find it). Port 2 reads nothing. As the reference
- * emulator answers NHL '94 (its four_way.padtrace). */
+ * emulator answers a game that drives it (a .padtrace of device 1). */
 #ifndef MDRT_PAD_H
 #define MDRT_PAD_H
 #include <stddef.h>

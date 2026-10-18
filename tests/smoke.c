@@ -1,4 +1,4 @@
-/* WP0: the harness itself and the constants. */
+/* The harness itself and the constants. */
 #include "check.h"
 #include "mdrt/mdrt.h"
 

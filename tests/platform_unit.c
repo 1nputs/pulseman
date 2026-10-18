@@ -172,7 +172,7 @@ static void menu(void)
     snprintf(mdrt_menu_add(&m, 2, MDRT_ITEM_TEXT, "Shown, not chosen")->detail, 96, "F1");
     mdrt_menu_add_choice(&m, 3, "Scaling", names, 3, 0);
     mdrt_menu_add_number(&m, 4, "Volume", 50, 0, 100, 10, "%");
-    snprintf(mdrt_menu_add(&m, 5, MDRT_ITEM_ACTION, "Game ROM")->detail, 96, "/a/very/long/path/to/the/roms/NHL 94 (UE) [!].gen");
+    snprintf(mdrt_menu_add(&m, 5, MDRT_ITEM_ACTION, "Game ROM")->detail, 96, "/a/very/long/path/to/the/roms/Some Game (UE) [!].gen");
     mdrt_menu_select(&m, 2);                                          /* (text: the first selectable) */
     CHECK_EQ(m.sel, 0);
     CHECK_EQ(mdrt_menu_input(&m, MDRT_MENU_DOWN), MDRT_MENU_NOTHING);
@@ -285,7 +285,7 @@ static void image(int n, uint32_t *px)
             }
         }
     if (n == 3) {
-        static const char *const lines[] = { "NHL '94 Wings 3", "Penalty: hooking", "0:42 2nd period", "Shots 12 - 9", "@#%&*{}[]<>?" };
+        static const char *const lines[] = { "Player One 3", "Round 2: ready", "0:42 2nd stage", "Score 12 - 9", "@#%&*{}[]<>?" };
         for (int i = 0; i < 5; i++) mdrt_menu_text(px, IW, IH, IW, 1, 2 + 12 * i, lines[i], pal[3 + i % 3]);
     }
     if (n == 4)
@@ -319,7 +319,7 @@ static void upscalers(void)
         { 0x2b13fcac46704f58ull, 0x2aa42d9dfd9fe295ull, 0x9319d8ebf2fdaaf8ull },
         { 0x040cd8b577c5fb29ull, 0x251865b5524215a8ull, 0xf7c14985e6db3dacull },
         { 0x510f56d233e4340dull, 0x24e328c09d89f7d0ull, 0x46b2903ab5090684ull },
-        { 0x727826909a67f425ull, 0xa54766a81bbe16fdull, 0x10d1dfd99f3ab775ull },
+        { 0xa47e3ea8425ecf50ull, 0x7be8973ec964ec2dull, 0xd820ed4a07165fe4ull },
         { 0x49b0dfe7688a56a5ull, 0x6be0f93a0f595725ull, 0x1e18832213921ee5ull },
     };
     const char *dump = getenv("MDRT_UPSCALE_DUMP");
@@ -374,7 +374,7 @@ static void upscalers(void)
             { 0xe044f3c61bf9899bull, 0x87e5e1ccb5f406e1ull, 0x3adc96aae2fce11dull },
             { 0xbf646f8f78e7371dull, 0x008f218641afc7c1ull, 0x933bf23895f87734ull },
             { 0x2b776de19ea928f4ull, 0x8175deb83587cef8ull, 0x370e809426c8aafcull },
-            { 0x6dfe47fff8b3a0b8ull, 0x170da207be6af631ull, 0xe10308cbefab2b5cull },
+            { 0x9aa3b47ee4244c5dull, 0x9dbd610a20632cb0ull, 0xd41f2d9053ffbdfdull },
             { 0x9ae5b5e32b95e115ull, 0xb09517c312e22f85ull, 0xd022e481ad269cc5ull },
         };
         for (int k = 0; k < 3; k++) {

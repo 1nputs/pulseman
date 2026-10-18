@@ -1,4 +1,4 @@
-/* The WP6 test game in a window: a moving pattern and a C major scale on the PSG, with DAC
+/* The test game (tests/frame_test.c) in a window: a moving pattern and a C major scale on the PSG, with DAC
  * samples streamed from the sound tick. Runs until the window closes (or for N frames: testgame N).
  * It checks the platform: 59.92 frames a second paced by the sound, clean sound, the keys (the
  * held buttons show as a coloured bar). */

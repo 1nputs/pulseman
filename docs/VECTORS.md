@@ -8,11 +8,10 @@ never committed (they come from copyrighted programs, apart from the test ROM's)
 
 ## Where they live
 
-`make check` reads every vector in `$MDRT_VECTORS` (default `../ninety-four/out/vectors`, or
-`../../out/vectors` when pulseman is ninety-four's submodule). With no
+`make check` reads every vector in `$MDRT_VECTORS` (a directory; none by default). With no
 directory, or no vector of a kind, the vector tests say so and are skipped; set
 `MDRT_REQUIRE_VECTORS=1` on a machine that has the vectors and a skip is a failure instead, so a
-wrong path cannot pass. The first client's `make runtime-check` sets both.
+wrong path cannot pass. A client that records vectors runs pulseman's checks with both set.
 
 | File | Read by | What |
 |---|---|---|
@@ -20,10 +19,9 @@ wrong path cannot pass. The first client's `make runtime-check` sets both.
 | `*.padtrace` | `tests/pad_trace.c` | the I/O chip's accesses and the buttons held |
 | `*.sndtrace` | `tests/psg_trace.c`, `fm_trace.c`, `mix_trace.c`, `examples/trace-player.c` | every sound chip write at its master clock, and the oracle's audio |
 
-The exporters today are the first client's (`../ninety-four/tools/oracle/vdptrace.py`, `padtrace.py`,
-`sndtrace.py` over its oracle hook, `../ninety-four/tools/hybrid/oracle_shim.c`); its
-`tools/oracle/vectors.py` holds the recipe of each vector it records. The test ROM's own vector
-(`vdptest.vdptrace`) is recorded from `build/vdptest.bin` (`tests/rom/build.sh`) the same way.
+The exporters belong to a client: tools over its hook into the oracle that write these formats,
+and the recipe of each vector it records. The test ROM's own vector (`vdptest.vdptrace`) is
+recorded from `build/vdptest.bin` (`tests/rom/build.sh`) with such an exporter.
 
 ## Rules
 
@@ -104,7 +102,7 @@ unwraps it), and
 ```
 
 The YM2612 writes are the Z80's and the 68k's together; the Z80 fields are for a client that
-ports its Z80 program (the first client checks its relay against every write's time). The
+ports its Z80 program (to check its port against every write's time). The
 runtime's chip tests take the writes and compare their audio with the oracle's by loudness and
 spectrum in 50 ms windows, since the cores are different emulations.
 

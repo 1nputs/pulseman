@@ -1,4 +1,4 @@
-/* WP1 / WP2: replay every .vdptrace in $MDRT_VECTORS. The port accesses are applied in order,
+/* Replay every .vdptrace in $MDRT_VECTORS. The port accesses are applied in order,
  * DMA reads come from the recorded source bytes, data port reads must return the oracle's value,
  * and at every FRAME the registers, VRAM, CRAM and VSRAM must match byte for byte and the
  * rendered picture pixel for pixel (9-bit colours). Version 2 traces carry each access's time in

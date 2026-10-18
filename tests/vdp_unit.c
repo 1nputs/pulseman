@@ -1,4 +1,4 @@
-/* WP1: the port rules, each with a hand-written case. */
+/* The port rules, each with a hand-written case. */
 #include <string.h>
 #include "check.h"
 #include "mdrt/vdp.h"

@@ -1,5 +1,5 @@
 /* Captures: the game's frames kept as they are made, to be saved as an animated GIF. Each frame is
- * kept compressed, its exact colours and GIF's LZW (mdrt/gif.h: NHL '94's play, about 8 KB a
+ * kept compressed, its exact colours and GIF's LZW (mdrt/gif.h: a game's play, about 8 KB a
  * frame). A capture keeps the last so many frames in memory (a replay: the last 20 seconds, taken
  * when the player asks), and can also write every frame to a file as it comes (a recording).
  * Either becomes a clip, read here into a GIF (lossless, at 30 frames a second: GIF's times are in

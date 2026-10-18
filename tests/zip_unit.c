@@ -67,8 +67,8 @@ static void written(void)
     static uint8_t noise[50000];
     uint32_t x = 5;
     for (size_t i = 0; i < sizeof noise; i++) noise[i] = (uint8_t)next(&x);
-    static const char *const names[5] = { "league.ini", "art/game/Sprites.bin", "teams.csv", "art/photos/CardA.png", "empty" };
-    const void *data[5] = { "name = x\n", noise, "team,city\nANA,Anaheim\nANA2,Anaheim\nANA3,Anaheim\nANA4,Anaheim\n", noise + 100, "" };
+    static const char *const names[5] = { "settings.ini", "art/data/b.bin", "data/table.csv", "art/pictures/a.png", "empty" };
+    const void *data[5] = { "name = x\n", noise, "key,value\nK1,one\nK2,one\nK3,one\nK4,one\nK5,one\n", noise + 100, "" };
     size_t size[5] = { 9, sizeof noise, strlen(data[2]), 1000, 0 };
     uint8_t *a, *b;
     mdrt_zip_writer w = { 0 }, w2 = { 0 };

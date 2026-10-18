@@ -1,6 +1,5 @@
-/* WP4: the YM2612 port writes of every sound trace in $MDRT_VECTORS recorded from power on with
- * the PSG left out of the oracle's audio (psg_preamp 0: ../ninety-four/tools/oracle/sndtrace.py
- * --psg-preamp 0), replayed through the FM chip at their master clocks (the Z80's reset line
+/* The YM2612 port writes of every sound trace in $MDRT_VECTORS recorded from power on with
+ * the PSG left out of the oracle's audio (psg_preamp 0), replayed through the FM chip at their master clocks (the Z80's reset line
  * resets the chip too), compared with the oracle's audio side by side (tests/spectrum.h). The
  * oracle's FM core is another one (MAME's YM2612 in Genesis Plus GX), so the comparison is by
  * loudness and spectrum (99% of the windows, the whole trace within 1 dB), like the PSG's; a

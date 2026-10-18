@@ -26,10 +26,10 @@ def fnv(b):
 def good():
     out = []
     data = {
-        'league.ini': b'name = A league\nplayoff_teams = 18\n',
-        'teams.csv': b'team,city\n' + b''.join(b'T%02d,City %d\n' % (i, i) for i in range(32)),
-        'art/logos/ANA.png': bytes((i * 37 + i // 7) & 0xFF for i in range(3000)),
-        'art/game/Sprites.bin': bytes(range(256)) * 40,
+        'settings.ini': b'name = A test\ncount = 18\n',
+        'data/table.csv': b'key,value\n' + b''.join(b'K%02d,Value %d\n' % (i, i) for i in range(32)),
+        'art/pictures/a.png': bytes((i * 37 + i // 7) & 0xFF for i in range(3000)),
+        'art/data/b.bin': bytes(range(256)) * 40,
         'empty.txt': b'',
     }
     for comp, level, comment, directory in [(zipfile.ZIP_STORED, None, b'', False), (zipfile.ZIP_DEFLATED, 1, b'', False),
@@ -69,18 +69,18 @@ def archive(entries):
 
 
 def hostile():
-    ok = entry(b'teams.csv', b'team\n')
+    ok = entry(b'data.csv', b'key\n')
     return [
         ('a name climbing out', archive([ok, entry(b'../evil.txt', b'x')]), 'a zip archive with a file named'),
         ('a name deep climbing out', archive([entry(b'art/../../evil.txt', b'x')]), 'a zip archive with a file named'),
         ('an absolute name', archive([entry(b'/etc/passwd', b'x')]), 'a zip archive with a file named'),
         ('a backslash', archive([entry(b'art\\x.png', b'x')]), 'a zip archive with a file named'),
         ('a drive', archive([entry(b'C:x', b'x')]), 'a zip archive with a file named'),
-        ('a file twice', archive([ok, entry(b'teams.csv', b'again\n')]), 'a zip archive with a file twice'),
-        ('encrypted', archive([entry(b'teams.csv', b'team\n', flags=1)]), 'a zip archive with an encrypted file'),
-        ('bzip2', archive([entry(b'teams.csv', b'team\n', method=12)]), 'a zip archive packed some other way'),
-        ('too big unpacked', archive([entry(b'teams.csv', b'team\n', method=8, size=0x7FFFFFFF)]), 'a zip archive too big unpacked'),
-        ('a wrong CRC', archive([entry(b'teams.csv', b'team\n', crc=1234)]), ''),       # (opens; reading it fails)
+        ('a file twice', archive([ok, entry(b'data.csv', b'again\n')]), 'a zip archive with a file twice'),
+        ('encrypted', archive([entry(b'data.csv', b'key\n', flags=1)]), 'a zip archive with an encrypted file'),
+        ('bzip2', archive([entry(b'data.csv', b'key\n', method=12)]), 'a zip archive packed some other way'),
+        ('too big unpacked', archive([entry(b'data.csv', b'key\n', method=8, size=0x7FFFFFFF)]), 'a zip archive too big unpacked'),
+        ('a wrong CRC', archive([entry(b'data.csv', b'key\n', crc=1234)]), ''),       # (opens; reading it fails)
         ('not a zip', b'PK\x03\x04 but nothing else of one', 'not a zip archive'),
     ]
 

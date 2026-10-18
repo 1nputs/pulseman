@@ -1,6 +1,6 @@
 /* Plays a client's recorded traces live through the runtime: a .vdptrace (the VDP port writes of
- * each frame) and a .sndtrace (the sound chips' writes at their master clocks), both from
- * ../ninety-four/tools/oracle/. The pictures loop with the video trace; the sound runs to its end.
+ * each frame) and a .sndtrace (the sound chips' writes at their master clocks), in the formats of
+ * docs/VECTORS.md. The pictures loop with the video trace; the sound runs to its end.
  * usage: trace-player [FILE.vdptrace] [FILE.sndtrace] */
 #include <stdio.h>
 #include <stdlib.h>

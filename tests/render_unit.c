@@ -1,4 +1,4 @@
-/* WP2: the renderer on synthetic VRAM: scroll modes, the window in both directions, sprite
+/* The renderer on synthetic VRAM: scroll modes, the window in both directions, sprite
  * limits and masking, priorities, the left column blank. */
 #include <string.h>
 #include "check.h"

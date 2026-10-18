@@ -1,4 +1,4 @@
-/* WP4: the FM chip behind mdrt/fm.h: writes reach the core in order through the right ports (a
+/* The FM chip behind mdrt/fm.h: writes reach the core in order through the right ports (a
  * voice on channel 1 through ports 0 / 1 panned left, one on channel 4 through ports 2 / 3 panned
  * right, each side at its own pitch), the DAC, the register shadow, the reset; and the console's
  * chip changed between frames to every core and model, its voice going on at its pitch. */

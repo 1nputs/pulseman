@@ -1,7 +1,7 @@
-/* WP6: a test game on the composition, as a client would run one: it draws a moving pattern
+/* A test game on the composition, as a client would run one: it draws a moving pattern
  * through the VDP's ports, plays a scale on the PSG and on the FM chip with timed writes, has a
- * "sound processor" (the sound tick) stream DAC samples every 1800 master clocks like NHL '94's
- * Z80 does, and blocks in mdrt_wait_vblank. Headless, 600 frames (10 s): the audio's length
+ * "sound processor" (the sound tick) stream DAC samples every 1800 master clocks as a game's Z80
+ * program might, and blocks in mdrt_wait_vblank. Headless, 600 frames (10 s): the audio's length
  * follows the frame rate with no drift, the run is deterministic (two runs, the same pictures and
  * samples), and the notes come out at their pitches. */
 #include <math.h>

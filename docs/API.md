@@ -2,9 +2,9 @@
 
 A client is a game reimplemented in C whose hardware accesses were 68k bus accesses. It links
 `build/release/libmdrt.a` (and `libmdrt_sdl2.a` for a window), includes `mdrt/mdrt.h` (and
-`mdrt/platform_sdl2.h`), and maps its hardware calls onto the runtime. The first client,
-NHL '94 (`../ninety-four`), does it in `native/hal_native.c` (about a hundred lines) and
-`native/main.c`; read those as the reference.
+`mdrt/platform_sdl2.h`), and maps its hardware calls onto the runtime: a hardware layer of a
+hundred lines or so (VDP ports, the pads, save RAM, the sound chips) and a main that starts the
+platform.
 
 ## Starting
 
@@ -35,8 +35,8 @@ plays: `mdrt_set_fm`), options and every key. A client that runs a ROM gives the
 platform reads the file, keeps the bytes, remembers the one the player chose in the settings and,
 when none will do, opens the menu on a file browser. The menu's reset and a new ROM stop the game
 (`mdrt_wait_vblank` returns nonzero), make a new console and call the game function again: it
-must then start from scratch, as at power on, whatever it kept in its own statics (NHL '94's
-`make golden-check` runs a restart against a fresh power on, frame by frame).
+must then start from scratch, as at power on, whatever it kept in its own statics (worth a
+test: a restart against a fresh power on, frame by frame).
 
 A client with options of its own (a game's rules) describes them in `options` (`mdrt_sdl_option`:
 a key, a label, named choices or a number's range, a default) with `options_title`: the menu
@@ -44,8 +44,8 @@ gets a page of them, the settings file keeps them, and `options_use` hands the c
 values before every power on, on the window's thread with the game stopped. Read them there and
 keep them for the game: a change made in play shows from the next power on. `options_changed`
 can answer a change by changing other values (a preset). `sram_file`, asked after `options_use`,
-names the save RAM's file for that game when it follows the options (a game whose league has its
-own records); NULL keeps `sram_path`.
+names the save RAM's file for that game when it follows the options (another set of data that
+keeps records of its own); NULL keeps `sram_path`.
 
 The pieces with no SDL in them are there for another platform (a browser's) to use:
 `mdrt/settings.h` (the file's text, read and written back with its comments and unknown keys),
@@ -122,7 +122,7 @@ on the runtime's clock: `mdrt_set_sound_tick(m, fn, user)` calls `fn(user, until
 frame's audio is made, and the port runs its program up to master clock `until` of the frame,
 writing the YM2612 as it goes. Between handshakes the client can run it further (when the game
 waits on it); give the game's own code a cost per access so the port's time moves while the
-game polls. NHL '94: `src/z80.c` (the relay), 56 master clocks a Z80-bus access.
+game polls (56 master clocks a Z80-bus access, for instance).
 
 ## Time inside a frame
 
@@ -145,9 +145,10 @@ to the backdrop, CRAM, a name table or the display bit still changes that line; 
 from the next. The H-interrupt handler is called at its line's start: a handler that does work
 before it writes should charge those cycles first, or its writes count as made in the blank.
 
-Sound times are the client's own (`mdrt_ym_write(m, at, ...)`); they need not follow the clock. The
-first client, whose game writes the VDP in the vertical blank, moves no clock: its sound model
-charges the Z80 bus accesses only, which would put its VDP writes on the wrong lines.
+Sound times are the client's own (`mdrt_ym_write(m, at, ...)`); they need not follow the clock. A
+client whose game writes the VDP only in the vertical blank can move no clock at all and keep a
+sound model of its own (charging, say, only the Z80 bus accesses, which would put its VDP writes
+on the wrong lines if it moved the clock with them).
 
 ## The handshake
 
@@ -176,8 +177,8 @@ sound the player hears.
 
 What a state does not hold is where the client's code is. A blocking client is somewhere deep
 in its own C stack when it waits; a state is only useful at a point the client knows how to go
-on from with nothing on that stack (NHL '94: the game loop's wait, the point its lockstep already
-restarts at). Take it there, and on loading, restart the client there. A client run as a
+on from with nothing on that stack (the game loop's wait for the next frame, typically). Take
+it there, and on loading, restart the client there. A client run as a
 coroutine on its own stack could keep that stack too; nothing here needs it yet.
 
 The player's requests reach the client through the platform: `mdrt_platform.requests` returns
@@ -186,7 +187,7 @@ held; `mdrt_requests(m)` gives the client what the last handshake brought (the S
 the menu's Save and Load pages, and F4 held). The client decides what to do and when. `mdrt_request_path(m)` is the
 file a SAVE or LOAD names, when the platform names one (the SDL2 platform's save slots and quick
 resume: `states/slotN.state.new` to write, `states/slotN.state` to read); NULL leaves the file to
-the client. A client that can take a state only at some points (NHL '94: in play) does nothing
+the client. A client that can take a state only at some points (in play, say) does nothing
 otherwise, and the platform keeps the slot as it was. Fast-forward, slow motion,
 pause and the frame step are the platform's alone: they change when its `wait` lets the next frame
 go (and fast-forward and slow motion queue no sound), so the client sees only ordinary frames.

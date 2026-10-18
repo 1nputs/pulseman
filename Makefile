@@ -4,10 +4,9 @@
 # default; Nuked-OPN2 is the default core), or one of them: FM_CORES=ymfm has no LGPL code
 # (Nuked-OPN2 is LGPL-2.1, ymfm BSD-3 and C++: a build with it links -lstdc++). FM_CORE=x is
 # FM_CORES=x.
-# Test vectors (from the client's oracle, never committed; docs/VECTORS.md) are read from
-# MDRT_VECTORS, default ../ninety-four/out/vectors (or ../../out/vectors as its submodule); the
-# vector tests are skipped when it is absent, or
-# fail with MDRT_REQUIRE_VECTORS=1.
+# Test vectors (recorded by a client with its oracle tools, never committed; docs/VECTORS.md) are
+# read from the directory MDRT_VECTORS (none by default): the vector tests are skipped without
+# it, or fail with MDRT_REQUIRE_VECTORS=1.
 CC      ?= cc
 MODE    ?= debug
 WERROR  ?= -Werror
@@ -22,7 +21,7 @@ endif
 CFLAGS  += $(WARN) $(OPT) $(SAN) -Iinclude
 LDFLAGS += $(SAN)
 B       := build/$(MODE)
-MDRT_VECTORS ?= $(firstword $(wildcard ../ninety-four/out/vectors ../../out/vectors) ../ninety-four/out/vectors)
+MDRT_VECTORS ?=
 export MDRT_VECTORS
 
 FM_CORES ?= $(if $(FM_CORE),$(FM_CORE),nuked ymfm)

@@ -15,31 +15,27 @@ and a document disagree the vector wins, and the disagreement is written down he
 
 ## Vectors
 
-The formats are in `VECTORS.md`. Recorded by `../ninety-four/tools/oracle/vdptrace.py` into
-`$MDRT_VECTORS` (default `../ninety-four/out/vectors`): `boot` (EA logo), `title`, `setup`,
-`matchup`, `pregame` (front-end screens, from power on with Start presses), `faceoff`, `play`
-(CPU against CPU), `pause` (the pause menu), and `vdptest` (the test ROM). Each is 90-250
-frames.
-
-Sound traces (`*.sndtrace`, `../ninety-four/tools/oracle/sndtrace.py`, version 3): `game` (6000 frames from power on: EA logo,
-title, menus, the faceoff, 40 s of play), `game_psg` and `game_fm` (the same with the FM chip,
-or the PSG, left out of the oracle's audio: preamp 0), `game_fm_nuked` (`game_fm` with the oracle
-on Nuked-OPN2 too), `boot` (3000 frames from power on),
-`play` (3000 frames from a save state: its chips start in a state the trace does not hold, so
-only the Z80 relay uses it). Times are master clocks modulo 2^32; readers unwrap them.
+The formats are in `VECTORS.md`; a client records them into `$MDRT_VECTORS`. The entries below
+name the vectors they were found with: VDP traces of a game's front-end screens from power on
+(`boot`, `title`, `setup`, `matchup`, `pregame`), its play (`faceoff`, `play`), its pause menu
+(`pause`), each 90-250 frames, and the test ROM's (`vdptest`); sound traces of 6000 frames from
+power on through the menus into play (`game`), the same with the FM chip or the PSG left out of
+the oracle's audio (`game_psg`, `game_fm`: preamp 0), `game_fm` with the oracle on Nuked-OPN2
+(`game_fm_nuked`), 3000 frames from power on (`boot`) and 3000 from a save state (`play`, whose
+chips start in a state the trace does not hold).
 
 ## Log
 
 (dated entries: a quirk, the vector that showed it, what the runtime does)
 
 - 2026-10-15, all vectors: CRAM and VSRAM reads return the colour / scroll bits with the bits the
-  RAM does not drive taken from the oldest FIFO entry (the next one to be written); NHL '94's
-  palette fade reads CRAM and the vectors' READ16 values match only with that.
+  RAM does not drive taken from the oldest FIFO entry (the next one to be written); the recorded
+  game's palette fade reads CRAM and the vectors' READ16 values match only with that.
 - 2026-10-15, `faceoff`: a trace recorded straight after loading a save state carried a first
   picture partly drawn before the load; the exporter now emits a FRAME only after a whole frame
   was drawn under tracing.
 - 2026-10-15, all vectors: a frame-granular renderer (the state at the start of the vertical
-  blank, drawn whole) is pixel-exact for NHL '94: the game writes the VDP only in the vertical
+  blank, drawn whole) is pixel-exact for the recorded game: it writes the VDP only in the vertical
   blank or with the display off.
 - 2026-10-15, `vdptest` phase 3: vertical scroll per 2-cell column uses the plane's columns,
   which move with its fine horizontal scroll: column c covers x = (hscroll & 15) + 16c .. +15
@@ -54,7 +50,7 @@ only the Z80 relay uses it). Times are master clocks modulo 2^32; readers unwrap
   noise register reset to $8000, white noise taps bits 0 and 3 (period 57337 shifts), the noise
   register shifting on its flip-flop's rising edge, 2 dB attenuation steps, tone periods 0 and 1
   a constant +1. Genesis Plus GX agrees except on periods 0 and 1, where it toggles every internal
-  clock (an ultrasonic square that averages to half level); NHL '94 never sets them.
+  clock (an ultrasonic square that averages to half level); the recorded game never sets them.
 - 2026-10-15, `game_psg`: the oracle's PSG sound is band-limited by its resampler (blip_buf) and
   rolls off above about 5 kHz at 44100 Hz (-1.6 dB at 7.3 kHz, -2 dB at 11.6 kHz, -3.6 dB at 14.4
   kHz); the model's band-limited steps are flat to 17 kHz. The spectral comparison stops at
@@ -73,9 +69,8 @@ only the Z80 relay uses it). Times are master clocks modulo 2^32; readers unwrap
 - 2026-10-16, the composition's default HV counter: the beam it models is shown through the VDP's
   counter mapping (`mdrt_vdp_hv_at`; the V counter jumps from $EA back to $E5 at line 235 in
   NTSC, the H counter from $B6 to $E4 in H40, $93 to $E9 in H32). Before, lines 235-261 read as
-  $EB-$FF and 262 on as $00-$05, values the counter never shows there. The first client reads the
-  counter as a random source, so its native random numbers change; its lockstep replays the
-  oracle's values and is unaffected.
+  $EB-$FF and 262 on as $00-$05, values the counter never shows there. (A game that reads the
+  counter as a random source sees other numbers than before.)
 - 2026-10-16, PAL: the master clock is 53,203,424 Hz (the PAL colour subcarrier, 4.43361875 MHz, x 12),
   against NTSC's 53,693,175; the dividers (68k /7, Z80 and PSG /15, YM2612 /7/144) are the same,
   so a PAL console's chips run 0.9% slower and its 313-line frame lasts 1,070,460 master clocks.
@@ -100,11 +95,11 @@ only the Z80 relay uses it). Times are master clocks modulo 2^32; readers unwrap
   drawn, an H-interrupt when it is 0 (and reloaded), else counted down; checked again at the
   frame's start without a reload. Register 10 = 15: H-interrupts on lines 15, 31, 47 ...
   (`vdptest` phase 8).
-- 2026-10-16, `vdptest` phases 8 and 9 and the first client's traces recorded with times
-  (`.vdptrace` version 2): all nine replay pixel-exact a line at a time. NHL '94's front-end
-  screens write the VDP during the display (setup: 16,350 writes, pregame 17,413, matchup 14,514,
-  pause 2,329) without changing what is drawn, which is why the frame-granular renderer was
-  exact for them too.
+- 2026-10-16, `vdptest` phases 8 and 9 and the game traces recorded with times (`.vdptrace`
+  version 2): all nine replay pixel-exact a line at a time. The game's front-end screens write
+  the VDP during the display (setup: 16,350 writes, pregame 17,413, matchup 14,514, pause 2,329)
+  without changing what is drawn, which is why the frame-granular renderer was exact for them
+  too.
 - 2026-10-16, the YM3438 model (`fm_model`): Nuked-OPN2's YM3438 mode and ymfm's `ym3438` leave
   out the YM2612's DAC ladder; the idle output sits at 0 instead of 432 (`fm_unit`). No vector:
   the oracle was recorded with the YM2612.

@@ -1,5 +1,5 @@
-; vdptest: a Mega Drive program that exercises the VDP features the renderer must get right and
-; NHL '94 does not use, for the WP2 "second program" test vector. Ten phases of 30 frames:
+; vdptest: a Mega Drive program that exercises the VDP features the renderer must get right that
+; games recorded for the vectors may not use: a test vector of pulseman's own. Ten phases of 30 frames:
 ;   0 H40, 128x32 planes, full-screen scroll       5 window above / below a row
 ;   1 per-line horizontal scroll                    6 H32, 64x64 planes, DMA fill of plane B
 ;   2 per-cell horizontal scroll                    7 H40, 32x128 planes, VRAM copy of tiles

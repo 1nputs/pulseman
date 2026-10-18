@@ -461,7 +461,7 @@ static const mdrt_sdl_option test_options[2] = {
 };
 static void options_use(const int *v, void *user) { (void)user; SDL_AtomicSet(&opt_seen[0], v[0]); SDL_AtomicSet(&opt_seen[1], v[1]); SDL_AtomicAdd(&opt_uses, 1); }
 static int options_changed(int which, int *v, void *user) { (void)user; if (which == 0 && v[0] == 2) { v[1] = 9; return 1; } return 0; }
-/* the save RAM's file follows the choice (a league's own records) */
+/* the save RAM's file follows the choice (records of their own for each) */
 static const char *sram_file(void *user) { (void)user; static char path[32]; snprintf(path, sizeof path, "options-%d.srm", SDL_AtomicGet(&opt_seen[0])); return path; }
 
 static int rules_player(void *user)
