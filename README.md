@@ -41,11 +41,11 @@ The console, in `libmdrt` (no SDL):
 The SDL2 platform, in `libmdrt_sdl2` (`mdrt_sdl_run`, `include/mdrt/platform_sdl2.h`): the game on
 its own thread, frames paced by the sound queue, keyboard and controllers for up to four players
 (each button rebindable, turbo, dead zone), save RAM in a file per game, pause, fast-forward, slow
-motion and frame step, full screen and hi-DPI, scaling (sharp, integer, fit; square or 4:3) with
-the upscalers and looks above, screenshots, replays and recordings as GIFs, save slots with a
-picture each, quick resume, and a menu (Esc) with the ROM browser, reset, states, video, capture,
-sound (the FM core and chip changed live), players, keys, and a page of the client's own options
-handed to it before every power on.
+motion and frame step, full screen and hi-DPI, vsync (no tearing; the game keeps its own time),
+scaling (sharp, integer, fit; square or 4:3) with the upscalers and looks above, screenshots,
+replays and recordings as GIFs, save slots with a picture each, quick resume, and a menu (Esc) with
+the ROM browser, reset, states, video, capture, sound (the FM core and chip changed live), players,
+keys, and pages of the client's own options handed to it before every power on.
 
 ## Building and checking
 

@@ -102,7 +102,7 @@ enum { PAGE_MAIN, PAGE_VIDEO, PAGE_SOUND, PAGE_OPTIONS, PAGE_KEYS, PAGE_ROM, PAG
        PAGE_CLIENT };
 enum { SLOT_COUNT = 8 };                                  /* save slots; 0 is quick resume's */
 enum { I_RESUME = 1, I_ROM, I_RESET, I_SAVE, I_LOAD, I_VIDEO, I_SOUND, I_OPTIONS, I_KEYS, I_QUIT, I_BACK,
-       I_UPSCALE, I_SCALE, I_ASPECT, I_FULL, I_COLOURS, I_BLEND, I_SCANLINES, I_MASK, I_VOLUME, I_MUTE, I_FM_CORE, I_FM_CHIP, I_FOCUS, I_FAST, I_UP,
+       I_UPSCALE, I_SCALE, I_ASPECT, I_FULL, I_VSYNC, I_COLOURS, I_BLEND, I_SCANLINES, I_MASK, I_VOLUME, I_MUTE, I_FM_CORE, I_FM_CHIP, I_FOCUS, I_FAST, I_UP,
        I_PLAYERS, I_ADAPTOR, I_TURBO, I_DEADZONE, I_CBUTTONS, I_RESUME_OPT,
        I_CAPTURE, I_CAP_REPLAY, I_CAP_RECORD, I_CAP_SECONDS, I_CAP_GIFSCALE,
        I_SLOT = 800,             /* + slot (1-8) */
@@ -177,6 +177,9 @@ typedef struct sdl {
     int slot, resume, quitting; /* the slot chosen last; quick resume; quitting once it is saved */
     uint32_t thumb[320 * 240];  /* the menu's picture of the slot selected */
     int scale, aspect, focus_pause, auto_paused;
+    int vsync;                  /* the frames shown in step with the screen's refresh (no tearing) */
+    Uint32 frame_event;         /* present's to the window's thread: a frame is fresh ((Uint32)-1: none) */
+    SDL_atomic_t frame_posted;  /* (one at a time) */
     int upscale;                /* MDRT_UPSCALE_: the game's frames through it, before the scaling */
     int colours, blend, scanlines, mask;   /* colours_*; MDRT_BLEND_, _SCANLINES_, _MASK_ */
     uint32_t *frame, *blended, *big, *big_scratch;   /* the frame taken from the game thread; it blended; upscaled; mmpx4x's halfway */
@@ -252,6 +255,12 @@ static void present(void *user, const uint16_t *px, int w, int h, int pitch)
     s->height = h;
     s->fresh = 1;
     SDL_UnlockMutex(s->lock);
+    if (s->frame_event != (Uint32)-1 && !SDL_AtomicSet(&s->frame_posted, 1)) {   /* (the window's thread draws it now, not at its next look) */
+        SDL_Event e;
+        SDL_zero(e);
+        e.type = s->frame_event;
+        if (SDL_PushEvent(&e) != 1) SDL_AtomicSet(&s->frame_posted, 0);
+    }
     if (SDL_AtomicGet(&s->capturing)) {                   /* (the frame for the replay and a recording) */
         SDL_LockMutex(s->cap_lock);
         mdrt_capture_picture(s->cap, px, w, h, pitch);
@@ -663,6 +672,7 @@ static void settings_load(sdl *s)
             "# magnification, before the scaling). video.scale: sharp, integer or fit. video.aspect: square or 4:3. video.colours:\n"
             "# standard, full or console (the levels a console puts out). video.blend: off, dither or soft.\n"
             "# video.scanlines: off, light, medium or heavy. video.mask: off, aperture, slot or dot.\n"
+            "# video.vsync: on (frames shown in step with the screen: no tearing) or off.\n"
             "# audio.volume: 0-100.\n"
             "# audio.device: empty for the default. audio.latency: frames of sound queued (1-10).\n"
             "# audio.fm_core: nuked or ymfm. audio.fm_chip: YM2612 or YM3438.\n"
@@ -675,7 +685,7 @@ static void settings_load(sdl *s)
         { "game.rom", "" },
         { "window.width", "960" }, { "window.height", "672" }, { "window.fullscreen", "0" },
         { "video.upscaler", "off" }, { "video.scale", "sharp" }, { "video.aspect", "square" }, { "video.colours", "standard" },
-        { "video.blend", "off" }, { "video.scanlines", "off" }, { "video.mask", "off" },
+        { "video.blend", "off" }, { "video.scanlines", "off" }, { "video.mask", "off" }, { "video.vsync", "on" },
         { "audio.volume", "100" }, { "audio.mute", "0" }, { "audio.device", "" }, { "audio.latency", "3" },
         { "audio.fm_core", mdrt_fm_core() }, { "audio.fm_chip", "YM2612" },
         { "general.pause_on_focus_loss", "1" }, { "general.fast_forward", "4" }, { "general.screenshots", "screenshots" },
@@ -727,6 +737,7 @@ static void settings_load(sdl *s)
     s->blend = named(mdrt_settings_get(s->set, "video.blend"), blend_name, MDRT_BLEND_COUNT, MDRT_BLEND_OFF);
     s->scanlines = named(mdrt_settings_get(s->set, "video.scanlines"), scanlines_name, MDRT_SCANLINES_COUNT, MDRT_SCANLINES_OFF);
     s->mask = named(mdrt_settings_get(s->set, "video.mask"), mask_name, MDRT_MASK_COUNT, MDRT_MASK_OFF);
+    s->vsync = named(mdrt_settings_get(s->set, "video.vsync"), off_on, 2, 1);
     s->aspect = o->aspect ? MDRT_ASPECT_4_3 : named(mdrt_settings_get(s->set, "video.aspect"), aspect_name, 2, MDRT_ASPECT_SQUARE);
     SDL_AtomicSet(&s->volume, clamp(mdrt_settings_get_int(s->set, "audio.volume", 100), 0, 100));
     SDL_AtomicSet(&s->mute, mdrt_settings_get_int(s->set, "audio.mute", 0) != 0);
@@ -828,6 +839,17 @@ static void screenshot(sdl *s)
     if (f) fclose(f);
     free(png);
     notice(s, msg);
+}
+
+/* the renderer's presents in step with the screen's refresh, or each as soon as it is drawn (a
+ * renderer that cannot, the software one: as it is). Before SDL 2.0.18 only as the renderer was made. */
+static void set_vsync(sdl *s)
+{
+#if SDL_VERSION_ATLEAST(2, 0, 18)
+    if (s->ren) SDL_RenderSetVSync(s->ren, s->vsync);
+#else
+    (void)s;
+#endif
 }
 
 static int is_fullscreen(sdl *s) { return (SDL_GetWindowFlags(s->win) & SDL_WINDOW_FULLSCREEN_DESKTOP) != 0; }
@@ -1274,6 +1296,7 @@ static void build_page(sdl *s, int page, int select)
         mdrt_menu_add_choice(m, I_SCANLINES, "Scanlines", scanlines_name, MDRT_SCANLINES_COUNT, s->scanlines);
         mdrt_menu_add_choice(m, I_MASK, "Mask", mask_label, MDRT_MASK_COUNT, s->mask);
         mdrt_menu_add_choice(m, I_FULL, "Full screen", off_on, 2, is_fullscreen(s));
+        mdrt_menu_add_choice(m, I_VSYNC, "Vsync", off_on, 2, s->vsync);
         mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
         snprintf(m->subtitle, sizeof m->subtitle, "Sharp: smooth edges. Integer: even pixels. Fit: fills.");
         break;
@@ -1728,6 +1751,11 @@ static void act(sdl *s, int id)
         mdrt_settings_set(s->set, "video.mask", mask_name[s->mask]);
         return;
     case I_FULL: set_fullscreen(s, it->value); return;
+    case I_VSYNC:
+        s->vsync = it->value;
+        set_vsync(s);
+        mdrt_settings_set(s->set, "video.vsync", off_on[s->vsync]);
+        return;
     case I_VOLUME:
         SDL_AtomicSet(&s->volume, it->value);
         mdrt_settings_set_int(s->set, "audio.volume", it->value);
@@ -2115,9 +2143,12 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
     Uint32 flags = SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
     if (mdrt_settings_get_int(s->set, "window.fullscreen", 0)) flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
     s->win = SDL_CreateWindow(o->title ? o->title : "pulseman", x, y, w, h, flags);
-    s->ren = s->win ? SDL_CreateRenderer(s->win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE) : NULL;
-    if (s->win && !s->ren) s->ren = SDL_CreateRenderer(s->win, -1, SDL_RENDERER_ACCELERATED);
+    Uint32 vs = s->vsync ? SDL_RENDERER_PRESENTVSYNC : 0;
+    s->ren = s->win ? SDL_CreateRenderer(s->win, -1, SDL_RENDERER_ACCELERATED | SDL_RENDERER_TARGETTEXTURE | vs) : NULL;
+    if (s->win && !s->ren) s->ren = SDL_CreateRenderer(s->win, -1, SDL_RENDERER_ACCELERATED | vs);
     if (s->win && !s->ren) s->ren = SDL_CreateRenderer(s->win, -1, SDL_RENDERER_SOFTWARE);   /* no GPU */
+    set_vsync(s);
+    s->frame_event = SDL_RegisterEvents(1);
     s->tex = s->ren ? SDL_CreateTexture(s->ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, 320, 240) : NULL;
     if (!s->tex) { fprintf(stderr, "SDL: %s\n", SDL_GetError()); SDL_Quit(); return 1; }
     s->targets = SDL_RenderTargetSupported(s->ren);
@@ -2159,6 +2190,7 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
             } else if (e.type == SDL_CONTROLLERBUTTONDOWN) pad_pressed(s, (SDL_GameControllerButton)e.cbutton.button);
             else if (e.type == SDL_WINDOWEVENT) window_event(s, &e.window);
             else if (e.type == SDL_RENDER_TARGETS_RESET) s->redraw = 1;
+            else if (e.type == s->frame_event) SDL_AtomicSet(&s->frame_posted, 0);   /* (drawn below) */
             else if (e.type == SDL_CONTROLLERDEVICEADDED || e.type == SDL_CONTROLLERDEVICEREMOVED) {
                 if (e.type == SDL_CONTROLLERDEVICEADDED) ctrl_added(s, e.cdevice.which);
                 else ctrl_removed(s, e.cdevice.which);

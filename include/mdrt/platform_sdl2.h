@@ -9,7 +9,8 @@
  * game's ROM (a file browser; the client checks each one), a reset, states saved and loaded in
  * eight slots (states/slotN.state, each with its picture, slotN.png, shown beside the list), the
  * video (a pixel-art upscaler for the game's frames: mdrt/upscale.h; scaling, aspect, the
- * looks: mdrt/look.h; full screen), captures (the replay and recordings as GIFs: mdrt/capture.h),
+ * looks: mdrt/look.h; full screen; vsync, the frames shown in step with the screen, the game
+ * still paced by its sound), captures (the replay and recordings as GIFs: mdrt/capture.h),
  * the sound (volume, mute, the FM core and chip, changed as the game plays), the players (two pads, or EA's 4 Way Play for four, from the next power on;
  * each player's controller; the controllers' buttons, turbo A / B / C, the stick's dead zone),
  * the client's own options (a page it describes: mdrt_sdl_option), the platform's options (pausing

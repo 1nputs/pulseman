@@ -19,8 +19,8 @@ return mdrt_sdl_run(&c, &o, game, NULL);   /* game(m, user) runs on the game thr
 
 The platform keeps the player's settings in `settings.ini` in the directory the game runs in
 (`settings_path` puts it elsewhere; `app` begins the screenshots' names). It writes the file with
-every setting the first time and whenever the player changes one: the window's size, place and
-full screen, the scaling (sharp, integer, fit) and aspect (square pixels, 4:3), the volume, mute,
+every setting the first time and whenever the player changes one: the window's size, place and full
+screen, vsync, the scaling (sharp, integer, fit) and aspect (square pixels, 4:3), the volume, mute,
 sound device and latency, pausing when the window loses focus, fast-forward's speed, the
 screenshots' directory and every key of both pads and of the player's controls (on the function
 keys by default: `include/mdrt/platform_sdl2.h` lists them). `scale` (a window of N times the
