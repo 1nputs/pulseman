@@ -157,7 +157,8 @@ This README carries the status.
   motion, a frame at a time while paused, pausing when the window loses focus (the keys let go);
   screenshots as PNG at the console's resolution (`mdrt/png.h`, which also writes indexed
   pictures and reads any PNG back, deflate both ways with no zlib; `tests/png_unit.c` reads PNGs of
-  every kind made by `tools/gen_png_cases.py` and damaged ones); sharp (whole multiple, then
+  every kind made by `tools/gen_png_cases.py` and damaged ones), zip archives (`mdrt/zip.h`, read
+and written; `tests/zip_unit.c`: Python's, hostile and damaged ones); sharp (whole multiple, then
   smooth), integer and fit scaling, square or 4:3 (`mdrt/view.h`), hi-DPI. Changes show for a
   moment in the window's title. `tests/platform_unit.c` checks the settings, the placements and
   the PNG decoded back; `make sdl-check` plays the platform from a thread pressing keys under SDL's
