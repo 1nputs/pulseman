@@ -114,6 +114,14 @@ enum { I_RESUME = 1, I_ROM, I_RESET, I_SAVE, I_LOAD, I_VIDEO, I_SOUND, I_OPTIONS
        I_COPTION = 4000,         /* + one of the client's options */
        I_ENTRY = 10000 };        /* + a directory entry's index */
 
+/* a client's choice standing for numbers: its page's labels, its own then the custom one's, when
+ * it has one (a number none of its choices stands for) */
+struct custom {
+    const char **labels;
+    int has, number;
+    char label[48];
+};
+
 typedef struct sdl {
     SDL_Window *win;
     SDL_Renderer *ren;
@@ -186,7 +194,9 @@ typedef struct sdl {
     char rec_path[1100];
     uint32_t rec_since, status_at;
     struct clip_save *clips[4]; /* clips being saved */
-    int *opt_values;            /* the client's options (mdrt_sdl_options.options): a choice's index or a number */
+    int *opt_values;            /* the client's options (mdrt_sdl_options.options): a choice's index or a number
+                                 * (a choice standing for a number: the number) */
+    struct custom *opt_custom;  /* each option's custom number (a choice standing for a number) */
     char title[200];
     uint32_t notice_until;
     uint8_t *rom;               /* the game's ROM (given to the client by rom_use) */
@@ -480,6 +490,94 @@ static int named(const char *v, const char *const *names, int n, int fallback)
 
 static int clamp(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 
+/* ---- the client's options ------------------------------------------------------------------------- */
+
+/* the choice of an option standing for numbers that stands for v, or -1 */
+static int numbered(const mdrt_sdl_option *op, int v)
+{
+    for (int c = 0; c < op->count; c++) if (op->numbers[c] == v) return c;
+    return -1;
+}
+
+/* an option's value made one it takes: a choice's index, or a number within its range; a choice
+ * standing for numbers, a choice's number or one within its range (that one its custom choice) */
+static void option_value(sdl *s, int i)
+{
+    const mdrt_sdl_option *op = &s->o->options[i];
+    int *v = &s->opt_values[i];
+    if (op->count <= 0) { *v = clamp(*v, op->min, op->max); return; }
+    if (!op->numbers) { *v = clamp(*v, 0, op->count - 1); return; }
+    if (numbered(op, *v) >= 0) return;
+    if (*v < op->min || *v > op->max) { *v = op->numbers[clamp(op->def, 0, op->count - 1)]; return; }
+    struct custom *c = &s->opt_custom[i];
+    c->has = 1;
+    c->number = *v;
+    snprintf(c->label, sizeof c->label, "custom (%d%s)", *v, op->unit ? op->unit : "");
+    c->labels[op->count] = c->label;
+}
+
+/* the client's options from the settings, each kept there (its default when missing) */
+static void options_from_settings(sdl *s)
+{
+    const mdrt_sdl_options *o = s->o;
+    s->opt_values = calloc((size_t)o->noptions, sizeof *s->opt_values);
+    s->opt_custom = calloc((size_t)o->noptions, sizeof *s->opt_custom);
+    if (!s->opt_values || !s->opt_custom) { free(s->opt_values); s->opt_values = NULL; return; }   /* (no page) */
+    for (int i = 0; i < o->noptions; i++) {
+        const mdrt_sdl_option *op = &o->options[i];
+        if (op->count > 0) {
+            int def = clamp(op->def, 0, op->count - 1);
+            mdrt_settings_default(s->set, op->key, op->names[def]);
+            const char *v = mdrt_settings_get(s->set, op->key);
+            s->opt_values[i] = named(v, op->names, op->count, def);
+            if (!op->numbers) continue;
+            struct custom *c = &s->opt_custom[i];
+            if (!(c->labels = calloc((size_t)op->count + 1, sizeof *c->labels))) { free(s->opt_values); s->opt_values = NULL; return; }
+            for (int k = 0; k < op->count; k++) c->labels[k] = op->labels ? op->labels[k] : op->names[k];
+            char *end;
+            long n = v ? strtol(v, &end, 10) : 0;
+            if (named(v, op->names, op->count, -1) < 0 && v && end != v && !*end && n >= op->min && n <= op->max) s->opt_values[i] = (int)n;
+            else s->opt_values[i] = op->numbers[s->opt_values[i]];
+        } else {
+            char v[24];
+            snprintf(v, sizeof v, "%d", op->def);
+            mdrt_settings_default(s->set, op->key, v);
+            s->opt_values[i] = mdrt_settings_get_int(s->set, op->key, op->def);
+        }
+        option_value(s, i);
+    }
+}
+
+/* an option on the page */
+static void option_item(sdl *s, mdrt_menu *m, int i)
+{
+    const mdrt_sdl_option *op = &s->o->options[i];
+    const struct custom *c = &s->opt_custom[i];
+    int v = s->opt_values[i];
+    if (op->count <= 0) mdrt_menu_add_number(m, I_COPTION + i, op->label, v, op->min, op->max, op->step > 0 ? op->step : 1, op->unit);
+    else if (!op->numbers) mdrt_menu_add_choice(m, I_COPTION + i, op->label, op->labels ? op->labels : op->names, op->count, v);
+    else mdrt_menu_add_choice(m, I_COPTION + i, op->label, c->labels, op->count + c->has, numbered(op, v) >= 0 ? numbered(op, v) : op->count);
+}
+
+/* an option changed on the page (the item's value: a choice's index, or the number): the client
+ * hears of it, and the settings keep them all; nonzero when the client changed others */
+static int option_changed(sdl *s, int which, int value)
+{
+    const mdrt_sdl_option *op = &s->o->options[which];
+    if (op->numbers) value = value < op->count ? op->numbers[clamp(value, 0, op->count - 1)] : s->opt_custom[which].number;
+    s->opt_values[which] = value;
+    int changed = s->o->options_changed ? s->o->options_changed(which, s->opt_values, s->user) : 0;
+    for (int i = 0; i < s->o->noptions; i++) {           /* (a preset may change them all) */
+        option_value(s, i);
+        op = &s->o->options[i];
+        int v = s->opt_values[i];
+        if (op->numbers && numbered(op, v) >= 0) mdrt_settings_set(s->set, op->key, op->names[numbered(op, v)]);
+        else if (op->count > 0 && !op->numbers) mdrt_settings_set(s->set, op->key, op->names[v]);
+        else mdrt_settings_set_int(s->set, op->key, v);
+    }
+    return changed;
+}
+
 /* the FM core and chip a console is made with: the client's, else the settings' */
 static void fm_from_settings(sdl *s)
 {
@@ -590,19 +688,7 @@ static void settings_load(sdl *s)
     s->slot = clamp(mdrt_settings_get_int(s->set, "general.slot", 1), 1, SLOT_COUNT);
     s->resume = mdrt_settings_get_int(s->set, "general.resume", 1) != 0;
     s->pending = -1;
-    if (o->noptions > 0) s->opt_values = calloc((size_t)o->noptions, sizeof *s->opt_values);
-    for (int i = 0; s->opt_values && i < o->noptions; i++) {   /* the client's options */
-        const mdrt_sdl_option *op = &o->options[i];
-        if (op->count > 0) {
-            mdrt_settings_default(s->set, op->key, op->names[clamp(op->def, 0, op->count - 1)]);
-            s->opt_values[i] = named(mdrt_settings_get(s->set, op->key), op->names, op->count, clamp(op->def, 0, op->count - 1));
-        } else {
-            char v[24];
-            snprintf(v, sizeof v, "%d", op->def);
-            mdrt_settings_default(s->set, op->key, v);
-            s->opt_values[i] = clamp(mdrt_settings_get_int(s->set, op->key, op->def), op->min, op->max);
-        }
-    }
+    if (o->noptions > 0) options_from_settings(s);
     mdrt_settings_default(s->set, "capture.replay", "20");
     mdrt_settings_default(s->set, "capture.gif_scale", "1");
     mdrt_settings_default(s->set, "general.videos", "videos");
@@ -1150,11 +1236,7 @@ static void build_page(sdl *s, int page, int select)
     case PAGE_CLIENT:                                     /* the client's own options */
         mdrt_menu_page(m, s->o->options_title);
         if (s->o->options_note) put_text(m->subtitle, sizeof m->subtitle, s->o->options_note, 0);
-        for (int i = 0; i < s->o->noptions; i++) {
-            const mdrt_sdl_option *op = &s->o->options[i];
-            if (op->count > 0) mdrt_menu_add_choice(m, I_COPTION + i, op->label, op->labels ? op->labels : op->names, op->count, s->opt_values[i]);
-            else mdrt_menu_add_number(m, I_COPTION + i, op->label, s->opt_values[i], op->min, op->max, op->step > 0 ? op->step : 1, NULL);
-        }
+        for (int i = 0; i < s->o->noptions; i++) option_item(s, m, i);
         mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
         break;
     case PAGE_CAPTURE: {
@@ -1659,15 +1741,7 @@ static void act(sdl *s, int id)
         snprintf(k, sizeof k, "player%d.controller", id - I_PLAYER + 1);
         mdrt_settings_set_int(s->set, k, it->value);
     } else if (id >= I_COPTION && id < I_COPTION + s->o->noptions && s->opt_values) {   /* one of the client's options */
-        int which = id - I_COPTION, changed = 0;
-        s->opt_values[which] = it->value;
-        if (s->o->options_changed) changed = s->o->options_changed(which, s->opt_values, s->user);
-        for (int i = 0; i < s->o->noptions; i++) {        /* (into the settings: a preset may change them all) */
-            const mdrt_sdl_option *op = &s->o->options[i];
-            if (op->count > 0) mdrt_settings_set(s->set, op->key, op->names[clamp(s->opt_values[i], 0, op->count - 1)]);
-            else mdrt_settings_set_int(s->set, op->key, s->opt_values[i]);
-        }
-        if (changed) build_page(s, PAGE_CLIENT, id);
+        if (option_changed(s, id - I_COPTION, it->value)) build_page(s, PAGE_CLIENT, id);
         if (running) snprintf(s->menu.message, sizeof s->menu.message, "From the next game: Reset");
     } else if (id >= I_CBUTTON && id < I_CBUTTON + CBUTTONS) {   /* a controller button to change */
         s->binding = id;
@@ -2069,6 +2143,8 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
     mdrt_menu_free(&s->menu);
     free_entries(s);
     free(s->frame); free(s->blended); free(s->big); free(s->big_scratch); free(s->pending_pic); free(s->opt_values);
+    for (int i = 0; s->opt_custom && i < s->o->noptions; i++) free(s->opt_custom[i].labels);
+    free(s->opt_custom);
     if (stopped) {                                        /* (else the thread still has them) */
         mdrt_free(s->m);
         mdrt_capture_free(s->cap);

@@ -49,15 +49,22 @@
 #include "mdrt/mdrt.h"
 
 /* one of the client's own options (a game's rules, say), on its page of the menu: a choice of
- * some named values, or a number; kept in the settings file under its key */
+ * some named values, or a number; kept in the settings file under its key.
+ *
+ * A choice can stand for numbers (numbers not NULL): the client gets the number of the one
+ * chosen, and the settings file keeps a choice's name or any number from min to max. A number
+ * that is none of the choices' (from the file, or set by options_changed) is one more choice on
+ * the page, after them, shown as "custom" with the number and its unit. */
 typedef struct mdrt_sdl_option {
     const char *key;            /* its setting ("rules.period_lengths") */
     const char *label;          /* on the page */
     int count;                  /* choices (names and labels, count of each); 0: a number */
     const char *const *names;   /* the choices as the settings file has them */
     const char *const *labels;  /* and as the page shows them (NULL: the names) */
-    int min, max, step;         /* a number's range and step */
+    int min, max, step;         /* a number's range and step (a choice's numbers: the file's range) */
     int def;                    /* the default: the choice's index, or the number */
+    const int *numbers;         /* the number each choice stands for (count of them; NULL: none) */
+    const char *unit;           /* after a number on the page ("%", " min"; NULL: none) */
 } mdrt_sdl_option;
 
 typedef struct mdrt_sdl_options {
