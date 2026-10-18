@@ -99,12 +99,12 @@ static const char *const fast_label[6] = { "2x", "3x", "4x", "6x", "8x", "as fas
 
 /* the menu's pages and items */
 enum { PAGE_MAIN, PAGE_VIDEO, PAGE_SOUND, PAGE_OPTIONS, PAGE_KEYS, PAGE_ROM, PAGE_PLAYERS, PAGE_CBUTTONS, PAGE_SAVE, PAGE_LOAD, PAGE_CAPTURE,
-       PAGE_CLIENT };
+       PAGE_CLIENT, PAGE_PICK };
 enum { SLOT_COUNT = 8 };                                  /* save slots; 0 is quick resume's */
 enum { I_RESUME = 1, I_ROM, I_RESET, I_SAVE, I_LOAD, I_VIDEO, I_SOUND, I_OPTIONS, I_KEYS, I_QUIT, I_BACK,
        I_UPSCALE, I_SCALE, I_ASPECT, I_FULL, I_VSYNC, I_COLOURS, I_BLEND, I_SCANLINES, I_MASK, I_VOLUME, I_MUTE, I_FM_CORE, I_FM_CHIP, I_FOCUS, I_FAST, I_UP,
        I_PLAYERS, I_ADAPTOR, I_TURBO, I_DEADZONE, I_CBUTTONS, I_RESUME_OPT,
-       I_CAPTURE, I_CAP_REPLAY, I_CAP_RECORD, I_CAP_SECONDS, I_CAP_GIFSCALE,
+       I_CAPTURE, I_CAP_REPLAY, I_CAP_RECORD, I_CAP_SECONDS, I_CAP_GIFSCALE, I_USE,
        I_SLOT = 800,             /* + slot (1-8) */
        I_PLAYER = 900,           /* + player (0-3) */
        I_PAD = 1000,             /* + pad * BUTTONS + button */
@@ -113,6 +113,7 @@ enum { I_RESUME = 1, I_ROM, I_RESET, I_SAVE, I_LOAD, I_VIDEO, I_SOUND, I_OPTIONS
        I_CBUTTON = 3000,         /* + a controller button (cbutton_*) */
        I_CPAGE = 3500,           /* + a page of the client's options */
        I_COPTION = 4000,         /* + one of the client's options */
+       I_CBROWSE = 6000,         /* + a browsed option of the client's: its browse line */
        I_ENTRY = 10000 };        /* + a directory entry's index */
 
 /* a client's choice standing for numbers: its page's labels, its own then the custom one's, when
@@ -212,6 +213,8 @@ typedef struct sdl {
     int menu_open, page, confirm, binding;
     uint32_t menu_px[320 * 240];
     char dir[1024];             /* the ROM page's directory */
+    int pick;                   /* the client's option the browser finds a choice for (PAGE_PICK) */
+    char pick_dir[1024];        /* its directory */
     char **entries;             /* its folders (ending in the separator) and ROM files */
     int nentries;
     const char *core_label[8];
@@ -578,6 +581,12 @@ static void options_from_settings(sdl *s)
             mdrt_settings_default(s->set, op->key, op->names[def]);
             const char *v = mdrt_settings_get(s->set, op->key);
             s->opt_values[i] = named(v, op->names, op->count, def);
+            if (op->browse && s->o->options_pick && v && *v && named(v, op->names, op->count, -1) < 0) {   /* (a path found before) */
+                char why[200] = "";
+                int k = s->o->options_pick(i, v, why, sizeof why, s->user);
+                if (k >= 0 && k < op->count) s->opt_values[i] = k;
+                else fprintf(stderr, "%s: %s (%s instead)\n", v, why[0] ? why : "not one it takes", op->names[def]);
+            }
             if (!op->numbers) continue;
             struct custom *c = &s->opt_custom[i];
             if (!(c->labels = calloc((size_t)op->count + 1, sizeof *c->labels))) { free(s->opt_values); s->opt_values = NULL; return; }
@@ -636,6 +645,11 @@ static void option_item(sdl *s, mdrt_menu *m, int i)
     if (op->count <= 0) mdrt_menu_add_number(m, I_COPTION + i, op->label, v, op->min, op->max, op->step > 0 ? op->step : 1, op->unit);
     else if (!op->numbers) mdrt_menu_add_choice(m, I_COPTION + i, op->label, op->labels ? op->labels : op->names, op->count, v);
     else mdrt_menu_add_choice(m, I_COPTION + i, op->label, c->labels, op->count + c->has, numbered(op, v) >= 0 ? numbered(op, v) : op->count);
+    mdrt_menu_item *it;
+    if (op->browse && op->count > 0 && (it = mdrt_menu_add(m, I_CBROWSE + i, MDRT_ITEM_ACTION, op->browse->label ? op->browse->label : "Find"))) {
+        if (s->o->options_detail) s->o->options_detail(i, v, it->detail, sizeof it->detail, s->user);
+        else put_text(it->detail, sizeof it->detail, op->names[clamp(v, 0, op->count - 1)], 1);
+    }
 }
 
 /* the FM core and chip a console is made with: the client's, else the settings' */
@@ -1105,21 +1119,36 @@ static void free_entries(sdl *s)
     s->nentries = 0;
 }
 
-/* the directory's folders and ROM files, folders first (hidden ones left out) */
-static void list_dir(sdl *s)
+/* a file a listing shows: a ROM (files NULL), else one whose name ends in one of files' endings
+ * (spaces between) */
+static int listed_file(const char *name, const char *files)
+{
+    if (!files) return is_rom_name(name);
+    size_t n = strlen(name);
+    for (const char *e = files; *e;) {
+        while (*e == ' ') e++;
+        size_t k = strcspn(e, " ");
+        if (k && n > k && !SDL_strncasecmp(name + n - k, e, k)) return 1;
+        e += k;
+    }
+    return 0;
+}
+
+/* the directory's folders and the files it lists (listed_file), folders first (hidden ones left out) */
+static void list_dir(sdl *s, const char *dir, const char *files)
 {
     free_entries(s);
-    DIR *d = opendir(s->dir);
+    DIR *d = opendir(dir);
     struct dirent *e;
     int cap = 0;
     while (d && (e = readdir(d))) {
         if (e->d_name[0] == '.') continue;
         char path[2048];
         struct stat st;
-        join(path, sizeof path, s->dir, e->d_name);
+        join(path, sizeof path, dir, e->d_name);
         if (stat(path, &st)) continue;
         int folder = S_ISDIR(st.st_mode);
-        if (!folder && !is_rom_name(e->d_name)) continue;
+        if (!folder && !listed_file(e->d_name, files)) continue;
         if (s->nentries == cap) {
             char **more = realloc(s->entries, (size_t)(cap = cap ? 2 * cap : 64) * sizeof *more);
             if (!more) break;
@@ -1413,7 +1442,7 @@ static void build_page(sdl *s, int page, int select)
         break;
     case PAGE_ROM:
         mdrt_menu_page(m, "Choose the game's ROM");
-        list_dir(s);
+        list_dir(s, s->dir, NULL);
         put_text(m->subtitle, sizeof m->subtitle, s->dir, 1);
         {
             char up[1024];
@@ -1428,6 +1457,19 @@ static void build_page(sdl *s, int page, int select)
             if (!sep(s->entries[i][strlen(s->entries[i]) - 1])) select = I_ENTRY + i;
         if (!s->nentries) mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "(no folders or ROMs here)");
         break;
+    case PAGE_PICK: {                                     /* the browser for a client's option */
+        const mdrt_sdl_option *op = &s->o->options[s->pick];
+        char up[1024];
+        mdrt_menu_page(m, op->browse->title ? op->browse->title : op->label);
+        list_dir(s, s->pick_dir, op->browse->files && *op->browse->files ? op->browse->files : " ");
+        put_text(m->subtitle, sizeof m->subtitle, s->pick_dir, 1);
+        if (op->browse->folders) mdrt_menu_add(m, I_USE, MDRT_ITEM_ACTION, "Use this folder");
+        snprintf(up, sizeof up, "%s", s->pick_dir);
+        if (dir_up(up)) mdrt_menu_add(m, I_UP, MDRT_ITEM_ACTION, "..  (the folder above)");
+        for (int i = 0; i < s->nentries; i++) mdrt_menu_add(m, I_ENTRY + i, MDRT_ITEM_ACTION, s->entries[i]);
+        if (!s->nentries) mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "(nothing here)");
+        break;
+    }
     }
     mdrt_menu_select(m, select);
     s->redraw = 1;
@@ -1643,6 +1685,23 @@ static int confirmed(sdl *s, int id, const char *what)
     return 0;
 }
 
+/* the browser's choice for the client's option s->pick: the client makes it one of the option's
+ * (then chosen, as a change on the page is), or says why not */
+static void picked(sdl *s, const char *path)
+{
+    char kept[1100], why[200] = "";
+    kept_path(kept, sizeof kept, path);
+    int k = s->o->options_pick ? s->o->options_pick(s->pick, kept, why, sizeof why, s->user) : -1;
+    if (k < 0 || k >= s->o->options[s->pick].count) {
+        put_text(s->menu.message, sizeof s->menu.message, why[0] ? why : "not one it takes", 0);
+        s->confirm = 0;
+        return;
+    }
+    option_changed(s, s->pick, k);
+    build_page(s, PAGE_CLIENT, I_CBROWSE + s->pick);
+    if (s->thread) snprintf(s->menu.message, sizeof s->menu.message, "From the next game: Reset");
+}
+
 static void act(sdl *s, int id)
 {
     mdrt_menu_item *it = mdrt_menu_find(&s->menu, id);
@@ -1782,22 +1841,24 @@ static void act(sdl *s, int id)
         mdrt_settings_set_int(s->set, "general.fast_forward", fast_speeds[it->value]);
         return;
     case I_UP:
-        dir_up(s->dir);
-        build_page(s, PAGE_ROM, I_UP);
+        dir_up(s->page == PAGE_PICK ? s->pick_dir : s->dir);
+        build_page(s, s->page, I_UP);
         return;
+    case I_USE: picked(s, s->pick_dir); return;
     default: break;
     }
     if (id >= I_ENTRY && id - I_ENTRY < s->nentries) {
-        char path[2048];
+        char path[2048], *dir = s->page == PAGE_PICK ? s->pick_dir : s->dir;
         const char *name = s->entries[id - I_ENTRY];
         size_t n = strlen(name);
-        join(path, sizeof path, s->dir, name);
+        join(path, sizeof path, dir, name);
         if (sep(name[n - 1])) {                           /* a folder: into it */
             path[strlen(path) - 1] = 0;
-            put_text(s->dir, sizeof s->dir, path, 0);
-            build_page(s, PAGE_ROM, I_ENTRY);
+            put_text(dir, s->page == PAGE_PICK ? sizeof s->pick_dir : sizeof s->dir, path, 0);
+            build_page(s, s->page, s->page == PAGE_PICK && s->o->options[s->pick].browse->folders ? I_USE : I_ENTRY);
             return;
         }
+        if (s->page == PAGE_PICK) { picked(s, path); return; }
         const char *why = try_rom(s, path, 0);
         if (why) { snprintf(s->menu.message, sizeof s->menu.message, "%s", why); s->confirm = 0; return; }
         if (running && !confirmed(s, id, "start the game with it")) return;
@@ -1814,6 +1875,20 @@ static void act(sdl *s, int id)
         s->player_ctrl[id - I_PLAYER] = it->value;
         snprintf(k, sizeof k, "player%d.controller", id - I_PLAYER + 1);
         mdrt_settings_set_int(s->set, k, it->value);
+    } else if (id >= I_CBROWSE && id < I_CBROWSE + s->o->noptions && s->opt_values && s->o->options[id - I_CBROWSE].browse) {   /* a browsed option: the browser */
+        const mdrt_sdl_option *op = &s->o->options[s->pick = id - I_CBROWSE];
+        char cwd[1024];
+        struct stat st;
+        if (!get_cwd(cwd, sizeof cwd)) snprintf(cwd, sizeof cwd, ".");
+        snprintf(s->pick_dir, sizeof s->pick_dir, "%s", cwd);
+        const char *bd = op->browse ? op->browse->dir : NULL;
+        if (bd && *bd) {
+            char there[2048];
+            if (sep(bd[0]) || (bd[0] && bd[1] == ':')) snprintf(there, sizeof there, "%s", bd);
+            else join(there, sizeof there, cwd, bd);
+            if (!stat(there, &st) && S_ISDIR(st.st_mode)) put_text(s->pick_dir, sizeof s->pick_dir, there, 0);
+        }
+        build_page(s, PAGE_PICK, I_ENTRY);
     } else if (id >= I_CPAGE && id < I_CPAGE + client_pages(s) && s->opt_values) {   /* a page of the client's options */
         s->cpage = id - I_CPAGE;
         build_page(s, PAGE_CLIENT, I_COPTION + client_page(s, s->cpage).first);
@@ -1836,6 +1911,7 @@ static void menu_input(sdl *s, int in)
     if (s->page == PAGE_SAVE || s->page == PAGE_LOAD) slot_picture(s);
     if (id == MDRT_MENU_CLOSE) {
         if (s->page == PAGE_ROM) build_page(s, PAGE_MAIN, I_ROM);
+        else if (s->page == PAGE_PICK) build_page(s, PAGE_CLIENT, I_CBROWSE + s->pick);
         else if (s->page != PAGE_MAIN) act(s, I_BACK);   /* (the controller buttons' page: back to Players) */
         else if (s->thread) close_menu(s);
     } else if (id >= 0) act(s, id);

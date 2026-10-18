@@ -49,6 +49,16 @@
 #define MDRT_PLATFORM_SDL2_H
 #include "mdrt/mdrt.h"
 
+/* how a choice can also be found on disk (mdrt_sdl_option.browse): a line under it, label's,
+ * with options_detail's text at its right, opens the menu's file browser in dir (from the working
+ * directory; missing: there), titled title, listing folders and the files whose names end in one
+ * of files' endings (".zip .7z"; NULL or "": none), and "Use this folder" when folders. What is
+ * chosen goes to options_pick, which makes it a choice */
+typedef struct mdrt_sdl_browse {
+    const char *title, *label, *dir, *files;
+    int folders;
+} mdrt_sdl_browse;
+
 /* one of the client's own options (a game's rules, say), on its page of the menu: a choice of
  * some named values, or a number; kept in the settings file under its key.
  *
@@ -66,6 +76,7 @@ typedef struct mdrt_sdl_option {
     int def;                    /* the default: the choice's index, or the number */
     const int *numbers;         /* the number each choice stands for (count of them; NULL: none) */
     const char *unit;           /* after a number on the page ("%", " min"; NULL: none) */
+    const mdrt_sdl_browse *browse;   /* a choice that can also be found on disk (NULL: not) */
 } mdrt_sdl_option;
 
 /* a page of the client's options, an item of the menu of its own: options first to first + count
@@ -111,6 +122,14 @@ typedef struct mdrt_sdl_options {
      * no pages) with the values now, \n between lines, a tab in one putting what follows it at
      * the right; asked when the page is shown and after each change on it, on the window's thread */
     void (*options_text)(int page, const int *values, char *text, size_t size, void *user);
+    /* a browsed option's (mdrt_sdl_browse): path is what the player chose there (a folder
+     * or a file, from the working directory when inside it), or what the settings file names
+     * when it is none of the choices: the client makes it one (growing the option's names,
+     * labels and count, which are its own) and returns its index, or -1 with why (the menu says
+     * it); options_detail writes the text the browse line shows for the choice value (NULL: its
+     * name) */
+    int (*options_pick)(int which, const char *path, char *why, size_t why_size, void *user);
+    void (*options_detail)(int which, int value, char *text, size_t size, void *user);
     /* the save RAM's file for the game about to start, asked after options_use (so it can follow
      * the client's options: another save for another set of its data); NULL, or a NULL return: sram_path */
     const char *(*sram_file)(void *user);

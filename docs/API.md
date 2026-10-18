@@ -49,7 +49,10 @@ changing other values (a preset); it hears of the values read from the settings 
 takes a choice's name or any number in the range, which the page shows as one more choice, "custom
 (115%)". The options can be split into `pages`, each an item of the menu of its own, and
 `options_text` puts the client's lines under a page's options, made again after each change (what
-the choice now chosen holds, say). `sram_file`, asked after `options_use`, names the save RAM's
+the choice now chosen holds, say). A choice can also be found on disk (`browse`, an
+`mdrt_sdl_browse`): a line under it opens the menu's file browser, and `options_pick` makes what
+the player chooses there one of its choices (the settings file keeps its path, given back to
+`options_pick` at the next start). `sram_file`, asked after `options_use`, names the save RAM's
 file for that game when it follows the options (another set of data that keeps records of its own);
 NULL keeps `sram_path`.
 

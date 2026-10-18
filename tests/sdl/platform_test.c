@@ -40,7 +40,7 @@
 #define BACKDROP 0x0E42                                   /* the picture: the backdrop's colour */
 
 static const char *const shots = "shots", *const sound = "sound.raw", *const settings_path = "settings.ini";
-static SDL_atomic_t frame, held, starts, fm_second, pads4[MDRT_PADS], adaptor, game_frame, refuse_saves, opt_seen[4], opt_uses, opt_read, text_asked[2], text_share;
+static SDL_atomic_t frame, held, starts, fm_second, pads4[MDRT_PADS], adaptor, game_frame, refuse_saves, opt_seen[5], opt_uses, opt_read, text_asked[2], text_share, picks;
 static int run;
 static char rom_seen[16];                                 /* the start of the ROM the client was given */
 
@@ -460,16 +460,38 @@ static int gif_read(const char *path, int *w, int *h, uint32_t *first)
 static const char *const opt_names[3] = { "first", "second", "third" };
 static const char *const share_names[3] = { "normal", "more", "less" };
 static const int share_numbers[3] = { 100, 150, 50 };
-static const mdrt_sdl_option test_options[4] = {
-    { "test.choice", "A choice", 3, opt_names, NULL, 0, 0, 0, 0, NULL, NULL },
-    { "test.number", "A number", 0, NULL, NULL, 1, 9, 1, 4, NULL, NULL },
-    { "test.share", "A share", 3, share_names, NULL, 10, 200, 0, 0, share_numbers, "%" },
-    { "test.kept", "Another", 3, share_names, NULL, 10, 200, 0, 0, share_numbers, "%" },
+/* and a choice found on disk (browsed: a .zip or a folder), its choices the client's own, growing
+ * as the player finds them (the settings file's elsewhere/b.zip, then browse-test/a.zip) */
+static const char *found_names[4] = { "none" };
+static char found_paths[3][300], last_pick[300];
+static const mdrt_sdl_browse found_browse = { "Find one", "From", "browse-test", ".zip", 1 };
+static mdrt_sdl_option test_options[5] = {
+    { "test.choice", "A choice", 3, opt_names, NULL, 0, 0, 0, 0, NULL, NULL, NULL },
+    { "test.number", "A number", 0, NULL, NULL, 1, 9, 1, 4, NULL, NULL, NULL },
+    { "test.share", "A share", 3, share_names, NULL, 10, 200, 0, 0, share_numbers, "%", NULL },
+    { "test.kept", "Another", 3, share_names, NULL, 10, 200, 0, 0, share_numbers, "%", NULL },
+    { "test.found", "A found", 1, found_names, NULL, 0, 0, 0, 0, NULL, NULL, &found_browse },
 };
+static int options_pick(int which, const char *path, char *why, size_t why_size, void *user)
+{
+    (void)user;
+    SDL_AtomicAdd(&picks, 1);
+    snprintf(last_pick, sizeof last_pick, "%s", path);
+    if (which != 4 || test_options[4].count >= 4) { snprintf(why, why_size, "no room"); return -1; }
+    int k = test_options[4].count++;
+    snprintf(found_paths[k - 1], sizeof found_paths[0], "%s", path);
+    found_names[k] = found_paths[k - 1];
+    return k;
+}
+static void options_detail(int which, int value, char *text, size_t size, void *user)
+{
+    (void)user;
+    snprintf(text, size, "%s", which == 4 && value ? found_names[value] : "(nothing)");
+}
 static void options_use(const int *v, void *user)
 {
     (void)user;
-    for (int i = 0; i < 4; i++) SDL_AtomicSet(&opt_seen[i], v[i]);
+    for (int i = 0; i < 5; i++) SDL_AtomicSet(&opt_seen[i], v[i]);
     SDL_AtomicAdd(&opt_uses, 1);
 }
 static int options_changed(int which, int *v, void *user)
@@ -480,7 +502,7 @@ static int options_changed(int which, int *v, void *user)
     return 0;
 }
 /* on two pages (the last option on one of its own), with lines under each page's options */
-static const mdrt_sdl_page test_pages[2] = { { "Test rules", "For the next game", 0, 3 }, { "More", NULL, 3, 1 } };
+static const mdrt_sdl_page test_pages[2] = { { "Test rules", "For the next game", 0, 3 }, { "More", NULL, 3, 2 } };
 static void options_text(int page, const int *v, char *text, size_t size, void *user)
 {
     (void)user;
@@ -499,6 +521,7 @@ static int rules_player(void *user)
     CHECK_EQ(SDL_AtomicGet(&opt_seen[2]), 120);           /* (the file's number) */
     CHECK_EQ(SDL_AtomicGet(&opt_read), 1);
     CHECK_EQ(SDL_AtomicGet(&opt_seen[3]), 150);
+    CHECK(SDL_AtomicGet(&picks) == 1 && !strcmp(last_pick, "elsewhere/b.zip") && SDL_AtomicGet(&opt_seen[4]) == 1);   /* (the file's path, made a choice) */
     CHECK(SDL_AtomicGet(&text_asked[0]) == 0 && SDL_AtomicGet(&text_asked[1]) == 0);   /* (not until a page is shown) */
     /* the menu: [Resume, Reset, Save, Load, Video, Capture, Sound, Players, Test rules, More, Options ...] */
     keys(SDL_SCANCODE_ESCAPE, 1);
@@ -517,9 +540,16 @@ static int rules_player(void *user)
     CHECK(SDL_AtomicGet(&text_asked[0]) >= 8 && SDL_AtomicGet(&text_share) == 75 && SDL_AtomicGet(&text_asked[1]) == 0);
     keys(SDL_SCANCODE_ESCAPE, 1);                         /* (back on Test rules) */
     keys(SDL_SCANCODE_DOWN, 1);
-    keys(SDL_SCANCODE_RETURN, 1);                         /* More: [Another, its lines, Back] */
+    keys(SDL_SCANCODE_RETURN, 1);                         /* More: [Another, A found, From, its lines, Back] */
     SDL_Delay(100);
     CHECK_EQ(SDL_AtomicGet(&text_asked[1]), 1);
+    keys(SDL_SCANCODE_DOWN, 2);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* From: the browser in browse-test: [Use this folder, .., sub/, a.zip], on sub/ */
+    keys(SDL_SCANCODE_DOWN, 1);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* a.zip: picked, made the choice */
+    SDL_Delay(100);
+    printf("  options: %d picks, the last %s\n", SDL_AtomicGet(&picks), last_pick);
+    CHECK(SDL_AtomicGet(&picks) == 2 && !strcmp(last_pick, "browse-test/a.zip"));
     keys(SDL_SCANCODE_ESCAPE, 1);                         /* (back on More) */
     keys(SDL_SCANCODE_UP, 8);
     keys(SDL_SCANCODE_RETURN, 2);                         /* Reset, asked again */
@@ -634,10 +664,12 @@ static int play(void)
         o.options_title = "Test rules";
         o.options_note = "For the next game";
         o.options = test_options;
-        o.noptions = 4;
+        o.noptions = 5;
         o.pages = test_pages;
         o.npages = 2;
         o.options_text = options_text;
+        o.options_pick = options_pick;
+        o.options_detail = options_detail;
         o.options_use = options_use;
         o.options_changed = options_changed;
         o.sram_path = "options.srm";
@@ -863,11 +895,21 @@ int main(int argc, char **argv)
     /* the client's options */
     run = 9;
     FILE *sf = fopen(settings_path, "a");                 /* (a number in the file, none of its choices') */
-    if (sf) { fputs("test.share = 120\ntest.kept = 150\n", sf); fclose(sf); }
+    if (sf) { fputs("test.share = 120\ntest.kept = 150\ntest.found = elsewhere/b.zip\n", sf); fclose(sf); }
+    make_dir("browse-test");                              /* (the browser's folder: a folder and a .zip, and a file it leaves out) */
+    make_dir("browse-test/sub");
+    FILE *z = fopen("browse-test/a.zip", "wb"), *o = fopen("browse-test/notes.txt", "wb");
+    if (z) fclose(z);
+    if (o) fclose(o);
     CHECK_EQ(play(), 0);
     t = slurp(settings_path, &len);
     CHECK(t && strstr(t, "test.choice = third\n") && strstr(t, "test.number = 8\n") && strstr(t, "test.share = 75\n"));
     CHECK(t && strstr(t, "test.kept = 150\n"));          /* (a choice's number, never changed: as written) */
+    CHECK(t && strstr(t, "test.found = browse-test/a.zip\n") && SDL_AtomicGet(&opt_seen[4]) == 2);   /* (the path the settings keep) */
+    remove("browse-test/a.zip");
+    remove("browse-test/notes.txt");
+    remove_dir("browse-test/sub");
+    remove_dir("browse-test");
     free(t);
     FILE *f0 = fopen("options-0.srm", "rb"), *f2 = fopen("options-2.srm", "rb"), *fo = fopen("options.srm", "rb");
     CHECK(f0 && f2 && !fo);                               /* each game's save RAM in the file its options named */
