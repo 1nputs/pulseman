@@ -38,18 +38,20 @@ when none will do, opens the menu on a file browser. The menu's reset and a new 
 must then start from scratch, as at power on, whatever it kept in its own statics (worth a
 test: a restart against a fresh power on, frame by frame).
 
-A client with options of its own (a game's rules) describes them in `options` (`mdrt_sdl_option`:
-a key, a label, named choices or a number's range, a default) with `options_title`: the menu
-gets a page of them, the settings file keeps them, and `options_use` hands the client their
-values before every power on, on the window's thread with the game stopped. Read them there and
-keep them for the game: a change made in play shows from the next power on. `options_changed`
-can answer a change by changing other values (a preset); it hears of the values read from the
-settings file too (`which` -1), so a preset can agree with values edited there. Named choices can stand for numbers
+A client with options of its own (a game's rules) describes them in `options` (`mdrt_sdl_option`: a
+key, a label, named choices or a number's range, a default) with `options_title`: the menu gets a
+page of them, the settings file keeps them, and `options_use` hands the client their values before
+every power on, on the window's thread with the game stopped. Read them there and keep them for the
+game: a change made in play shows from the next power on. `options_changed` can answer a change by
+changing other values (a preset); it hears of the values read from the settings file too (`which`
+-1), so a preset can agree with values edited there. Named choices can stand for numbers
 (`numbers`, with `min`, `max` and a `unit`): the client gets the number, and the settings file
-takes a choice's name or any number in the range, which the page shows as one more choice,
-"custom (115%)". `sram_file`, asked after `options_use`, names the save RAM's file for that game
-when it follows the options (another set of data that keeps records of its own); NULL keeps
-`sram_path`.
+takes a choice's name or any number in the range, which the page shows as one more choice, "custom
+(115%)". The options can be split into `pages`, each an item of the menu of its own, and
+`options_text` puts the client's lines under a page's options, made again after each change (what
+the choice now chosen holds, say). `sram_file`, asked after `options_use`, names the save RAM's
+file for that game when it follows the options (another set of data that keeps records of its own);
+NULL keeps `sram_path`.
 
 The pieces with no SDL in them are there for another platform (a browser's) to use:
 `mdrt/settings.h` (the file's text, read and written back with its comments and unknown keys),

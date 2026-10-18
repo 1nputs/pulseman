@@ -67,6 +67,13 @@ typedef struct mdrt_sdl_option {
     const char *unit;           /* after a number on the page ("%", " min"; NULL: none) */
 } mdrt_sdl_option;
 
+/* a page of the client's options, an item of the menu of its own: options first to first + count
+ * - 1, with the note under its title (NULL: none) */
+typedef struct mdrt_sdl_page {
+    const char *title, *note;
+    int first, count;
+} mdrt_sdl_page;
+
 typedef struct mdrt_sdl_options {
     const char *title;
     int scale;                  /* window size in multiples of the picture (0: the settings', or 3) */
@@ -96,6 +103,13 @@ typedef struct mdrt_sdl_options {
     int noptions;
     void (*options_use)(const int *values, void *user);
     int (*options_changed)(int which, int *values, void *user);
+    /* the options on pages of their own (npages of them; none: the one page, options_title's) */
+    const mdrt_sdl_page *pages;
+    int npages;
+    /* lines under a page's options (may be NULL): the client's text for page p (0 when there are
+     * no pages) with the values now, \n between lines, a tab in one putting what follows it at
+     * the right; asked when the page is shown and after each change on it, on the window's thread */
+    void (*options_text)(int page, const int *values, char *text, size_t size, void *user);
     /* the save RAM's file for the game about to start, asked after options_use (so it can follow
      * the client's options: another save for another set of its data); NULL, or a NULL return: sram_path */
     const char *(*sram_file)(void *user);

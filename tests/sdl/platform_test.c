@@ -40,7 +40,7 @@
 #define BACKDROP 0x0E42                                   /* the picture: the backdrop's colour */
 
 static const char *const shots = "shots", *const sound = "sound.raw", *const settings_path = "settings.ini";
-static SDL_atomic_t frame, held, starts, fm_second, pads4[MDRT_PADS], adaptor, game_frame, refuse_saves, opt_seen[4], opt_uses, opt_read;
+static SDL_atomic_t frame, held, starts, fm_second, pads4[MDRT_PADS], adaptor, game_frame, refuse_saves, opt_seen[4], opt_uses, opt_read, text_asked[2], text_share;
 static int run;
 static char rom_seen[16];                                 /* the start of the ROM the client was given */
 
@@ -477,6 +477,15 @@ static int options_changed(int which, int *v, void *user)
     if (which == 0 && v[0] == 2) { v[1] = 9; v[2] = 75; return 1; }
     return 0;
 }
+/* on two pages (the last option on one of its own), with lines under each page's options */
+static const mdrt_sdl_page test_pages[2] = { { "Test rules", "For the next game", 0, 3 }, { "More", NULL, 3, 1 } };
+static void options_text(int page, const int *v, char *text, size_t size, void *user)
+{
+    (void)user;
+    SDL_AtomicAdd(&text_asked[page & 1], 1);
+    if (page == 0) SDL_AtomicSet(&text_share, v[2]);
+    snprintf(text, size, "A line\nThe share\t%d%%\n", v[2]);
+}
 /* the save RAM's file follows the choice (records of their own for each) */
 static const char *sram_file(void *user) { (void)user; static char path[32]; snprintf(path, sizeof path, "options-%d.srm", SDL_AtomicGet(&opt_seen[0])); return path; }
 
@@ -488,10 +497,11 @@ static int rules_player(void *user)
     CHECK_EQ(SDL_AtomicGet(&opt_seen[2]), 120);           /* (the file's number) */
     CHECK_EQ(SDL_AtomicGet(&opt_read), 1);
     CHECK_EQ(SDL_AtomicGet(&opt_seen[3]), 150);
-    /* the menu: [Resume, Reset, Save, Load, Video, Capture, Sound, Players, Test rules, Options ...] */
+    CHECK(SDL_AtomicGet(&text_asked[0]) == 0 && SDL_AtomicGet(&text_asked[1]) == 0);   /* (not until a page is shown) */
+    /* the menu: [Resume, Reset, Save, Load, Video, Capture, Sound, Players, Test rules, More, Options ...] */
     keys(SDL_SCANCODE_ESCAPE, 1);
     keys(SDL_SCANCODE_DOWN, 8);
-    keys(SDL_SCANCODE_RETURN, 1);                         /* [A choice, A number, A share, Another, Back] */
+    keys(SDL_SCANCODE_RETURN, 1);                         /* [A choice, A number, A share, its lines, Back] */
     keys(SDL_SCANCODE_RIGHT, 2);                          /* first -> second -> third: the preset sets the number to 9, the share to 75 */
     keys(SDL_SCANCODE_DOWN, 1);
     keys(SDL_SCANCODE_LEFT, 1);                           /* 9 -> 8 */
@@ -501,8 +511,15 @@ static int rules_player(void *user)
     keys(SDL_SCANCODE_RIGHT, 1);                          /* -> custom: 75 again */
     SDL_Delay(100);
     CHECK_EQ(SDL_AtomicGet(&opt_uses), 1);                /* (not until the next power on) */
-    keys(SDL_SCANCODE_ESCAPE, 1);
-    keys(SDL_SCANCODE_UP, 7);
+    printf("  options: page 1's lines asked for %d times, the share last %d\n", SDL_AtomicGet(&text_asked[0]), SDL_AtomicGet(&text_share));
+    CHECK(SDL_AtomicGet(&text_asked[0]) >= 8 && SDL_AtomicGet(&text_share) == 75 && SDL_AtomicGet(&text_asked[1]) == 0);
+    keys(SDL_SCANCODE_ESCAPE, 1);                         /* (back on Test rules) */
+    keys(SDL_SCANCODE_DOWN, 1);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* More: [Another, its lines, Back] */
+    SDL_Delay(100);
+    CHECK_EQ(SDL_AtomicGet(&text_asked[1]), 1);
+    keys(SDL_SCANCODE_ESCAPE, 1);                         /* (back on More) */
+    keys(SDL_SCANCODE_UP, 8);
     keys(SDL_SCANCODE_RETURN, 2);                         /* Reset, asked again */
     SDL_Delay(500);
     printf("  options: %d power ons, the last with %d, %d and %d\n", SDL_AtomicGet(&opt_uses), SDL_AtomicGet(&opt_seen[0]),
@@ -616,6 +633,9 @@ static int play(void)
         o.options_note = "For the next game";
         o.options = test_options;
         o.noptions = 4;
+        o.pages = test_pages;
+        o.npages = 2;
+        o.options_text = options_text;
         o.options_use = options_use;
         o.options_changed = options_changed;
         o.sram_path = "options.srm";

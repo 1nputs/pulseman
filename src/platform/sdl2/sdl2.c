@@ -104,13 +104,14 @@ enum { SLOT_COUNT = 8 };                                  /* save slots; 0 is qu
 enum { I_RESUME = 1, I_ROM, I_RESET, I_SAVE, I_LOAD, I_VIDEO, I_SOUND, I_OPTIONS, I_KEYS, I_QUIT, I_BACK,
        I_UPSCALE, I_SCALE, I_ASPECT, I_FULL, I_COLOURS, I_BLEND, I_SCANLINES, I_MASK, I_VOLUME, I_MUTE, I_FM_CORE, I_FM_CHIP, I_FOCUS, I_FAST, I_UP,
        I_PLAYERS, I_ADAPTOR, I_TURBO, I_DEADZONE, I_CBUTTONS, I_RESUME_OPT,
-       I_CAPTURE, I_CAP_REPLAY, I_CAP_RECORD, I_CAP_SECONDS, I_CAP_GIFSCALE, I_CLIENT,
+       I_CAPTURE, I_CAP_REPLAY, I_CAP_RECORD, I_CAP_SECONDS, I_CAP_GIFSCALE,
        I_SLOT = 800,             /* + slot (1-8) */
        I_PLAYER = 900,           /* + player (0-3) */
        I_PAD = 1000,             /* + pad * BUTTONS + button */
        I_CONTROL = 2000,         /* + K_ */
        I_TURBOKEY = 2500,        /* + pad * TURBOS + turbo */
        I_CBUTTON = 3000,         /* + a controller button (cbutton_*) */
+       I_CPAGE = 3500,           /* + a page of the client's options */
        I_COPTION = 4000,         /* + one of the client's options */
        I_ENTRY = 10000 };        /* + a directory entry's index */
 
@@ -197,6 +198,7 @@ typedef struct sdl {
     int *opt_values;            /* the client's options (mdrt_sdl_options.options): a choice's index or a number
                                  * (a choice standing for a number: the number) */
     struct custom *opt_custom;  /* each option's custom number (a choice standing for a number) */
+    int cpage;                  /* the page of them shown (mdrt_sdl_options.pages) */
     char title[200];
     uint32_t notice_until;
     uint8_t *rom;               /* the game's ROM (given to the client by rom_use) */
@@ -490,6 +492,16 @@ static int named(const char *v, const char *const *names, int n, int fallback)
 
 static int clamp(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
 
+/* s into to (size bytes), cut at its end or, tail, at its start (a path's end matters most) */
+static void put_text(char *to, size_t size, const char *s, int tail)
+{
+    size_t n = strlen(s);
+    if (tail && n >= size) { s += n - (size - 1); n = size - 1; }
+    if (n >= size) n = size - 1;
+    memcpy(to, s, n);
+    to[n] = 0;
+}
+
 /* ---- the client's options ------------------------------------------------------------------------- */
 
 /* the choice of an option standing for numbers that stands for v, or -1 */
@@ -574,6 +586,36 @@ static void options_from_settings(sdl *s)
         option_value(s, i);
     }
     option_changed(s, -1, 0);                             /* (the client's: a preset agreeing with them) */
+}
+
+/* the pages of the client's options: its own, or the one of them all */
+static int client_pages(const sdl *s) { return s->o->npages > 0 ? s->o->npages : 1; }
+
+static mdrt_sdl_page client_page(const sdl *s, int p)
+{
+    if (s->o->npages <= 0) return (mdrt_sdl_page){ s->o->options_title, s->o->options_note, 0, s->o->noptions };
+    mdrt_sdl_page cp = s->o->pages[clamp(p, 0, s->o->npages - 1)];
+    cp.first = clamp(cp.first, 0, s->o->noptions);
+    cp.count = clamp(cp.count, 0, s->o->noptions - cp.first);
+    return cp;
+}
+
+/* the client's lines under the page's options (options_text), as text items: a tab's right at the right */
+static void client_text(sdl *s, mdrt_menu *m)
+{
+    char text[4096] = "";
+    if (!s->o->options_text) return;
+    s->o->options_text(s->o->npages > 0 ? s->cpage : 0, s->opt_values, text, sizeof text, s->user);
+    text[sizeof text - 1] = 0;
+    for (char *line = text, *end; *line; line = end) {
+        end = line + strcspn(line, "\n");
+        char *next = *end ? end + 1 : end, *tab = memchr(line, '\t', (size_t)(end - line));
+        *end = 0;
+        if (tab) *tab = 0;
+        mdrt_menu_item *it = mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, line);
+        if (it && tab) put_text(it->detail, sizeof it->detail, tab + 1, 0);
+        end = next;
+    }
 }
 
 /* an option on the page */
@@ -1006,16 +1048,6 @@ static int is_rom_name(const char *name)
 
 static int sep(char c) { return c == '/' || c == '\\'; }
 
-/* s into to (size bytes), cut at its end or, tail, at its start (a path's end matters most) */
-static void put_text(char *to, size_t size, const char *s, int tail)
-{
-    size_t n = strlen(s);
-    if (tail && n >= size) { s += n - (size - 1); n = size - 1; }
-    if (n >= size) n = size - 1;
-    memcpy(to, s, n);
-    to[n] = 0;
-}
-
 /* the directory above (none at a root: "/" or "C:\") */
 static int dir_up(char *dir)
 {
@@ -1223,7 +1255,10 @@ static void build_page(sdl *s, int page, int select)
         mdrt_menu_add(m, I_CAPTURE, MDRT_ITEM_ACTION, "Capture");
         mdrt_menu_add(m, I_SOUND, MDRT_ITEM_ACTION, "Sound");
         mdrt_menu_add(m, I_PLAYERS, MDRT_ITEM_ACTION, "Players");
-        if (s->opt_values && s->o->options_title) mdrt_menu_add(m, I_CLIENT, MDRT_ITEM_ACTION, s->o->options_title);
+        for (int p = 0; s->opt_values && p < client_pages(s); p++) {
+            mdrt_sdl_page cp = client_page(s, p);
+            if (cp.title) mdrt_menu_add(m, I_CPAGE + p, MDRT_ITEM_ACTION, cp.title);
+        }
         mdrt_menu_add(m, I_OPTIONS, MDRT_ITEM_ACTION, "Options");
         mdrt_menu_add(m, I_KEYS, MDRT_ITEM_ACTION, "Keys");
         mdrt_menu_add(m, I_QUIT, MDRT_ITEM_ACTION, "Quit");
@@ -1242,12 +1277,15 @@ static void build_page(sdl *s, int page, int select)
         mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
         snprintf(m->subtitle, sizeof m->subtitle, "Sharp: smooth edges. Integer: even pixels. Fit: fills.");
         break;
-    case PAGE_CLIENT:                                     /* the client's own options */
-        mdrt_menu_page(m, s->o->options_title);
-        if (s->o->options_note) put_text(m->subtitle, sizeof m->subtitle, s->o->options_note, 0);
-        for (int i = 0; i < s->o->noptions; i++) option_item(s, m, i);
+    case PAGE_CLIENT: {                                   /* a page of the client's own options */
+        mdrt_sdl_page cp = client_page(s, s->cpage);
+        mdrt_menu_page(m, cp.title ? cp.title : "");
+        if (cp.note) put_text(m->subtitle, sizeof m->subtitle, cp.note, 0);
+        for (int i = cp.first; i < cp.first + cp.count; i++) option_item(s, m, i);
+        client_text(s, m);
         mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
         break;
+    }
     case PAGE_CAPTURE: {
         char a[64], b[64];
         mdrt_menu_page(m, "Capture");
@@ -1608,7 +1646,6 @@ static void act(sdl *s, int id)
         return;
     case I_VIDEO: build_page(s, PAGE_VIDEO, I_UPSCALE); return;
     case I_CAPTURE: build_page(s, PAGE_CAPTURE, s->replay ? I_CAP_REPLAY : I_CAP_RECORD); return;
-    case I_CLIENT: build_page(s, PAGE_CLIENT, I_COPTION); return;
     case I_CAP_REPLAY:                                    /* (saved while the menu stays) */
         snprintf(s->menu.message, sizeof s->menu.message, "%s", save_replay(s));
         return;
@@ -1652,7 +1689,7 @@ static void act(sdl *s, int id)
     case I_QUIT: if (!running || confirmed(s, id, "quit")) request_quit(s); return;
     case I_BACK:
         if (s->page == PAGE_CBUTTONS) { build_page(s, PAGE_PLAYERS, I_CBUTTONS); return; }
-        build_page(s, PAGE_MAIN, s->page == PAGE_VIDEO ? I_VIDEO : s->page == PAGE_CAPTURE ? I_CAPTURE : s->page == PAGE_CLIENT ? I_CLIENT
+        build_page(s, PAGE_MAIN, s->page == PAGE_VIDEO ? I_VIDEO : s->page == PAGE_CAPTURE ? I_CAPTURE : s->page == PAGE_CLIENT ? I_CPAGE + s->cpage
                                  : s->page == PAGE_SOUND ? I_SOUND : s->page == PAGE_OPTIONS ? I_OPTIONS
                                  : s->page == PAGE_PLAYERS ? I_PLAYERS : s->page == PAGE_SAVE ? I_SAVE : s->page == PAGE_LOAD ? I_LOAD : I_KEYS);
         return;
@@ -1749,8 +1786,11 @@ static void act(sdl *s, int id)
         s->player_ctrl[id - I_PLAYER] = it->value;
         snprintf(k, sizeof k, "player%d.controller", id - I_PLAYER + 1);
         mdrt_settings_set_int(s->set, k, it->value);
+    } else if (id >= I_CPAGE && id < I_CPAGE + client_pages(s) && s->opt_values) {   /* a page of the client's options */
+        s->cpage = id - I_CPAGE;
+        build_page(s, PAGE_CLIENT, I_COPTION + client_page(s, s->cpage).first);
     } else if (id >= I_COPTION && id < I_COPTION + s->o->noptions && s->opt_values) {   /* one of the client's options */
-        if (option_changed(s, id - I_COPTION, it->value)) build_page(s, PAGE_CLIENT, id);
+        if (option_changed(s, id - I_COPTION, it->value) || s->o->options_text) build_page(s, PAGE_CLIENT, id);
         if (running) snprintf(s->menu.message, sizeof s->menu.message, "From the next game: Reset");
     } else if (id >= I_CBUTTON && id < I_CBUTTON + CBUTTONS) {   /* a controller button to change */
         s->binding = id;
