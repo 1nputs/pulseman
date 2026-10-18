@@ -43,7 +43,8 @@ a key, a label, named choices or a number's range, a default) with `options_titl
 gets a page of them, the settings file keeps them, and `options_use` hands the client their
 values before every power on, on the window's thread with the game stopped. Read them there and
 keep them for the game: a change made in play shows from the next power on. `options_changed`
-can answer a change by changing other values (a preset). Named choices can stand for numbers
+can answer a change by changing other values (a preset); it hears of the values read from the
+settings file too (`which` -1), so a preset can agree with values edited there. Named choices can stand for numbers
 (`numbers`, with `min`, `max` and a `unit`): the client gets the number, and the settings file
 takes a choice's name or any number in the range, which the page shows as one more choice,
 "custom (115%)". `sram_file`, asked after `options_use`, names the save RAM's file for that game

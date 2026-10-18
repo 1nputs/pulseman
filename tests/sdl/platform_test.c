@@ -40,7 +40,7 @@
 #define BACKDROP 0x0E42                                   /* the picture: the backdrop's colour */
 
 static const char *const shots = "shots", *const sound = "sound.raw", *const settings_path = "settings.ini";
-static SDL_atomic_t frame, held, starts, fm_second, pads4[MDRT_PADS], adaptor, game_frame, refuse_saves, opt_seen[3], opt_uses;
+static SDL_atomic_t frame, held, starts, fm_second, pads4[MDRT_PADS], adaptor, game_frame, refuse_saves, opt_seen[3], opt_uses, opt_read;
 static int run;
 static char rom_seen[16];                                 /* the start of the ROM the client was given */
 
@@ -469,7 +469,13 @@ static void options_use(const int *v, void *user)
     for (int i = 0; i < 3; i++) SDL_AtomicSet(&opt_seen[i], v[i]);
     SDL_AtomicAdd(&opt_uses, 1);
 }
-static int options_changed(int which, int *v, void *user) { (void)user; if (which == 0 && v[0] == 2) { v[1] = 9; v[2] = 75; return 1; } return 0; }
+static int options_changed(int which, int *v, void *user)
+{
+    (void)user;
+    if (which < 0) SDL_AtomicAdd(&opt_read, 1);          /* (the values from the settings file) */
+    if (which == 0 && v[0] == 2) { v[1] = 9; v[2] = 75; return 1; }
+    return 0;
+}
 /* the save RAM's file follows the choice (records of their own for each) */
 static const char *sram_file(void *user) { (void)user; static char path[32]; snprintf(path, sizeof path, "options-%d.srm", SDL_AtomicGet(&opt_seen[0])); return path; }
 
@@ -479,6 +485,7 @@ static int rules_player(void *user)
     until_frame(20);
     CHECK(SDL_AtomicGet(&opt_uses) == 1 && SDL_AtomicGet(&opt_seen[0]) == 0 && SDL_AtomicGet(&opt_seen[1]) == 4);   /* the defaults */
     CHECK_EQ(SDL_AtomicGet(&opt_seen[2]), 120);           /* (the file's number) */
+    CHECK_EQ(SDL_AtomicGet(&opt_read), 1);
     /* the menu: [Resume, Reset, Save, Load, Video, Capture, Sound, Players, Test rules, Options ...] */
     keys(SDL_SCANCODE_ESCAPE, 1);
     keys(SDL_SCANCODE_DOWN, 8);

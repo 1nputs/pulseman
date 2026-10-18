@@ -88,8 +88,9 @@ typedef struct mdrt_sdl_options {
      * choice index or number, in order) through options_use before every power on, on the
      * window's thread while the game is stopped, so they hold for the whole of a game; a change
      * made while one is played shows from the next (the menu says so). options_changed (may be
-     * NULL) hears of each change on the page and may change the other values (a preset); nonzero
-     * when it did. */
+     * NULL) hears of each change on the page (which: the option changed), and of the values as
+     * the settings file had them (which: -1), and may change the other values (a preset that
+     * agrees with them); nonzero when it did. */
     const char *options_title, *options_note;
     const mdrt_sdl_option *options;
     int noptions;

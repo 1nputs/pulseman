@@ -516,6 +516,29 @@ static void option_value(sdl *s, int i)
     c->labels[op->count] = c->label;
 }
 
+/* an option changed on the page (the item's value: a choice's index, or the number; which -1:
+ * none, the values read from the settings): the client hears of it, and the settings keep them
+ * all; nonzero when the client changed others */
+static int option_changed(sdl *s, int which, int value)
+{
+    const mdrt_sdl_option *op;
+    if (which >= 0) {
+        op = &s->o->options[which];
+        if (op->numbers) value = value < op->count ? op->numbers[clamp(value, 0, op->count - 1)] : s->opt_custom[which].number;
+        s->opt_values[which] = value;
+    }
+    int changed = s->o->options_changed ? s->o->options_changed(which, s->opt_values, s->user) : 0;
+    for (int i = 0; i < s->o->noptions; i++) {           /* (a preset may change them all) */
+        option_value(s, i);
+        op = &s->o->options[i];
+        int v = s->opt_values[i];
+        if (op->numbers && numbered(op, v) >= 0) mdrt_settings_set(s->set, op->key, op->names[numbered(op, v)]);
+        else if (op->count > 0 && !op->numbers) mdrt_settings_set(s->set, op->key, op->names[v]);
+        else mdrt_settings_set_int(s->set, op->key, v);
+    }
+    return changed;
+}
+
 /* the client's options from the settings, each kept there (its default when missing) */
 static void options_from_settings(sdl *s)
 {
@@ -546,6 +569,7 @@ static void options_from_settings(sdl *s)
         }
         option_value(s, i);
     }
+    option_changed(s, -1, 0);                             /* (the client's: a preset agreeing with them) */
 }
 
 /* an option on the page */
@@ -557,25 +581,6 @@ static void option_item(sdl *s, mdrt_menu *m, int i)
     if (op->count <= 0) mdrt_menu_add_number(m, I_COPTION + i, op->label, v, op->min, op->max, op->step > 0 ? op->step : 1, op->unit);
     else if (!op->numbers) mdrt_menu_add_choice(m, I_COPTION + i, op->label, op->labels ? op->labels : op->names, op->count, v);
     else mdrt_menu_add_choice(m, I_COPTION + i, op->label, c->labels, op->count + c->has, numbered(op, v) >= 0 ? numbered(op, v) : op->count);
-}
-
-/* an option changed on the page (the item's value: a choice's index, or the number): the client
- * hears of it, and the settings keep them all; nonzero when the client changed others */
-static int option_changed(sdl *s, int which, int value)
-{
-    const mdrt_sdl_option *op = &s->o->options[which];
-    if (op->numbers) value = value < op->count ? op->numbers[clamp(value, 0, op->count - 1)] : s->opt_custom[which].number;
-    s->opt_values[which] = value;
-    int changed = s->o->options_changed ? s->o->options_changed(which, s->opt_values, s->user) : 0;
-    for (int i = 0; i < s->o->noptions; i++) {           /* (a preset may change them all) */
-        option_value(s, i);
-        op = &s->o->options[i];
-        int v = s->opt_values[i];
-        if (op->numbers && numbered(op, v) >= 0) mdrt_settings_set(s->set, op->key, op->names[numbered(op, v)]);
-        else if (op->count > 0 && !op->numbers) mdrt_settings_set(s->set, op->key, op->names[v]);
-        else mdrt_settings_set_int(s->set, op->key, v);
-    }
-    return changed;
 }
 
 /* the FM core and chip a console is made with: the client's, else the settings' */
