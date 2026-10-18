@@ -40,7 +40,7 @@
 #define BACKDROP 0x0E42                                   /* the picture: the backdrop's colour */
 
 static const char *const shots = "shots", *const sound = "sound.raw", *const settings_path = "settings.ini";
-static SDL_atomic_t frame, held, starts, fm_second, pads4[MDRT_PADS], adaptor, game_frame, refuse_saves, opt_seen[3], opt_uses, opt_read;
+static SDL_atomic_t frame, held, starts, fm_second, pads4[MDRT_PADS], adaptor, game_frame, refuse_saves, opt_seen[4], opt_uses, opt_read;
 static int run;
 static char rom_seen[16];                                 /* the start of the ROM the client was given */
 
@@ -453,20 +453,21 @@ static int gif_read(const char *path, int *w, int *h, uint32_t *first)
 }
 
 /* run 9: the client's own options page: a choice whose last value is a preset (it sets the others),
- * a number, and a choice standing for numbers (the settings file's 120, none of its choices'); the
- * values at each power on, and the save RAM file they name */
+ * a number, and choices standing for numbers (the settings file's 120, none of its choices'; and
+ * 150, more's, never changed); the values at each power on, and the save RAM file they name */
 static const char *const opt_names[3] = { "first", "second", "third" };
 static const char *const share_names[3] = { "normal", "more", "less" };
 static const int share_numbers[3] = { 100, 150, 50 };
-static const mdrt_sdl_option test_options[3] = {
+static const mdrt_sdl_option test_options[4] = {
     { "test.choice", "A choice", 3, opt_names, NULL, 0, 0, 0, 0, NULL, NULL },
     { "test.number", "A number", 0, NULL, NULL, 1, 9, 1, 4, NULL, NULL },
     { "test.share", "A share", 3, share_names, NULL, 10, 200, 0, 0, share_numbers, "%" },
+    { "test.kept", "Another", 3, share_names, NULL, 10, 200, 0, 0, share_numbers, "%" },
 };
 static void options_use(const int *v, void *user)
 {
     (void)user;
-    for (int i = 0; i < 3; i++) SDL_AtomicSet(&opt_seen[i], v[i]);
+    for (int i = 0; i < 4; i++) SDL_AtomicSet(&opt_seen[i], v[i]);
     SDL_AtomicAdd(&opt_uses, 1);
 }
 static int options_changed(int which, int *v, void *user)
@@ -486,10 +487,11 @@ static int rules_player(void *user)
     CHECK(SDL_AtomicGet(&opt_uses) == 1 && SDL_AtomicGet(&opt_seen[0]) == 0 && SDL_AtomicGet(&opt_seen[1]) == 4);   /* the defaults */
     CHECK_EQ(SDL_AtomicGet(&opt_seen[2]), 120);           /* (the file's number) */
     CHECK_EQ(SDL_AtomicGet(&opt_read), 1);
+    CHECK_EQ(SDL_AtomicGet(&opt_seen[3]), 150);
     /* the menu: [Resume, Reset, Save, Load, Video, Capture, Sound, Players, Test rules, Options ...] */
     keys(SDL_SCANCODE_ESCAPE, 1);
     keys(SDL_SCANCODE_DOWN, 8);
-    keys(SDL_SCANCODE_RETURN, 1);                         /* [A choice, A number, A share, Back] */
+    keys(SDL_SCANCODE_RETURN, 1);                         /* [A choice, A number, A share, Another, Back] */
     keys(SDL_SCANCODE_RIGHT, 2);                          /* first -> second -> third: the preset sets the number to 9, the share to 75 */
     keys(SDL_SCANCODE_DOWN, 1);
     keys(SDL_SCANCODE_LEFT, 1);                           /* 9 -> 8 */
@@ -613,7 +615,7 @@ static int play(void)
         o.options_title = "Test rules";
         o.options_note = "For the next game";
         o.options = test_options;
-        o.noptions = 3;
+        o.noptions = 4;
         o.options_use = options_use;
         o.options_changed = options_changed;
         o.sram_path = "options.srm";
@@ -839,10 +841,11 @@ int main(int argc, char **argv)
     /* the client's options */
     run = 9;
     FILE *sf = fopen(settings_path, "a");                 /* (a number in the file, none of its choices') */
-    if (sf) { fputs("test.share = 120\n", sf); fclose(sf); }
+    if (sf) { fputs("test.share = 120\ntest.kept = 150\n", sf); fclose(sf); }
     CHECK_EQ(play(), 0);
     t = slurp(settings_path, &len);
     CHECK(t && strstr(t, "test.choice = third\n") && strstr(t, "test.number = 8\n") && strstr(t, "test.share = 75\n"));
+    CHECK(t && strstr(t, "test.kept = 150\n"));          /* (a choice's number, never changed: as written) */
     free(t);
     FILE *f0 = fopen("options-0.srm", "rb"), *f2 = fopen("options-2.srm", "rb"), *fo = fopen("options.srm", "rb");
     CHECK(f0 && f2 && !fo);                               /* each game's save RAM in the file its options named */
