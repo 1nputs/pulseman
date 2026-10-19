@@ -686,6 +686,8 @@ int mdrt_net_frame(mdrt_net *n, int resumable)
         n->latched = s->frame;
         n->frame = s->frame;
         n->wrong = 0;
+        for (int i = 0; i < n->nsnaps; i++)               /* (the states after it were the guesses': gone, even where the */
+            if (n->snaps[i].valid && n->snaps[i].frame > s->frame) n->snaps[i].valid = 0;   /* frames played again have no resumable point) */
         for (int k = 0; k < CHECKS; k++)
             if (n->mine[k].frame > s->frame && !n->mine[k].compared) n->mine[k].frame = 0;
         n->st.rollbacks++;

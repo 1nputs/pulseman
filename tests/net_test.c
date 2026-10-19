@@ -9,7 +9,9 @@
  * made to differ on one peer ends the session as a desync; a guest of another game is refused,
  * two joiners refuse each other, two "either"s settle who hosts and the host's settings (15,000 or
  * 20,000 bytes, in chunks) reach the guest through loss; goodbye ends the other's session, and silence ends it as
- * lost after 10 seconds (lost from 3). */
+ * lost after 10 seconds (lost from 3). Last, a game whose resumable points depend on what it has
+ * played (as a game leaves its loop at a period's end): a guess shown wrong can replay frames that
+ * have none where the guesses' had them, whose states must not be loaded. */
 #include <stdlib.h>
 #include <string.h>
 #include "check.h"
@@ -42,6 +44,7 @@ struct peer {
     mdrt_net *net;
     mdrt_net_config cfg;
     uint32_t seed;                      /* its player's script */
+    int by_state;                       /* its resumable points depend on its game (state_resumable) */
     uint64_t period, next_at;
     int need_frame, state, ready;
     uint32_t perturb_at;                /* its game made to differ here (0: never) */
@@ -171,6 +174,8 @@ static void local_input(void *user, uint16_t b[MDRT_PADS])
 
 /* a resumable point at the top of most frames; none from 40 to 59 of each hundred, nor from 500 to 569 */
 static int resumable(uint32_t f) { return !(f % 100 >= 40 && f % 100 < 60) && !(f >= 500 && f < 570); }
+/* or as the game has played: a third of the frames without, by the buttons so far */
+static int state_resumable(const peer *p) { return (p->g.pads >> 3) % 3 != 0; }
 
 static mdrt *console(peer *p)
 {
@@ -238,7 +243,7 @@ static void turn(peer *p, uint32_t until)
             p->need_frame = 0;
         }
         uint32_t f = (uint32_t)mdrt_frame_count(p->m);
-        int r = mdrt_net_frame(p->net, resumable(f));
+        int r = mdrt_net_frame(p->net, p->by_state ? state_resumable(p) : resumable(f));
         if (f < MAXF) p->hash[f] = mdrt_sim_hash(p->m);
         p->state = r;
         if (r == MDRT_NET_WAIT || (idle && r == MDRT_NET_GO)) { p->next_at = clock_us + 1000; return; }
@@ -421,6 +426,31 @@ static void protocol(void)
     finish(&A, &B);
 }
 
+/* resumable points by the game's state: a replay may have none where the guesses' frames had them */
+static void by_state(void)
+{
+    reference(505, 606);
+    cond = (net_cond){ .latency = 40000, .jitter = 15000, .loss = 50, .dup = 10 };
+    setup(&A, &B, "host", MDRT_NET_HOST, 505, 16684);
+    setup(&B, &A, "guest", MDRT_NET_JOIN, 606, 16700);
+    A.by_state = B.by_state = 1;
+    CHECK(join_up(&A, &B, 5000000));
+    play(&A, &B, FRAMES, 120000000);
+    int same[2] = { 0, 0 };
+    peer *ps[2] = { &A, &B };
+    for (int i = 0; i < 2; i++)
+        for (uint32_t f = 1; f <= FRAMES; f++) same[i] += ps[i]->hash[f] == ref_hash[f];
+    mdrt_net_stats sa, sb;
+    mdrt_net_stats_get(A.net, &sa);
+    mdrt_net_stats_get(B.net, &sb);
+    printf("  resumable points by the game's state: %ld and %ld rollbacks; every frame as the lone console's: host %d, guest %d of %d\n",
+           sa.rollbacks, sb.rollbacks, same[0], same[1], FRAMES);
+    CHECK(sa.rollbacks > 10 && sb.rollbacks > 10);
+    CHECK_EQ(same[0], FRAMES);
+    CHECK_EQ(same[1], FRAMES);
+    finish(&A, &B);
+}
+
 int main(void)
 {
     for (int i = 0; mdrt_fm_cores(i); i++)
@@ -428,5 +458,6 @@ int main(void)
     session();
     desync();
     protocol();
+    by_state();
     return check_done("net_test");
 }
