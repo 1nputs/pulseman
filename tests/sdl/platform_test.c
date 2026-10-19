@@ -508,7 +508,8 @@ static void options_text(int page, const int *v, char *text, size_t size, void *
     (void)user;
     SDL_AtomicAdd(&text_asked[page & 1], 1);
     if (page == 0) SDL_AtomicSet(&text_share, v[2]);
-    snprintf(text, size, "A line\nThe share\t%d%%\n", v[2]);
+    if (page == 0) snprintf(text, size, "A line\nThe share\t%d%%\n", v[2]);
+    else snprintf(text, size, "Above them\n\fFirst\nOne\tthe first's\n\fSecond\nTwo\nThree\n");   /* (in sections: a choice of them) */
 }
 /* the save RAM's file follows the choice (records of their own for each) */
 static const char *sram_file(void *user) { (void)user; static char path[32]; snprintf(path, sizeof path, "options-%d.srm", SDL_AtomicGet(&opt_seen[0])); return path; }
@@ -540,9 +541,16 @@ static int rules_player(void *user)
     CHECK(SDL_AtomicGet(&text_asked[0]) >= 8 && SDL_AtomicGet(&text_share) == 75 && SDL_AtomicGet(&text_asked[1]) == 0);
     keys(SDL_SCANCODE_ESCAPE, 1);                         /* (back on Test rules) */
     keys(SDL_SCANCODE_DOWN, 1);
-    keys(SDL_SCANCODE_RETURN, 1);                         /* More: [Another, A found, From, its lines, Back] */
+    keys(SDL_SCANCODE_RETURN, 1);                         /* More: [Another, A found, From, Above them, 1 of 2, its lines, Back] */
     SDL_Delay(100);
     CHECK_EQ(SDL_AtomicGet(&text_asked[1]), 1);
+    keys(SDL_SCANCODE_DOWN, 3);                           /* (the sections' line) */
+    keys(SDL_SCANCODE_RIGHT, 1);                          /* First -> Second: the page again */
+    keys(SDL_SCANCODE_RIGHT, 1);                          /* -> First (around the end) */
+    SDL_Delay(100);
+    printf("  options: More's lines asked for %d times (two sections stepped through)\n", SDL_AtomicGet(&text_asked[1]));
+    CHECK_EQ(SDL_AtomicGet(&text_asked[1]), 3);
+    keys(SDL_SCANCODE_UP, 3);                             /* (back on Another) */
     keys(SDL_SCANCODE_DOWN, 2);
     keys(SDL_SCANCODE_RETURN, 1);                         /* From: the browser in browse-test: [Use this folder, .., sub/, a.zip], on sub/ */
     keys(SDL_SCANCODE_DOWN, 1);
@@ -551,7 +559,13 @@ static int rules_player(void *user)
     printf("  options: %d picks, the last %s\n", SDL_AtomicGet(&picks), last_pick);
     CHECK(SDL_AtomicGet(&picks) == 2 && !strcmp(last_pick, "browse-test/a.zip"));
     keys(SDL_SCANCODE_ESCAPE, 1);                         /* (back on More) */
-    keys(SDL_SCANCODE_UP, 8);
+    keys(SDL_SCANCODE_DOWN, 1);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* Options: [Pause ..., Fast-forward ..., Resume ..., Frames a second ..., Back] */
+    keys(SDL_SCANCODE_DOWN, 3);
+    keys(SDL_SCANCODE_RIGHT, 1);                          /* frames a second: on */
+    SDL_Delay(1200);                                      /* (drawn: shown at the top right, a second of frames) */
+    keys(SDL_SCANCODE_ESCAPE, 1);                         /* (back on Options) */
+    keys(SDL_SCANCODE_UP, 9);
     keys(SDL_SCANCODE_RETURN, 2);                         /* Reset, asked again */
     SDL_Delay(500);
     printf("  options: %d power ons, the last with %d, %d and %d\n", SDL_AtomicGet(&opt_uses), SDL_AtomicGet(&opt_seen[0]),
@@ -905,6 +919,7 @@ int main(int argc, char **argv)
     t = slurp(settings_path, &len);
     CHECK(t && strstr(t, "test.choice = third\n") && strstr(t, "test.number = 8\n") && strstr(t, "test.share = 75\n"));
     CHECK(t && strstr(t, "test.kept = 150\n"));          /* (a choice's number, never changed: as written) */
+    CHECK(t && strstr(t, "general.show_fps = 1\n"));     /* (frames a second, turned on in Options) */
     CHECK(t && strstr(t, "test.found = browse-test/a.zip\n") && SDL_AtomicGet(&opt_seen[4]) == 2);   /* (the path the settings keep) */
     remove("browse-test/a.zip");
     remove("browse-test/notes.txt");

@@ -21,8 +21,9 @@ The platform keeps the player's settings in `settings.ini` in the directory the 
 (`settings_path` puts it elsewhere; `app` begins the screenshots' names). It writes the file with
 every setting the first time and whenever the player changes one: the window's size, place and full
 screen, vsync, the scaling (sharp, integer, fit) and aspect (square pixels, 4:3), the volume, mute,
-sound device and latency, pausing when the window loses focus, fast-forward's speed, the
-screenshots' directory and every key of both pads and of the player's controls (on the function
+sound device and latency, pausing when the window loses focus, fast-forward's speed, frames a
+second shown at the picture's top right (the Options page; off by default), the screenshots'
+directory and every key of both pads and of the player's controls (on the function
 keys by default: `include/mdrt/platform_sdl2.h` lists them). `scale` (a window of N times the
 picture) and `aspect` (4:3) set this run's window over the settings'.
 
@@ -49,7 +50,10 @@ changing other values (a preset); it hears of the values read from the settings 
 takes a choice's name or any number in the range, which the page shows as one more choice, "custom
 (115%)". The options can be split into `pages`, each an item of the menu of its own, and
 `options_text` puts the client's lines under a page's options, made again after each change (what
-the choice now chosen holds, say). A choice can also be found on disk (`browse`, an
+the choice now chosen holds, say). Lines in sections (a `\f` before each, its first line its title)
+are shown a section at a time: the lines before the first section, then a line ("2 of 6" at the
+left, the section's title at the right) whose LEFT and RIGHT step through the sections, then the
+lines of the one shown; the page keeps it while the menu is open, and after a change on the page. A choice can also be found on disk (`browse`, an
 `mdrt_sdl_browse`): a line under it opens the menu's file browser, and `options_pick` makes what
 the player chooses there one of its choices (the settings file keeps its path, given back to
 `options_pick` at the next start). `sram_file`, asked after `options_use`, names the save RAM's

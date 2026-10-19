@@ -101,6 +101,9 @@ static const char *const net_role_label[3] = { "host (player 1)", "join a host",
 #define VOLUME_STEP 10
 #define ROM_MAX (16u << 20)                               /* (no cartridge is larger) */
 
+enum { SECTIONS = 16 };                                   /* (the client's lines' sections a page has room for) */
+enum { FPS_W = 64, FPS_H = 10 };                          /* (frames a second: its text, at the picture's resolution) */
+
 /* the menu's pages and items */
 enum { PAGE_MAIN, PAGE_VIDEO, PAGE_SOUND, PAGE_OPTIONS, PAGE_KEYS, PAGE_ROM, PAGE_PLAYERS, PAGE_CBUTTONS, PAGE_SAVE, PAGE_LOAD, PAGE_CAPTURE,
        PAGE_CLIENT, PAGE_PICK, PAGE_NET };
@@ -108,7 +111,7 @@ enum { SLOT_COUNT = 8 };                                  /* save slots; 0 is qu
 enum { I_RESUME = 1, I_ROM, I_RESET, I_SAVE, I_LOAD, I_VIDEO, I_SOUND, I_OPTIONS, I_KEYS, I_QUIT, I_BACK,
        I_UPSCALE, I_SCALE, I_ASPECT, I_FULL, I_VSYNC, I_COLOURS, I_BLEND, I_SCANLINES, I_MASK, I_VOLUME, I_MUTE, I_FM_CORE, I_FM_CHIP, I_FOCUS, I_FAST, I_UP,
        I_PLAYERS, I_ADAPTOR, I_TURBO, I_DEADZONE, I_CBUTTONS, I_RESUME_OPT,
-       I_CAPTURE, I_CAP_REPLAY, I_CAP_RECORD, I_CAP_SECONDS, I_CAP_GIFSCALE, I_USE,
+       I_CAPTURE, I_CAP_REPLAY, I_CAP_RECORD, I_CAP_SECONDS, I_CAP_GIFSCALE, I_USE, I_FPS, I_CSECTION,
        I_NET, I_NET_ROLE, I_NET_ADDR, I_NET_PORT, I_NET_DELAY, I_NET_START, I_NET_LEAVE,
        I_SLOT = 800,             /* + slot (1-8) */
        I_PLAYER = 900,           /* + player (0-3) */
@@ -221,6 +224,19 @@ typedef struct sdl {
                                  * (a choice standing for a number: the number) */
     struct custom *opt_custom;  /* each option's custom number (a choice standing for a number) */
     int cpage;                  /* the page of them shown (mdrt_sdl_options.pages) */
+    /* the client's lines under a page in sections (options_text: \f before each), a section shown
+     * at a time: their titles (a choice's), how many, the one shown on each page */
+    char sec_title[SECTIONS][48];
+    const char *sec_name[SECTIONS];
+    int nsec, sec[SECTIONS];
+    /* frames a second at the picture's top right (Options): the frames the game made (present's
+     * count), and the window's thread's reckoning of them */
+    int show_fps;
+    SDL_atomic_t frames_made;
+    uint32_t fps_since;
+    int fps_frames, fps_tenths;
+    SDL_Texture *fps_tex;
+    uint32_t fps_px[FPS_W * FPS_H];
     char title[200];
     uint32_t notice_until;
     uint8_t *rom;               /* the game's ROM (given to the client by rom_use) */
@@ -264,6 +280,7 @@ static void sram_load(sdl *s)
 static void present(void *user, const uint16_t *px, int w, int h, int pitch)
 {
     sdl *s = user;
+    SDL_AtomicAdd(&s->frames_made, 1);                   /* (frames a second) */
     int curve = SDL_AtomicGet(&s->curve);
     SDL_LockMutex(s->lock);
     for (int y = 0; y < h; y++)
@@ -723,22 +740,54 @@ static mdrt_sdl_page client_page(const sdl *s, int p)
     return cp;
 }
 
-/* the client's lines under the page's options (options_text), as text items: a tab's right at the right */
-static void client_text(sdl *s, mdrt_menu *m)
+/* lines of text as text items (to stop, or its end): a tab's right at the right */
+static void text_items(mdrt_menu *m, char *line, const char *stop)
 {
-    char text[4096] = "";
-    if (!s->o->options_text) return;
-    s->o->options_text(s->o->npages > 0 ? s->cpage : 0, s->opt_values, text, sizeof text, s->user);
-    text[sizeof text - 1] = 0;
-    for (char *line = text, *end; *line; line = end) {
+    for (char *end; *line && (!stop || line < stop); line = end) {
         end = line + strcspn(line, "\n");
-        char *next = *end ? end + 1 : end, *tab = memchr(line, '\t', (size_t)(end - line));
+        if (stop && end > stop) end = (char *)stop;
+        char *next = *end && end != stop ? end + 1 : end, *tab = memchr(line, '\t', (size_t)(end - line));
+        char keep = *end;
         *end = 0;
         if (tab) *tab = 0;
         mdrt_menu_item *it = mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, line);
         if (it && tab) put_text(it->detail, sizeof it->detail, tab + 1, 0);
+        if (tab) *tab = '\t';
+        *end = keep;
         end = next;
     }
+}
+
+/* the client's lines under the page's options (options_text). In sections (a \f before each, its
+ * first line its title): the lines before the first, then a choice of the sections (LEFT / RIGHT
+ * step through them), then the lines of the one chosen */
+static void client_text(sdl *s, mdrt_menu *m)
+{
+    static char text[16384];
+    text[0] = 0;
+    if (!s->o->options_text) return;
+    int page = s->o->npages > 0 ? s->cpage : 0;
+    s->o->options_text(page, s->opt_values, text, sizeof text, s->user);
+    text[sizeof text - 1] = 0;
+    char *at[SECTIONS], *p = strchr(text, '\f');
+    s->nsec = 0;
+    while (p && s->nsec < SECTIONS) {                     /* (each section: its title line, then its lines) */
+        at[s->nsec] = p + 1;
+        size_t n = strcspn(p + 1, "\n\f");
+        snprintf(s->sec_title[s->nsec], sizeof s->sec_title[0], "%.*s", (int)(n < sizeof s->sec_title[0] ? n : sizeof s->sec_title[0] - 1), p + 1);
+        s->sec_name[s->nsec] = s->sec_title[s->nsec];
+        s->nsec++;
+        p = strchr(p + 1, '\f');
+    }
+    char *first = strchr(text, '\f');
+    text_items(m, text, first);
+    if (!s->nsec) return;
+    int k = s->sec[page % SECTIONS] = clamp(s->sec[page % SECTIONS], 0, s->nsec - 1);
+    char label[48];
+    snprintf(label, sizeof label, "%d of %d", k + 1, s->nsec);
+    mdrt_menu_add_choice(m, I_CSECTION, label, s->sec_name, s->nsec, k);
+    char *lines = at[k] + strcspn(at[k], "\n\f"), *stop = strchr(at[k], '\f');
+    if (*lines == '\n') text_items(m, lines + 1, stop);
 }
 
 /* an option on the page */
@@ -878,6 +927,8 @@ static void settings_load(sdl *s)
     mdrt_settings_default(s->set, "general.states", "states");
     mdrt_settings_default(s->set, "general.slot", "1");
     mdrt_settings_default(s->set, "general.resume", "1");
+    mdrt_settings_default(s->set, "general.show_fps", "0");
+    s->show_fps = mdrt_settings_get_int(s->set, "general.show_fps", 0) != 0;
     s->slot = clamp(mdrt_settings_get_int(s->set, "general.slot", 1), 1, SLOT_COUNT);
     s->resume = mdrt_settings_get_int(s->set, "general.resume", 1) != 0;
     s->pending = -1;
@@ -1502,6 +1553,7 @@ static void build_page(sdl *s, int page, int select)
         for (int i = 0; i < 6; i++) if (fast_speeds[i] == want) speed = i;
         mdrt_menu_add_choice(m, I_FAST, "Fast-forward speed", fast_label, 6, speed);
         mdrt_menu_add_choice(m, I_RESUME_OPT, "Resume where you left off", off_on, 2, s->resume);
+        mdrt_menu_add_choice(m, I_FPS, "Frames a second, at the top right", off_on, 2, s->show_fps);
         mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
         break;
     }
@@ -1888,6 +1940,15 @@ static void act(sdl *s, int id)
         s->resume = it->value;
         mdrt_settings_set_int(s->set, "general.resume", s->resume);
         return;
+    case I_FPS:
+        s->show_fps = it->value;
+        mdrt_settings_set_int(s->set, "general.show_fps", s->show_fps);
+        s->fps_since = 0;
+        return;
+    case I_CSECTION:                                      /* another section of the client's lines */
+        s->sec[(s->o->npages > 0 ? s->cpage : 0) % SECTIONS] = it->value;
+        build_page(s, PAGE_CLIENT, I_CSECTION);
+        return;
     case I_VIDEO: build_page(s, PAGE_VIDEO, I_UPSCALE); return;
     case I_NET: build_page(s, PAGE_NET, SDL_AtomicGet(&s->session) ? I_NET_LEAVE : I_NET_START); return;
     case I_NET_ROLE:
@@ -2260,6 +2321,39 @@ static int tube_ready(sdl *s, int w, int h, int cols, int lines)
     return s->tube != NULL;
 }
 
+/* frames a second at the top right of the picture (dst: where it is, cols x lines its own size),
+ * in the menu's font at the picture's scale: the frames the game made over the last half second */
+static void fps_draw(sdl *s, const SDL_Rect *dst, int cols, int lines)
+{
+    uint32_t now = SDL_GetTicks();
+    int made = SDL_AtomicGet(&s->frames_made);
+    if (!s->fps_since || now - s->fps_since > 2000) {     /* (from the start, or after a pause: anew) */
+        s->fps_since = now;
+        s->fps_frames = made;
+        s->fps_tenths = -1;
+    } else if (now - s->fps_since >= 500) {
+        s->fps_tenths = (int)((int64_t)(made - s->fps_frames) * 10000 / (int64_t)(now - s->fps_since));
+        s->fps_since = now;
+        s->fps_frames = made;
+    }
+    if (s->fps_tenths < 0 || cols <= 0 || lines <= 0) return;
+    char text[24];
+    snprintf(text, sizeof text, "%d.%d FPS", s->fps_tenths / 10, s->fps_tenths % 10);
+    const uint32_t clear = 0x01000000u;                   /* (not a colour the font draws) */
+    for (int i = 0; i < FPS_W * FPS_H; i++) s->fps_px[i] = clear;
+    int tw = mdrt_menu_text(s->fps_px, FPS_W, FPS_H, FPS_W, 0, 0, text, 0xFFFFFF) + 1;   /* (and its shadow) */
+    for (int i = 0; i < FPS_W * FPS_H; i++) s->fps_px[i] = s->fps_px[i] == clear ? 0 : 0xFF000000u | s->fps_px[i];
+    if (!s->fps_tex && (s->fps_tex = SDL_CreateTexture(s->ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STREAMING, FPS_W, FPS_H)))
+        SDL_SetTextureBlendMode(s->fps_tex, SDL_BLENDMODE_BLEND);
+    if (!s->fps_tex) return;
+    SDL_UpdateTexture(s->fps_tex, NULL, s->fps_px, FPS_W * 4);
+    SDL_SetTextureScaleMode(s->fps_tex, SDL_ScaleModeNearest);
+    if (tw > FPS_W) tw = FPS_W;
+    SDL_Rect src = { 0, 0, tw, FPS_H - 1 };
+    SDL_Rect to = { dst->x + dst->w - (tw + 3) * dst->w / cols, dst->y + 3 * dst->h / lines, tw * dst->w / cols, (FPS_H - 1) * dst->h / lines };
+    SDL_RenderCopy(s->ren, s->fps_tex, &src, &to);
+}
+
 /* the game's frame through the looks: blended, upscaled, scaled to the window, then the tube's
  * scanlines and mask multiplied in and the picture added again at their lift (the menu: as it is) */
 static void draw(sdl *s)
@@ -2341,6 +2435,7 @@ static void draw(sdl *s)
             SDL_SetTextureColorMod(tex, 255, 255, 255);
         }
     }
+    if (s->show_fps && game) fps_draw(s, &dst, cols, lines);
     SDL_RenderPresent(s->ren);
 }
 
