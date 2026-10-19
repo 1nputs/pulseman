@@ -28,7 +28,8 @@
 #include <stdint.h>
 #include "mdrt/mdrt.h"
 
-#define MDRT_NET_PROTOCOL 2             /* the messages' version: peers must agree (2: the players' names) */
+#define MDRT_NET_PROTOCOL 3             /* the messages' version: peers must agree (2: the players' names; 3: the
+                                           settings' chunks acknowledged selectively) */
 #define MDRT_NET_NAME 24                /* a player's name, at most (printable ASCII) */
 
 /* the other peer, as the platform reaches it (UDP natively: mdrt/net_udp.h). send: one datagram
@@ -64,7 +65,7 @@ typedef struct mdrt_net_config {
     uint64_t seed;              /* for the session's numbers (0: from the clock) */
 } mdrt_net_config;
 #define MDRT_NET_MAX_DELAY 10
-#define MDRT_NET_MAX_SETTINGS (1u << 20)
+#define MDRT_NET_MAX_SETTINGS (16u << 20)    /* (a guest takes no more: 16 MB, a game's league with its art) */
 
 typedef struct mdrt_net mdrt_net;
 mdrt_net *mdrt_net_new(const mdrt_net_config *c);        /* NULL: out of memory, or a bad configuration */

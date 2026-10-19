@@ -5,7 +5,8 @@
  *              (length u8, bytes)
  *   REFUSE     the guest's nonce u64, why (length u8, bytes)
  *   CHUNK      session u32, index u32, length u16, bytes (the settings, CHUNK bytes at a time)
- *   CHUNK_ACK  session u32, the chunks had in a row u32
+ *   CHUNK_ACK  session u32, the chunks had in a row u32, which of the 128 after the first missing
+ *              it has, two u64 (bit k of word w: chunk had in a row + 1 + 64 w + k)
  *   READY      session u32 (the guest has the settings)
  *   START      session u32 (both power on)
  *   INPUT      session u32, first frame u32, count u8, pads u8, the buttons (count x pads u16),
@@ -21,7 +22,9 @@
 
 #define RING 256                        /* frames of buttons kept (more than the window, delay and replay) */
 #define CHUNK 1024
-#define CHUNKS_OUT 16                   /* settings chunks sent ahead of the guest's acknowledgement */
+#define CHUNKS_OUT 128                  /* settings chunks in flight ahead of the guest's acknowledgement (128 KB:
+                                           within a system's usual socket buffer) */
+#define SACK (CHUNKS_OUT / 64)          /* the acknowledgement's words of which chunks the guest has */
 #define MAX_RESEND 100                  /* frames of buttons in one INPUT */
 #define CHECKS 8
 #define MS 1000u
@@ -48,6 +51,9 @@ struct mdrt_net {
     uint8_t *settings, *got;
     size_t settings_size;
     uint32_t chunks, chunks_have;       /* host: acknowledged in a row; guest: had in a row */
+    uint32_t chunks_sent;               /* host: sent up to */
+    uint64_t *chunk_at;                 /* host: when each chunk was last sent */
+    uint64_t chunk_mask[SACK];          /* host: which of the window's the guest said it had, last */
     uint64_t chunks_at, hello_at, ready_at;
     int ready_heard, started;
     /* time */
@@ -191,6 +197,7 @@ void mdrt_net_free(mdrt_net *n)
     free(n->snaps);
     free(n->settings);
     free(n->got);
+    free(n->chunk_at);
     free(n);
 }
 
@@ -259,16 +266,32 @@ static void send_ping(mdrt_net *n, int type, uint64_t t)
     transmit(n, &o);
 }
 
-/* the settings' chunks the guest has not acknowledged, a few ahead */
-static void send_chunks(mdrt_net *n)
+static void send_chunk(mdrt_net *n, uint32_t i)
 {
-    for (uint32_t i = n->chunks_have; i < n->chunks && i < n->chunks_have + CHUNKS_OUT; i++) {
-        out o;
-        size_t at = (size_t)i * CHUNK, k = n->settings_size - at < CHUNK ? n->settings_size - at : CHUNK;
-        begin(&o, T_CHUNK);
-        p32(&o, n->session); p32(&o, i); p16(&o, (uint32_t)k); pbytes(&o, n->settings + at, k);
-        transmit(n, &o);
-    }
+    if (n->chunk_at) n->chunk_at[i] = now(n);
+    out o;
+    size_t at = (size_t)i * CHUNK, k = n->settings_size - at < CHUNK ? n->settings_size - at : CHUNK;
+    begin(&o, T_CHUNK);
+    p32(&o, n->session); p32(&o, i); p16(&o, (uint32_t)k); pbytes(&o, n->settings + at, k);
+    transmit(n, &o);
+}
+
+/* the settings' chunks up to CHUNKS_OUT past the guest's acknowledgement: those not sent yet, or
+ * (again: nothing acknowledged for a while) every one not acknowledged. The guest acknowledges
+ * every chunk it gets with the ones it has in a row and which of the window's others it has, so
+ * the host sends again just those it lacks, a round trip after their last sending (sack) */
+static int guest_has(const mdrt_net *n, uint32_t i)
+{
+    uint32_t k = i - n->chunks_have - 1;                  /* (chunks_have itself: lacking) */
+    return i > n->chunks_have && k < CHUNKS_OUT && (n->chunk_mask[k / 64] >> (k % 64) & 1);
+}
+static void send_chunks(mdrt_net *n, int again)
+{
+    uint32_t end = n->chunks - n->chunks_have > CHUNKS_OUT ? n->chunks_have + CHUNKS_OUT : n->chunks;
+    if (again)                                            /* (those the guest said it lacks) */
+        for (uint32_t i = n->chunks_have; i < end && i < n->chunks_sent; i++) if (!guest_has(n, i)) send_chunk(n, i);
+    for (uint32_t i = n->chunks_sent > n->chunks_have ? n->chunks_sent : n->chunks_have; i < end; i++) send_chunk(n, i);
+    if (end > n->chunks_sent) n->chunks_sent = end;
     n->chunks_at = now(n);
 }
 
@@ -297,10 +320,13 @@ static void host_guest(mdrt_net *n, uint64_t nonce, uint32_t protocol, const uin
     take_name(n->peer_name, name, namen);
     n->session = (uint32_t)next_random(n) | 1;
     n->chunks = (uint32_t)((n->settings_size + CHUNK - 1) / CHUNK);
-    n->chunks_have = 0;
+    n->chunks_have = n->chunks_sent = 0;
+    memset(n->chunk_mask, 0, sizeof n->chunk_mask);
+    free(n->chunk_at);
+    n->chunk_at = n->chunks ? calloc(n->chunks, sizeof *n->chunk_at) : NULL;
     n->heard_at = now(n);
     send_accept(n);
-    send_chunks(n);
+    send_chunks(n, 0);
 }
 
 static void handle(mdrt_net *n, const uint8_t *b, size_t size);
@@ -332,7 +358,8 @@ int mdrt_net_connect(mdrt_net *n)
     uint64_t t = now(n);
     if (n->phase == P_HELLO && n->c.role != MDRT_NET_HOST && t - n->hello_at >= 100 * MS) { send_hello(n); n->hello_at = t; }
     if (n->phase == P_HOSTING) {
-        if (n->chunks_have < n->chunks && t - n->chunks_at >= 100 * MS) send_chunks(n);
+        uint64_t pause = n->rtt_us > 0 ? 2 * (uint64_t)n->rtt_us : 100 * MS;   /* (nothing acknowledged in twice the round trip) */
+        if (n->chunks_have < n->chunks && t - n->chunks_at >= (pause > 100 * MS ? pause : 100 * MS)) send_chunks(n, 1);
         if (n->chunks_have == n->chunks && n->ready_heard) {
             send_session(n, T_START);
             n->phase = P_RUNNING;
@@ -536,14 +563,27 @@ static void handle(mdrt_net *n, const uint8_t *b, size_t size)
         if (!d || n->host || idx >= n->chunks || (size_t)idx * CHUNK + k > n->settings_size) return;
         if (!n->got[idx]) { memcpy(n->settings + (size_t)idx * CHUNK, d, k); n->got[idx] = 1; }
         while (n->chunks_have < n->chunks && n->got[n->chunks_have]) n->chunks_have++;
+        uint64_t mask[SACK] = { 0 };
+        for (uint32_t j = 0; j < CHUNKS_OUT && n->chunks_have + 1 + j < n->chunks; j++)
+            if (n->got[n->chunks_have + 1 + j]) mask[j / 64] |= 1ull << (j % 64);
         out o;
         begin(&o, T_CHUNK_ACK); p32(&o, n->session); p32(&o, n->chunks_have);
+        for (int w = 0; w < SACK; w++) p64(&o, mask[w]);
         transmit(n, &o);
         break;
     }
     case T_CHUNK_ACK: {
         uint32_t have = g32(&i);
-        if (!i.bad && n->host && have <= n->chunks && have > n->chunks_have) { n->chunks_have = have; send_chunks(n); }
+        uint64_t mask[SACK];
+        for (int w = 0; w < SACK; w++) mask[w] = g64(&i);
+        if (i.bad || !n->host || have > n->chunks || have < n->chunks_have) break;
+        int moved = have > n->chunks_have;
+        n->chunks_have = have;
+        memcpy(n->chunk_mask, mask, sizeof mask);
+        uint64_t at = now(n), rtt = n->rtt_us > 0 ? (uint64_t)n->rtt_us : 100 * MS;
+        for (uint32_t c = have; c <= have + CHUNKS_OUT && c < n->chunks_sent; c++)   /* (the guest's lacking ones, a round trip on) */
+            if (!guest_has(n, c) && n->chunk_at && at - n->chunk_at[c] > rtt + rtt / 4) send_chunk(n, c);
+        if (moved) send_chunks(n, 0);
         break;
     }
     case T_READY:

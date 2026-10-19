@@ -138,6 +138,9 @@ static sock_t make_socket(int family, uint16_t port, uint16_t *bound)
 {
     sock_t s = socket(family, SOCK_DGRAM, IPPROTO_UDP);
     if (s == BAD_SOCK) return BAD_SOCK;
+    int room = 1 << 20;                                   /* (room for a burst of the settings' chunks; the system caps it) */
+    setsockopt(s, SOL_SOCKET, SO_RCVBUF, (const char *)&room, sizeof room);
+    setsockopt(s, SOL_SOCKET, SO_SNDBUF, (const char *)&room, sizeof room);
     if (family == AF_INET6) {
         int off = 0;                                      /* (IPv4 too, as mapped addresses) */
         setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, (const char *)&off, sizeof off);

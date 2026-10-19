@@ -8,8 +8,9 @@
  * and the session must have rolled back, checked for desyncs, and given frames back. Then: a game
  * made to differ on one peer ends the session as a desync; a guest of another game is refused,
  * two joiners refuse each other, two "either"s settle who hosts and the host's settings (15,000 or
- * 20,000 bytes, in chunks) reach the guest through loss; goodbye ends the other's session, and silence ends it as
- * lost after 10 seconds (lost from 3). */
+ * 20,000 bytes, in chunks) reach the guest through loss, and so do 4 MB of them (a league with its
+ * art), each chunk sent about once (a lost one again at once, on three acknowledgements alike);
+ * goodbye ends the other's session, and silence ends it as lost after 10 seconds (lost from 3). */
 #include <stdlib.h>
 #include <string.h>
 #include "check.h"
@@ -62,9 +63,11 @@ static void deliver(peer *to, const void *b, size_t n)
     memcpy(p->b, b, n);
 }
 
+static unsigned long chunks_sent;       /* (the settings' chunks put on the network) */
 static int link_send(void *user, const void *b, size_t n)
 {
     peer *p = user;
+    if (n > 2 && ((const uint8_t *)b)[2] == 4) chunks_sent++;   /* (CHUNK) */
     if (p->cut || n > MDRT_NET_MTU || rnd() % 1000 < cond.loss) return 0;
     deliver(p->other, b, n);
     if (rnd() % 1000 < cond.dup) deliver(p->other, b, n);
@@ -251,7 +254,8 @@ static void turn(peer *p, uint32_t until)
     }
 }
 
-/* connect both; each powers on when ready */
+/* connect both; each powers on when ready (and, powered on, keeps hearing the other as a client
+ * at its waits does, without playing on: a START lost on the way comes again) */
 static int join_up(peer *a, peer *b, uint64_t limit_us)
 {
     peer *ps[2] = { a, b };
@@ -259,6 +263,7 @@ static int join_up(peer *a, peer *b, uint64_t limit_us)
     for (uint64_t end = clock_us + limit_us; clock_us < end; clock_us += 1000) {
         for (int i = 0; i < 2; i++) {
             peer *p = ps[i];
+            if (p->state == MDRT_NET_GO || p->state == MDRT_NET_WAIT) { if (clock_us >= p->next_at) turn(p, 0); continue; }
             if (p->state != MDRT_NET_CONNECTING) continue;
             p->state = mdrt_net_connect(p->net);
             if (p->state == MDRT_NET_READY) {
@@ -392,6 +397,37 @@ static void protocol(void)
     printf("  two eithers: %s hosts; its %zu bytes of settings reach %s: %s\n", host->name, wn, guest->name,
            n == wn && got && !memcmp(got, want, n) ? "whole" : "NOT whole");
     CHECK(n == wn && got && !memcmp(got, want, n));
+    finish(&A, &B);
+    /* a league's worth of settings, 4 MB, through the same loss */
+    enum { BIG = 4u << 20 };
+    uint8_t *big = malloc(BIG);
+    for (size_t i = 0; big && i < BIG; i++) big[i] = (uint8_t)(i * 2654435761u >> 13);
+    setup(&A, &B, "a", MDRT_NET_HOST, 1, 16684);
+    setup(&B, &A, "b", MDRT_NET_JOIN, 2, 16684);
+    A.cfg.settings = big; A.cfg.settings_size = BIG;
+    net_cond keep = cond;
+    cond = (net_cond){ .latency = 35000, .jitter = 12000, .loss = 50, .dup = 10 };
+    chunks_sent = 0;
+    uint64_t t0 = clock_us;
+    CHECK(big && join_up(&A, &B, 120000000));
+    got = mdrt_net_settings(B.net, &n);
+    unsigned long chunks = (BIG + 1023) / 1024;
+    printf("  4 MB of settings: whole %s, in %.1f s (35-47 ms each way, 5%% lost), %lu chunks sent for %lu\n",
+           n == BIG && got && big && !memcmp(got, big, n) ? "yes" : "NO", (double)(clock_us - t0) / 1e6, chunks_sent, chunks);
+    CHECK(n == BIG && got && big && !memcmp(got, big, n));
+    CHECK(chunks_sent < chunks + chunks / 5);             /* (the lost ones again, and little more) */
+    cond = keep;
+    A.cfg.settings_size = MDRT_NET_MAX_SETTINGS + 1;      /* (more than a guest takes: refused at once) */
+    CHECK(mdrt_net_new(&A.cfg) == NULL);
+    A.cfg.settings = NULL; A.cfg.settings_size = 0;
+    free(big);
+    finish(&A, &B);
+    /* goodbye: two eithers again */
+    setup(&A, &B, "a", MDRT_NET_EITHER, 1, 16684);
+    setup(&B, &A, "b", MDRT_NET_EITHER, 2, 16684);
+    CHECK(join_up(&A, &B, 5000000));
+    host = mdrt_net_is_host(A.net) ? &A : &B;
+    guest = host == &A ? &B : &A;
     /* goodbye */
     play(&A, &B, 120, 10000000);
     mdrt_net_quit(guest->net);

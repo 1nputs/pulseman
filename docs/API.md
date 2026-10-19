@@ -246,8 +246,10 @@ and `ticks`, a clock in microseconds) and the local players' buttons (`local_inp
    must match; another one is refused), the player's name (the other is told it:
    `mdrt_net_peer_name`; protocol 2), and for the host the pads each plays (pad 1 and pad 2 by
    default), the input delay, the window (frames played on guesses before waiting), how far a
-   rollback may go back, how often to check for a desync, and its settings (a blob of up to 1 MB
-   for the guest's client: rules, save RAM).
+   rollback may go back, how often to check for a desync, and its settings for the guest's client
+   (rules, save RAM, a game's league with its art: a blob of up to 16 MB, sent 1 KB at a time with
+   128 in flight; the guest says which it has, and the lost ones go again a round trip on:
+   protocol 3).
 2. `mdrt_net_connect(n)` until it returns `MDRT_NET_READY` (or `_REFUSED`, with `mdrt_net_why`);
    the guest's client then applies `mdrt_net_settings(n, &size)` and powers on.
 3. `mdrt_net_start(n, m)` on the console just powered on: the module becomes its pad source.
