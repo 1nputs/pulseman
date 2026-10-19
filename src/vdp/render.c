@@ -186,7 +186,7 @@ static void beam_hook(void *user, int what, unsigned changed)
     mdrt_vdp_beam *b = user;
     const mdrt_vdp *v = b->v;
     int line = b->drawn - 1;
-    if (line < 0 || !changed) return;
+    if (line < 0 || !changed || b->quiet) return;
     uint32_t start = mdrt_vdp_line_start(v, line);
     if (b->now < start || b->now - start >= MDRT_LINE_MCLKS_VDP) return;
     uint32_t offset = b->now - start;
@@ -213,6 +213,7 @@ void mdrt_vdp_beam_start(mdrt_vdp_beam *b, mdrt_vdp *v, uint16_t *out, int pitch
     b->pitch = pitch;
     b->drawn = 0;
     b->now = 0;
+    b->quiet = 0;
     memset(b->idx, 0, sizeof b->idx);
     mdrt_vdp_set_write_hook(v, beam_hook, b);
 }
@@ -220,7 +221,7 @@ void mdrt_vdp_beam_start(mdrt_vdp_beam *b, mdrt_vdp *v, uint16_t *out, int pitch
 void mdrt_vdp_beam_line(mdrt_vdp_beam *b)
 {
     if (b->drawn >= mdrt_vdp_height(b->v)) return;
-    draw_line(b->v, b->drawn, b->out + b->drawn * b->pitch, b->idx);
+    if (!b->quiet) draw_line(b->v, b->drawn, b->out + b->drawn * b->pitch, b->idx);
     b->drawn++;
 }
 

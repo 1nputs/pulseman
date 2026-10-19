@@ -201,6 +201,31 @@ otherwise, and the platform keeps the slot as it was. Fast-forward, slow motion,
 pause and the frame step are the platform's alone: they change when its `wait` lets the next frame
 go (and fast-forward and slow motion queue no sound), so the client sees only ordinary frames.
 
+## Frames played again, and the simulation's hash
+
+Rollback netplay plays frames again when a peer's input turns out to differ from the guess: it
+loads an earlier state and runs the frames since with the right input, all within one frame of the
+player's time. `mdrt_set_quiet(m, n)` makes the next `n` handshakes quiet: the frames they end are
+not drawn (the lines are still counted, so the H-interrupts come on their lines and the HV counter
+reads as ever) and the platform never sees them (no present, audio, wait or requests). Their sound
+is made as ever, the client's sound tick included, so the chips stay in step and only the samples
+are dropped. Drawing starts again with the frame the last quiet handshake begins, so after loading
+frame `s`'s state while at frame `f`, `mdrt_set_quiet(m, f - s)` plays the frames between quietly
+and draws frame `f` whole. `mdrt_quiet(m)` is how many are left. Quiet is not part of a state.
+
+`mdrt_sim_hash(m)` hashes what the game can see: the clock (the frame count, the position, the
+lines passed, the H-interrupt counter, the HV counter's nudge), the VDP with its ports, the pads,
+save RAM and the client's parts; not the picture, the PSG, the FM chip, the mixer or the sound
+still to come, which only the player sees and hears. Two consoles that will go on alike have the
+same hash, whatever FM core each plays its sound with. A client's part is in it unless marked
+otherwise: `mdrt_set_state_part_kind(m, tag, MDRT_PART_PRESENTATION)` leaves one out, and a game
+that reads the FM chip's status puts `"FM  "` in with `MDRT_PART_SIMULATION`. The hash is the
+same on every host for a given build when the client's parts are written the same everywhere
+(field by field, not a struct copied with its padding).
+
+Netplay is the pad source, and the person playing is still at the platform:
+`mdrt_platform_input(m, buttons)` reads the platform's buttons whatever the pad source.
+
 ## The bus by address
 
 `mdrt_bus_read8/16/32` and `mdrt_bus_write8/16/32` reach the 68k's bus by address, with the

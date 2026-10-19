@@ -118,6 +118,7 @@ typedef struct mdrt_vdp_beam {
     int drawn;                  /* the lines drawn this frame */
     uint32_t now;               /* master clocks since the frame began */
     uint8_t idx[320];           /* the last line drawn: each pixel's colour (0 the backdrop) */
+    int quiet;                  /* the lines counted, not drawn (a frame played again: mdrt_set_quiet) */
 } mdrt_vdp_beam;
 void mdrt_vdp_beam_start(mdrt_vdp_beam *b, mdrt_vdp *v, uint16_t *out, int pitch);   /* a new frame */
 void mdrt_vdp_beam_line(mdrt_vdp_beam *b);              /* draw the next line */

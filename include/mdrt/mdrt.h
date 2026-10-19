@@ -204,4 +204,30 @@ int mdrt_add_state_part(mdrt *m, const char *tag, mdrt_part_save_fn save, mdrt_p
 /* the same for a block of memory of a fixed size */
 int mdrt_add_state_memory(mdrt *m, const char *tag, void *data, size_t size);
 
+/* ---- frames played again, and the simulation's hash (rollback netplay: mdrt/netplay.h) ------
+ * Quiet frames: mdrt_set_quiet(m, n) makes the next n handshakes quiet. The frames they end are not
+ * drawn (from now: the lines are counted, the H-interrupts come and the HV counter reads as ever)
+ * and the platform never sees them: no present, audio, wait or requests. Their sound is made as
+ * ever (the client's sound tick runs, the chips are clocked), so the chips go on in step; only its
+ * samples are dropped. Drawing starts again with the frame the n-th quiet handshake begins. A
+ * rollback loads the state of frame s while at frame f, then mdrt_set_quiet(m, f - s): the frames
+ * played again are quiet and frame f is drawn whole. 0 ends them now. mdrt_quiet: the quiet
+ * handshakes still to come. Quiet is not part of a state. */
+void mdrt_set_quiet(mdrt *m, int n);
+int mdrt_quiet(const mdrt *m);
+/* the platform's input now (the buttons its players hold), whether or not a pad source is set;
+ * zeros when the platform has no input */
+void mdrt_platform_input(mdrt *m, uint16_t buttons[MDRT_PADS]);
+/* A hash of what the game can see, to compare two consoles (peers checking for a desync, tests):
+ * the clock (the frame count, the position, the lines passed, the H-interrupt counter, the HV
+ * counter's nudge), the VDP, the pads, save RAM, and the client's parts; not what only the player
+ * sees and hears: the picture, the PSG, the FM chip, the mixer and the sound still to come. A part
+ * is in it as its kind says: the client's are MDRT_PART_SIMULATION when added, the console's PSG,
+ * FM, MIX and SND sections MDRT_PART_PRESENTATION (a game that reads the FM chip's status marks
+ * "FM  " simulation). mdrt_set_state_part_kind: 0, or -1 when there is no such part (CONS's kind is
+ * fixed). The same on every host for a given build when the client's parts are. */
+enum { MDRT_PART_SIMULATION, MDRT_PART_PRESENTATION };
+int mdrt_set_state_part_kind(mdrt *m, const char *tag, int kind);
+uint64_t mdrt_sim_hash(mdrt *m);
+
 #endif

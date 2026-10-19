@@ -20,6 +20,7 @@ typedef struct part {
     void *user;
     void *mem;                  /* mdrt_add_state_memory's block */
     size_t mem_size;
+    int kind;                   /* MDRT_PART_SIMULATION or _PRESENTATION: in the simulation hash or not */
 } part;
 
 struct mdrt {
@@ -49,6 +50,10 @@ struct mdrt {
     int in_hint;
     mdrt_hint_fn hint;
     void *hint_user;
+    int quiet;                  /* quiet handshakes to come (frames played again: mdrt_set_quiet) */
+    uint8_t fixed_kind[8];      /* the console's sections' kinds (CONS's own: mdrt_sim_hash) */
+    uint8_t *scratch;           /* a section's bytes, for the simulation hash */
+    size_t scratch_cap;
     unsigned requests;          /* the player's, from the last handshake */
     const char *request_path;   /* the file they name (the platform's) */
     part parts[MAX_PARTS];      /* the client's parts of a state */
@@ -116,6 +121,7 @@ mdrt *mdrt_new(const mdrt_config *c)
     m->ev = malloc(m->cap * sizeof *m->ev);
     if (!m->fm || !m->picture || !m->fm_buf || !m->psg_buf || !m->audio || !m->ev) { mdrt_free(m); return NULL; }
     mdrt_vdp_beam_start(&m->lines, &m->vdp, m->picture, 320);
+    for (int i = 0; i < 8; i++) m->fixed_kind[i] = i == 1 || i == 6 || i == 7 ? MDRT_PART_SIMULATION : MDRT_PART_PRESENTATION;
     return m;
 }
 
@@ -123,7 +129,7 @@ void mdrt_free(mdrt *m)
 {
     if (!m) return;
     mdrt_fm_free(m->fm);
-    free(m->picture); free(m->fm_buf); free(m->psg_buf); free(m->audio); free(m->ev); free(m->dma);
+    free(m->picture); free(m->fm_buf); free(m->psg_buf); free(m->audio); free(m->ev); free(m->dma); free(m->scratch);
     free(m);
 }
 
@@ -405,9 +411,13 @@ int mdrt_wait_vblank(mdrt *m)
     int made = make_sound(m);
     rec_frame(m, made);
     const mdrt_platform *p = &m->cfg.platform;
-    if (p->present) p->present(p->user, m->picture, mdrt_vdp_width(&m->vdp), mdrt_vdp_height(&m->vdp), 320);
-    if (p->audio) p->audio(p->user, m->audio, made);
-    int stop = p->wait ? p->wait(p->user) : 0;
+    int quiet = m->quiet > 0, stop = 0;                   /* (a frame played again: the platform never sees it) */
+    if (quiet) m->quiet--;
+    else {
+        if (p->present) p->present(p->user, m->picture, mdrt_vdp_width(&m->vdp), mdrt_vdp_height(&m->vdp), 320);
+        if (p->audio) p->audio(p->user, m->audio, made);
+        stop = p->wait ? p->wait(p->user) : 0;
+    }
     uint16_t buttons[MDRT_PADS];
     memcpy(buttons, m->pads.buttons, sizeof buttons);
     if (m->pad_src) m->pad_src(m->pad_user, buttons);
@@ -415,12 +425,13 @@ int mdrt_wait_vblank(mdrt *m)
     for (int i = 0; i < MDRT_PADS; i++) mdrt_pad_set(&m->pads, i, buttons[i]);
     mdrt_pads_frame(&m->pads);
     rec_buttons(m);
-    m->requests = p->requests ? p->requests(p->user) : 0;
+    m->requests = !quiet && p->requests ? p->requests(p->user) : 0;
     m->request_path = m->requests && p->request_path ? p->request_path(p->user) : NULL;
     m->frames++;
     m->nudge = 0;
     m->now = 0;
     mdrt_vdp_beam_start(&m->lines, &m->vdp, m->picture, 320);
+    m->lines.quiet = m->quiet > 0;                        /* (drawn again from the frame the last quiet handshake begins) */
     m->reloaded = 0;
     mdrt_vdp_set_position(&m->vdp, 224, 0);
     mdrt_vdp_set_vblank(&m->vdp, 1);
@@ -430,6 +441,20 @@ int mdrt_wait_vblank(mdrt *m)
 }
 
 void mdrt_vblank_end(mdrt *m) { mdrt_vdp_set_vblank(&m->vdp, 0); }
+
+void mdrt_set_quiet(mdrt *m, int n)
+{
+    m->quiet = n > 0 ? n : 0;
+    m->lines.quiet = m->quiet > 0;
+}
+int mdrt_quiet(const mdrt *m) { return m->quiet; }
+
+void mdrt_platform_input(mdrt *m, uint16_t buttons[MDRT_PADS])
+{
+    const mdrt_platform *p = &m->cfg.platform;
+    memset(buttons, 0, MDRT_PADS * sizeof *buttons);
+    if (p->input) p->input(p->user, buttons);
+}
 unsigned mdrt_requests(const mdrt *m) { return m->requests; }
 const char *mdrt_request_path(const mdrt *m) { return m->request_path; }
 
@@ -464,6 +489,7 @@ static int add_part(mdrt *m, const char *tag, mdrt_part_save_fn save, mdrt_part_
     memcpy(p->tag, tag, 4);
     p->save = save; p->load = load; p->user = mem ? p : user;
     p->mem = mem; p->mem_size = size;
+    p->kind = MDRT_PART_SIMULATION;
     return 0;
 }
 int mdrt_add_state_part(mdrt *m, const char *tag, mdrt_part_save_fn save, mdrt_part_load_fn load, void *user)
@@ -485,27 +511,47 @@ static void end(st_out *o, size_t at)
 }
 static uint8_t *here(st_out *o) { return o->p ? o->p + o->n : NULL; }
 
+static const char fixed_tag[8][5] = { "CONS", "VDP ", "PSG ", "FM  ", "MIX ", "SND ", "PADS", "SRAM" };
+
+/* the console's sections after CONS, by their place in a state (1 VDP ... 7 SRAM) */
+static size_t fixed_save(mdrt *m, int i, uint8_t *out)
+{
+    switch (i) {
+    case 1: return mdrt_vdp_save(&m->vdp, out);
+    case 2: return mdrt_psg_save(&m->psg, out);
+    case 3: return mdrt_fm_save(m->fm, out);
+    case 4: return mdrt_mix_save(&m->mix, out);
+    case 5: {
+        st_out o = { out, 0 };
+        st_u32(&o, (uint32_t)m->nev);
+        for (size_t k = 0; k < m->nev; k++) { st_u64(&o, m->ev[k].at); st_u8(&o, m->ev[k].kind); st_u8(&o, m->ev[k].port); st_u8(&o, m->ev[k].value); }
+        return o.n;
+    }
+    case 6: return mdrt_pads_save(&m->pads, out);
+    default: return mdrt_sram_save(&m->sram, out);
+    }
+}
+
+/* CONS's fields the game's timing hangs on (the picture's aside) */
+static size_t cons_clock(const mdrt *m, uint8_t *out)
+{
+    st_out o = { out, 0 };
+    st_u8(&o, (uint8_t)(m->cfg.pal ? 1 : 0)); st_u32(&o, m->frame); st_u64(&o, m->frames); st_u32(&o, m->nudge);
+    st_u32(&o, m->now); st_u32(&o, (uint32_t)m->lines.drawn); st_u8(&o, (uint8_t)m->reloaded); st_u32(&o, (uint32_t)m->hcount);
+    return o.n;
+}
+
 static size_t write_state(mdrt *m, uint8_t *out)
 {
     st_out o = { out, 0 };
     st_put(&o, "MDRS", 4);
     st_u32(&o, 2);
     size_t at = begin(&o, "CONS");
-    st_u8(&o, (uint8_t)(m->cfg.pal ? 1 : 0)); st_u32(&o, m->frame); st_u64(&o, m->frames); st_u32(&o, m->nudge);
-    st_u32(&o, m->now); st_u32(&o, (uint32_t)m->lines.drawn); st_u8(&o, (uint8_t)m->reloaded); st_u32(&o, (uint32_t)m->hcount);
+    o.n += cons_clock(m, here(&o));
     st_put(&o, m->lines.idx, 320);
     st_u16s(&o, m->picture, (size_t)m->lines.drawn * 320);
     end(&o, at);
-    at = begin(&o, "VDP "); o.n += mdrt_vdp_save(&m->vdp, here(&o)); end(&o, at);
-    at = begin(&o, "PSG "); o.n += mdrt_psg_save(&m->psg, here(&o)); end(&o, at);
-    at = begin(&o, "FM  "); o.n += mdrt_fm_save(m->fm, here(&o)); end(&o, at);
-    at = begin(&o, "MIX "); o.n += mdrt_mix_save(&m->mix, here(&o)); end(&o, at);
-    at = begin(&o, "SND ");
-    st_u32(&o, (uint32_t)m->nev);
-    for (size_t i = 0; i < m->nev; i++) { st_u64(&o, m->ev[i].at); st_u8(&o, m->ev[i].kind); st_u8(&o, m->ev[i].port); st_u8(&o, m->ev[i].value); }
-    end(&o, at);
-    at = begin(&o, "PADS"); o.n += mdrt_pads_save(&m->pads, here(&o)); end(&o, at);
-    at = begin(&o, "SRAM"); o.n += mdrt_sram_save(&m->sram, here(&o)); end(&o, at);
+    for (int i = 1; i < 8; i++) { at = begin(&o, fixed_tag[i]); o.n += fixed_save(m, i, here(&o)); end(&o, at); }
     for (int i = 0; i < m->nparts; i++) {
         char tag[5];
         memcpy(tag, m->parts[i].tag, 4); tag[4] = 0;
@@ -525,7 +571,6 @@ size_t mdrt_get_state(mdrt *m, void *buf, size_t size)
 #define SECTIONS (8 + MAX_PARTS)
 static int sections(const mdrt *m, const uint8_t *b, size_t size, const uint8_t *data[], size_t len[])
 {
-    static const char fixed[8][5] = { "CONS", "VDP ", "PSG ", "FM  ", "MIX ", "SND ", "PADS", "SRAM" };
     st_in in = { b, 0, size, 0 };
     char magic[4];
     st_get(&in, magic, 4);
@@ -535,7 +580,7 @@ static int sections(const mdrt *m, const uint8_t *b, size_t size, const uint8_t 
         char tag[4];
         st_get(&in, tag, 4);
         uint32_t k = st_g32(&in);
-        if (in.bad || memcmp(tag, i < 8 ? fixed[i] : m->parts[i - 8].tag, 4) || !st_have(&in, k)) return -1;
+        if (in.bad || memcmp(tag, i < 8 ? fixed_tag[i] : m->parts[i - 8].tag, 4) || !st_have(&in, k)) return -1;
         data[i] = b + in.n;
         len[i] = k;
         in.n += k;
@@ -598,6 +643,53 @@ static int load_sections(mdrt *m, const uint8_t *data[], const size_t len[])
     for (int i = 0; i < m->nparts; i++)
         if (m->parts[i].load(m->parts[i].user, data[8 + i], len[8 + i])) return -1;
     return 0;
+}
+
+/* ---- the simulation's hash ------------------------------------------------------------------ */
+
+int mdrt_set_state_part_kind(mdrt *m, const char *tag, int kind)
+{
+    if (strlen(tag) != 4 || (kind != MDRT_PART_SIMULATION && kind != MDRT_PART_PRESENTATION)) return -1;
+    for (int i = 1; i < 8; i++)
+        if (!memcmp(tag, fixed_tag[i], 4)) { m->fixed_kind[i] = (uint8_t)kind; return 0; }
+    for (int i = 0; i < m->nparts; i++)
+        if (!memcmp(tag, m->parts[i].tag, 4)) { m->parts[i].kind = kind; return 0; }
+    return -1;
+}
+
+static uint64_t fnv(uint64_t h, const uint8_t *p, size_t n)
+{
+    for (size_t i = 0; i < n; i++) h = (h ^ p[i]) * 0x100000001B3ull;
+    return h;
+}
+
+/* room for n bytes of a section */
+static uint8_t *scratch(mdrt *m, size_t n)
+{
+    if (n > m->scratch_cap) {
+        uint8_t *b = realloc(m->scratch, n);
+        if (!b) return NULL;
+        m->scratch = b;
+        m->scratch_cap = n;
+    }
+    return m->scratch;
+}
+
+uint64_t mdrt_sim_hash(mdrt *m)
+{
+    uint8_t c[64];
+    uint64_t h = fnv(0xCBF29CE484222325ull, c, cons_clock(m, c));
+    for (int i = 1; i < 8 + m->nparts; i++) {
+        int fixed = i < 8;
+        const part *p = fixed ? NULL : &m->parts[i - 8];
+        if ((fixed ? m->fixed_kind[i] : p->kind) != MDRT_PART_SIMULATION) continue;
+        size_t n = fixed ? fixed_save(m, i, NULL) : p->save(p->user, NULL);
+        uint8_t *b = scratch(m, n);
+        if (!b) return 0;
+        n = fixed ? fixed_save(m, i, b) : p->save(p->user, b);
+        h = fnv(fnv(h, (const uint8_t *)(fixed ? fixed_tag[i] : p->tag), 4), b, n);
+    }
+    return h;
 }
 
 int mdrt_set_state(mdrt *m, const void *buf, size_t size)
