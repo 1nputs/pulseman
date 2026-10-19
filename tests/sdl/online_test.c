@@ -4,7 +4,8 @@
  * 60-80 ms late, longer than the input delay, so that the window guesses its buttons). The keys
  * open the menu's Online play, type a name, pick "join a host", type the host's address (a first
  * try put back by Esc) and port into their fields, and connect: the game stops and starts again in
- * the session, the host hearing the name.
+ * the session, the host hearing the name and the window's game finding the host's settings at its
+ * power on (the window's own asked for once, when its Start made the session).
  * Then pad 1's keys are pressed and let go while both play (so the one ahead has guesses shown
  * wrong to play again), the menu is opened during play (the game does not stop), and the session is
  * left from the menu. It checks that the session played (the window's game and the host in step:
@@ -25,6 +26,17 @@
 
 #define PORT 7491
 #define IDENTITY "online test 1"
+static const char host_settings[] = "the host's rules: 7 minute periods";
+
+static SDL_atomic_t settings_asked, settings_found;
+static const void *window_settings(size_t *size, void *user)
+{
+    (void)user;
+    static const char mine[] = "the window's rules (not sent: it joins)";
+    SDL_AtomicAdd(&settings_asked, 1);
+    *size = sizeof mine;
+    return mine;
+}
 
 static SDL_atomic_t frames, online, starts, window_checks, window_rollbacks, host_done, host_checks, host_rollbacks;
 static char host_why[200], host_heard[64];
@@ -68,6 +80,11 @@ static void window_game(mdrt *m, void *user)
     memset(&g, 0, sizeof g);
     CHECK_EQ(mdrt_add_state_part(m, "GAME", part_save, part_load, &g), 0);
     SDL_AtomicAdd(&starts, 1);
+    if (mdrt_get_net(m)) {                                /* (the session's settings, from power on: the host's) */
+        size_t n;
+        const void *set = mdrt_net_settings(mdrt_get_net(m), &n);
+        SDL_AtomicSet(&settings_found, set && n == sizeof host_settings && !memcmp(set, host_settings, n));
+    }
     for (;;) {
         play_frame(m, &g);
         if (mdrt_wait_vblank(m)) return;
@@ -104,7 +121,8 @@ static int host(void *user)
     mdrt *m = mdrt_new(&cfg);
     static game g;
     CHECK_EQ(mdrt_add_state_part(m, "GAME", part_save, part_load, &g), 0);
-    mdrt_net_config c = { .role = MDRT_NET_HOST, .identity = IDENTITY, .name = "Hostess", .delay = 2, .local_input = host_input, .input_user = m };
+    mdrt_net_config c = { .role = MDRT_NET_HOST, .identity = IDENTITY, .name = "Hostess", .delay = 2, .local_input = host_input, .input_user = m,
+                          .settings = host_settings, .settings_size = sizeof host_settings };
     c.link = mdrt_udp_link(u);
     mdrt_net *n = mdrt_net_new(&c);
     int r = MDRT_NET_CONNECTING;
@@ -207,6 +225,10 @@ static int player(void *user)
            on ? "connected, playing in the session" : "NOT connected", starts_then, host_heard);
     CHECK_EQ(starts_then, 2);
     CHECK(!strcmp(host_heard, "Tester"));
+    printf("  the settings: the window's asked for %d time(s); its game found the host's at power on: %s\n", SDL_AtomicGet(&settings_asked),
+           SDL_AtomicGet(&settings_found) ? "yes" : "NO");
+    CHECK_EQ(SDL_AtomicGet(&settings_asked), 1);
+    CHECK_EQ(SDL_AtomicGet(&settings_found), 1);
     /* both play: pad 1's keys pressed and let go, so the host's guesses of this player go wrong */
     static const SDL_Scancode pads[] = { SDL_SCANCODE_RIGHT, SDL_SCANCODE_Z, SDL_SCANCODE_X, SDL_SCANCODE_LEFT };
     for (int i = 0; i < 24; i++) { key(pads[i % 4], 1); SDL_Delay(90 + 37 * (i % 3)); key(pads[i % 4], 0); SDL_Delay(60); }
@@ -260,7 +282,7 @@ int main(int argc, char **argv)
     remove("sound.raw");
     mdrt_config c = { 0 };
     c.audio_rate = 48000;
-    mdrt_sdl_options o = { .title = "online test", .app = "online-test", .net_identity = IDENTITY };
+    mdrt_sdl_options o = { .title = "online test", .app = "online-test", .net_identity = IDENTITY, .net_settings = window_settings };
     SDL_Thread *h = SDL_CreateThread(host, "host", NULL), *p = SDL_CreateThread(player, "player", NULL);
     CHECK_EQ(mdrt_sdl_run(&c, &o, window_game, NULL), 0);
     SDL_WaitThread(p, NULL);

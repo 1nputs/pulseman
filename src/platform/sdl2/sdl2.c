@@ -2646,9 +2646,20 @@ static void net_begin(sdl *s)
                           .identity = s->o->net_identity, .name = s->net_name, .local_input = net_input, .input_user = s, .delay = s->net_delay,
                           .window = 8, .rollback = 30, .check_every = 60 };
     c.link = mdrt_udp_link(u);
+    int playing = s->thread != NULL;
+    if (!stop_game(s)) { mdrt_udp_close(u); snprintf(s->menu.message, sizeof s->menu.message, "The game would not stop"); return; }
+    if (s->o->net_settings) {                             /* (this player's, sent if it hosts: from the menu's values, its save RAM written back) */
+        if (s->o->options_use && s->opt_values) s->o->options_use(s->opt_values, s->user);
+        c.settings = s->o->net_settings(&c.settings_size, s->user);
+        if (!c.settings) c.settings_size = 0;
+    }
     mdrt_net *n = mdrt_net_new(&c);
-    if (!n) { mdrt_udp_close(u); snprintf(s->menu.message, sizeof s->menu.message, "Netplay could not start"); return; }
-    if (!stop_game(s)) { mdrt_net_free(n); mdrt_udp_close(u); snprintf(s->menu.message, sizeof s->menu.message, "The game would not stop"); return; }
+    if (!n) {                                             /* (alone again, from power on) */
+        mdrt_udp_close(u);
+        if (playing) start_game(s);
+        snprintf(s->menu.message, sizeof s->menu.message, c.settings_size > MDRT_NET_MAX_SETTINGS ? "The game's settings are too big to send" : "Netplay could not start");
+        return;
+    }
     net_free_owned(s);
     s->net = n;
     s->net_udp = u;

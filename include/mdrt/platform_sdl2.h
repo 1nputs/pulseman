@@ -161,6 +161,13 @@ typedef struct mdrt_sdl_options {
     const char *net_identity;
     mdrt_net *net;
     struct mdrt_udp *net_udp;
+    /* the session's settings this player sends if it hosts (mdrt_net_config.settings: what the
+     * game plays by that is not compared in the identity but sent, such as its options, its data
+     * and save RAM), asked when the Online page's Start makes a session, after options_use with the
+     * menu's values (and before sram_file is asked again): the bytes and *size, or NULL for none.
+     * The session copies them. At power on the game finds the host's with mdrt_net_settings (the
+     * host's own on the host) and plays by them on both; NULL: no settings. */
+    const void *(*net_settings)(size_t *size, void *user);
 } mdrt_sdl_options;
 
 /* the client's game: runs on the game thread with the console made from the configuration; when

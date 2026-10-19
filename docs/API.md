@@ -280,7 +280,12 @@ sends, for tests. In the SDL2 platform a client that plays online gives `mdrt_sd
 menu has an Online play page: the player's name; host, join a host, or both connecting at once;
 the other's address and the port (fields the player types into, kept in the settings file); this
 machine's LAN address (`mdrt_udp_lan_address`); the input delay; and Start,
-which stops the game, connects, and powers on again in the session (or Leave, during one). A client
+which stops the game, connects, and powers on again in the session (or Leave, during one). What the
+game plays by that is sent rather than compared (its options, its data, save RAM) comes from
+`mdrt_sdl_options.net_settings`, asked when Start makes the session, once the game has stopped and
+`options_use` has had the menu's values: the bytes this player sends if it hosts (the session
+copies them). At power on the game reads the host's with `mdrt_net_settings` (the host its own) and
+plays by them on both. A client
 can also make a session from its command line and put it in `mdrt_sdl_options.net` (its UDP link
 in `net_udp`). Either way the window connects before the game starts (a page that says so, Esc
 giving up), then powers on a new console with the session started on it: the game's function
