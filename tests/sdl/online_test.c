@@ -1,6 +1,7 @@
 /* The SDL2 platform's Online page played as a player would (make sdl-check): a thread presses keys
  * while a small game runs under SDL's dummy video and real-time disk sound, and another thread is
- * the other player, a host on the loopback (a console of its own, no window, over UDP). The keys
+ * the other player, a host on the loopback (a console of its own, no window, over UDP, what it sends
+ * 60-80 ms late, longer than the input delay, so that the window guesses its buttons). The keys
  * open the menu's Online play, pick "join a host", type the host's address (a first try put back
  * by Esc) and port into their fields, and connect: the game stops and starts again in the session.
  * Then pad 1's keys are pressed and let go while both play (so the one ahead has guesses shown
@@ -97,6 +98,7 @@ static int host(void *user)
     mdrt_udp *u = mdrt_udp_open(PORT, NULL, err, sizeof err);
     CHECK(u != NULL);
     if (!u) { SDL_AtomicSet(&host_done, 1); return 0; }
+    mdrt_udp_simulate(u, 60, 20, 0, 0);                   /* (its buttons late: the window has to guess them) */
     mdrt_config cfg = { 0 };
     mdrt *m = mdrt_new(&cfg);
     static game g;
@@ -220,7 +222,7 @@ static int player(void *user)
     CHECK(f1 - f0 > 15);
     printf("  in step: the window rolled back %d times and the host %d; desync checks agreeing %d and %d\n",
            SDL_AtomicGet(&window_rollbacks), SDL_AtomicGet(&host_rollbacks), SDL_AtomicGet(&window_checks), SDL_AtomicGet(&host_checks));
-    CHECK(SDL_AtomicGet(&window_rollbacks) + SDL_AtomicGet(&host_rollbacks) > 0);   /* (the one ahead guesses) */
+    CHECK(SDL_AtomicGet(&window_rollbacks) > 0);          /* (the host's buttons come late: guessed) */
     CHECK(SDL_AtomicGet(&window_checks) >= 2 && SDL_AtomicGet(&host_checks) >= 2);
     SDL_Event e;
     SDL_zero(e);
