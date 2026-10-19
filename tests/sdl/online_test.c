@@ -217,8 +217,8 @@ static int player(void *user)
     (void)user;
     while (SDL_AtomicGet(&frames) < 60) SDL_Delay(10);
     CHECK_EQ(SDL_AtomicGet(&online), 0);
-    online_page();                                        /* (on Start hosting, below Your name, Play as, Port and Input delay) */
-    keys(SDL_SCANCODE_UP, 4);
+    online_page();                                        /* (on Start hosting, below Your name, Play as, Port, Input delay and Pads each) */
+    keys(SDL_SCANCODE_UP, 5);
     press(SDL_SCANCODE_RETURN);                           /* the name */
     type("Tester");
     press(SDL_SCANCODE_RETURN);

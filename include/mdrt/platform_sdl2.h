@@ -140,8 +140,9 @@ typedef struct mdrt_sdl_options {
     const char *(*sram_file)(void *user);
     /* netplay (mdrt/netplay.h). net_identity: the client's identity for a session (what must match
      * between the two: its build, the ROM, settings), which puts the Online page in the menu: the
-     * player picks host, join or both connecting, the address, port and input delay (kept in the
-     * settings file), and starts a session there; NULL: no netplay. net: a session the client made
+     * player picks host, join or both connecting, the address, port and input delay, and a host
+     * one pad each or two (EA's 4 Way Play: the host pads 1 and 2, the guest 3 and 4, the adaptor in
+     * the ports on both) (kept in the settings file), and starts a session there; NULL: no netplay. net: a session the client made
      * from its command line instead (mdrt_net_parse, mdrt_net_open_udp, mdrt_net_new; its
      * local_input reading mdrt_platform_input), and net_udp its UDP link (NULL: another link).
      * Either way the window connects first, showing it (Esc gives up), then powers on a new console
@@ -154,7 +155,7 @@ typedef struct mdrt_sdl_options {
      * frame given back to keep in step is given), and
      * stretches the sound a little to keep its queue; the menu does not stop the game; pause, the
      * frame step, slow motion, fast-forward, rewind, the save slots, quick resume, reset, another
-     * ROM, the FM core and chip, the 4 Way Play adaptor (two pads) and pausing when the window loses
+     * ROM, the FM core and chip, the Players page's adaptor (the session's pads say) and pausing when the window loses
      * focus are not to be had; save RAM is not written back; the title shows the round trip, the
      * delay and the rollbacks. When it ends (the other left, the connection lost, a desync) the
      * window says why and the game plays on alone. */

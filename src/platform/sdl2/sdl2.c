@@ -97,6 +97,7 @@ static const char *const fast_label[6] = { "2x", "3x", "4x", "6x", "8x", "as fas
 enum { NET_HOST, NET_JOIN, NET_BOTH };
 static const char *const net_role_name[3] = { "host", "join", "both" };
 static const char *const net_role_label[3] = { "host (player 1)", "join a host", "both connect" };
+static const char *const net_pads_label[2] = { "one", "two (4 Way Play)" };
 
 #define VOLUME_STEP 10
 #define ROM_MAX (16u << 20)                               /* (no cartridge is larger) */
@@ -113,7 +114,7 @@ enum { I_RESUME = 1, I_ROM, I_RESET, I_SAVE, I_LOAD, I_VIDEO, I_SOUND, I_OPTIONS
        I_UPSCALE, I_SCALE, I_ASPECT, I_FULL, I_VSYNC, I_COLOURS, I_BLEND, I_SCANLINES, I_MASK, I_VOLUME, I_MUTE, I_FM_CORE, I_FM_CHIP, I_FOCUS, I_FAST, I_UP,
        I_PLAYERS, I_ADAPTOR, I_TURBO, I_DEADZONE, I_CBUTTONS, I_RESUME_OPT,
        I_CAPTURE, I_CAP_REPLAY, I_CAP_RECORD, I_CAP_SECONDS, I_CAP_GIFSCALE, I_USE, I_FPS, I_CSECTION,
-       I_NET, I_NET_ROLE, I_NET_ADDR, I_NET_PORT, I_NET_DELAY, I_NET_START, I_NET_LEAVE, I_NET_NAME,
+       I_NET, I_NET_ROLE, I_NET_ADDR, I_NET_PORT, I_NET_DELAY, I_NET_START, I_NET_LEAVE, I_NET_NAME, I_NET_PADS,
        I_SLOT = 800,             /* + slot (1-8) */
        I_PLAYER = 900,           /* + player (0-3) */
        I_PAD = 1000,             /* + pad * BUTTONS + button */
@@ -169,6 +170,7 @@ typedef struct sdl {
     mdrt_udp *net_udp;
     int net_owned;
     int net_role, net_port, net_delay;   /* the Online page's, kept in the settings */
+    int net_pads;               /* the pads each plays: 1, or 2 (EA's 4 Way Play; the host's choice) */
     uint64_t net_idle;          /* the game thread's time in mdrt_idle since its last frame (performance counts) */
     char net_addr[96];
     char net_name[MDRT_NET_NAME + 1];   /* the player's, for the other to see */
@@ -498,7 +500,12 @@ static int start_game(sdl *s)
 {
     s->m = mdrt_new(s->cfg);
     if (!s->m) return 0;
-    mdrt_pads_set_adaptor(mdrt_get_pads(s->m), SDL_AtomicGet(&s->session) ? MDRT_ADAPTOR_NONE : s->adaptor);   /* (in the ports at power on) */
+    int adaptor = s->adaptor;                             /* (in the ports at power on; in a session, two pads each: 4 Way Play) */
+    if (SDL_AtomicGet(&s->session) && s->net) {
+        uint8_t mine = mdrt_net_pads(s->net);
+        adaptor = (mine & (mine - 1)) ? MDRT_ADAPTOR_EA4WAY : MDRT_ADAPTOR_NONE;
+    }
+    mdrt_pads_set_adaptor(mdrt_get_pads(s->m), adaptor);
     if (SDL_AtomicGet(&s->session) && s->net) {           /* (netplay: from this power on) */
         mdrt_set_net(s->m, s->net);
         mdrt_net_start(s->net, s->m);
@@ -899,11 +906,13 @@ static void settings_load(sdl *s)
         mdrt_settings_default(s->set, "netplay.port", "7000");
         mdrt_settings_default(s->set, "netplay.delay", "2");
         mdrt_settings_default(s->set, "netplay.name", "");
+        mdrt_settings_default(s->set, "netplay.pads", "1");
         snprintf(s->net_name, sizeof s->net_name, "%s", mdrt_settings_get(s->set, "netplay.name") ? mdrt_settings_get(s->set, "netplay.name") : "");
         s->net_role = named(mdrt_settings_get(s->set, "netplay.role"), net_role_name, 3, NET_HOST);
         snprintf(s->net_addr, sizeof s->net_addr, "%s", mdrt_settings_get(s->set, "netplay.address") ? mdrt_settings_get(s->set, "netplay.address") : "");
         s->net_port = clamp(mdrt_settings_get_int(s->set, "netplay.port", MDRT_UDP_PORT), 1, 65535);
         s->net_delay = clamp(mdrt_settings_get_int(s->set, "netplay.delay", 2), 0, MDRT_NET_MAX_DELAY);
+        s->net_pads = clamp(mdrt_settings_get_int(s->set, "netplay.pads", 1), 1, 2);
     }
     for (int p = 0; p < MDRT_PADS; p++) {
         char k[48];
@@ -1706,6 +1715,7 @@ static void build_page(sdl *s, int page, int select)
                                     "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.:-[]");
             mdrt_menu_add_field(m, I_NET_PORT, s->net_role == NET_JOIN ? "The host's port" : "Port", port, 5, "0123456789");
             mdrt_menu_add_number(m, I_NET_DELAY, "Input delay", s->net_delay, 0, MDRT_NET_MAX_DELAY, 1, " frames");
+            if (s->net_role != NET_JOIN) mdrt_menu_add_choice(m, I_NET_PADS, "Pads each", net_pads_label, 2, s->net_pads - 1);   /* (the host's choice) */
             mdrt_menu_add(m, I_NET_START, MDRT_ITEM_ACTION, s->net_role == NET_HOST ? "Start hosting" : "Connect and play");
         }
         char lan[64];
@@ -2022,6 +2032,10 @@ static void act(sdl *s, int id)
     case I_NET_DELAY:
         s->net_delay = it->value;
         mdrt_settings_set_int(s->set, "netplay.delay", s->net_delay);
+        return;
+    case I_NET_PADS:
+        s->net_pads = it->value + 1;
+        mdrt_settings_set_int(s->set, "netplay.pads", s->net_pads);
         return;
     case I_NET_START: net_begin(s); return;
     case I_NET_LEAVE:
@@ -2672,7 +2686,8 @@ static void net_begin(sdl *s)
     if (!u) { snprintf(s->menu.message, sizeof s->menu.message, "%.120s", err); return; }
     mdrt_net_config c = { .role = s->net_role == NET_HOST ? MDRT_NET_HOST : s->net_role == NET_JOIN ? MDRT_NET_JOIN : MDRT_NET_EITHER,
                           .identity = s->o->net_identity, .name = s->net_name, .local_input = net_input, .input_user = s, .delay = s->net_delay,
-                          .window = 8, .rollback = 30, .check_every = 60 };
+                          .window = 8, .rollback = 30, .check_every = 60,
+                          .host_pads = s->net_pads == 2 ? 0x3 : 0, .guest_pads = s->net_pads == 2 ? 0xC : 0 };
     c.link = mdrt_udp_link(u);
     int playing = s->thread != NULL;
     if (!stop_game(s)) { mdrt_udp_close(u); snprintf(s->menu.message, sizeof s->menu.message, "The game would not stop"); return; }

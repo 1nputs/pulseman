@@ -52,7 +52,7 @@ replays and recordings as GIFs, save slots with a picture each, quick resume, an
 the ROM browser, reset, states, video, capture, sound (the FM core and chip changed live), players,
 keys, and pages of the client's own options handed to it before every power on. And netplay: an
 Online play page (your name; host, join, or both connecting; the address and port typed in; this
-machine's LAN address; the input delay), who joined and who left said over the game's bottom row,
+machine's LAN address; the input delay; one pad each or two, EA's 4 Way Play), who joined and who left said over the game's bottom row,
 the window connecting before the game starts, then pacing by the clock and keeping the session's
 rules (no pause, rewind or states while two play).
 

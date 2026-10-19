@@ -10,7 +10,9 @@
  * two joiners refuse each other, two "either"s settle who hosts and the host's settings (15,000 or
  * 20,000 bytes, in chunks) reach the guest through loss, and so do 4 MB of them (a league with its
  * art), each chunk sent about once (a lost one again at once, on three acknowledgements alike);
- * goodbye ends the other's session, and silence ends it as lost after 10 seconds (lost from 3). */
+ * goodbye ends the other's session, and silence ends it as lost after 10 seconds (lost from 3).
+ * Last, two pads each (the host's choice: the host pads 1 and 2, the guest 3 and 4): every frame
+ * as a lone console's with all four pads' buttons. */
 #include <stdlib.h>
 #include <string.h>
 #include "check.h"
@@ -42,7 +44,8 @@ struct peer {
     mdrt *m;
     mdrt_net *net;
     mdrt_net_config cfg;
-    uint32_t seed;                      /* its player's script */
+    uint32_t seed;                      /* its player's script (with two pads: seed and seed + 1) */
+    int two;                            /* it plays two pads */
     uint64_t period, next_at;
     int need_frame, state, ready;
     uint32_t perturb_at;                /* its game made to differ here (0: never) */
@@ -170,6 +173,7 @@ static void local_input(void *user, uint16_t b[MDRT_PADS])
 {
     peer *p = user;
     b[0] = script(p->seed, (uint32_t)mdrt_frame_count(p->m));
+    if (p->two) b[1] = script(p->seed + 1, (uint32_t)mdrt_frame_count(p->m));
 }
 
 /* a resumable point at the top of most frames; none from 40 to 59 of each hundred, nor from 500 to 569 */
@@ -191,11 +195,14 @@ static mdrt *console(peer *p)
 /* ---- the lone console: the same buttons ----------------------------------------------------------- */
 
 static uint32_t ref_seed[2];
+static int ref_two;                     /* two pads each */
 static void ref_pads(void *user, uint16_t b[MDRT_PADS])
 {
     uint32_t f = (uint32_t)mdrt_frame_count(user) + 1;
     memset(b, 0, MDRT_PADS * sizeof *b);
-    if (f >= DELAY + 2) { b[0] = script(ref_seed[0], f - 1 - DELAY); b[1] = script(ref_seed[1], f - 1 - DELAY); }
+    if (f < DELAY + 2) return;
+    if (!ref_two) { b[0] = script(ref_seed[0], f - 1 - DELAY); b[1] = script(ref_seed[1], f - 1 - DELAY); return; }
+    for (int k = 0; k < 4; k++) b[k] = script(ref_seed[k / 2] + (uint32_t)(k & 1), f - 1 - DELAY);
 }
 
 static uint64_t ref_hash[MAXF];
@@ -457,6 +464,33 @@ static void protocol(void)
     finish(&A, &B);
 }
 
+/* two pads each: the host 1 and 2, the guest 3 and 4 (the pads' buttons are in the simulation's hash) */
+static void two_each(void)
+{
+    ref_two = 1;
+    reference(303, 404);
+    ref_two = 0;
+    cond = (net_cond){ .latency = 30000, .jitter = 10000, .loss = 50, .dup = 10 };
+    setup(&A, &B, "host", MDRT_NET_HOST, 303, 16684);
+    setup(&B, &A, "guest", MDRT_NET_JOIN, 404, 16700);
+    A.two = B.two = 1;
+    A.cfg.host_pads = 0x3;
+    A.cfg.guest_pads = 0xC;
+    CHECK(join_up(&A, &B, 5000000));
+    play(&A, &B, FRAMES, 120000000);
+    int same[2] = { 0, 0 };
+    peer *ps[2] = { &A, &B };
+    for (int i = 0; i < 2; i++)
+        for (uint32_t f = 1; f <= FRAMES; f++) same[i] += ps[i]->hash[f] == ref_hash[f];
+    printf("  two pads each (the host 1 and 2, the guest 3 and 4): pads %X and %X; every frame as the lone console's: host %d, guest %d of %d\n",
+           mdrt_net_pads(A.net), mdrt_net_pads(B.net), same[0], same[1], FRAMES);
+    CHECK_EQ(mdrt_net_pads(A.net), 0x3);
+    CHECK_EQ(mdrt_net_pads(B.net), 0xC);
+    CHECK_EQ(same[0], FRAMES);
+    CHECK_EQ(same[1], FRAMES);
+    finish(&A, &B);
+}
+
 int main(void)
 {
     for (int i = 0; mdrt_fm_cores(i); i++)
@@ -464,5 +498,6 @@ int main(void)
     session();
     desync();
     protocol();
+    two_each();
     return check_done("net_test");
 }

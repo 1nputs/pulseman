@@ -279,7 +279,9 @@ comes, for a caller told to wait; `mdrt_udp_simulate` delays, reorders, loses an
 sends, for tests. In the SDL2 platform a client that plays online gives `mdrt_sdl_options.net_identity`, and the
 menu has an Online play page: the player's name; host, join a host, or both connecting at once;
 the other's address and the port (fields the player types into, kept in the settings file); this
-machine's LAN address (`mdrt_udp_lan_address`); the input delay; and Start,
+machine's LAN address (`mdrt_udp_lan_address`); the input delay; for a host, the pads each player
+plays (one, or two: EA's 4 Way Play, the host pads 1 and 2, the guest 3 and 4, the adaptor in the
+ports on both, the window's players 1 and 2 at each machine); and Start,
 which stops the game, connects, and powers on again in the session (or Leave, during one). What the
 game plays by that is sent rather than compared (its options, its data, save RAM) comes from
 `mdrt_sdl_options.net_settings`, asked when Start makes the session, once the game has stopped and
@@ -298,10 +300,11 @@ game spent waiting on the other player in `mdrt_idle` (a frame given back to kee
 given; other lateness is caught up as ever), stretches the sound by up to half a per cent to
 keep its queue, and keeps the session's rules: the menu does not stop the game, and pause, the
 frame step, slow motion, fast-forward, rewind, the save slots, quick resume, reset, another ROM,
-the FM core and chip and the 4 Way Play adaptor are not to be had; save RAM is not read or written.
+the FM core and chip and the Players page's adaptor (the session's pads say) are not to be had; save RAM is not read or written.
 `mdrt_net_state(n)` says where a session is. Every client reads the same options: `mdrt_net_parse` takes `--host [PORT]`,
-`--join ADDR[:PORT]`, `--peer ADDR[:PORT]`, `--port`, `--delay` and `--net-sim` from its command
-line (`MDRT_NET_USAGE`), and `mdrt_net_open_udp` opens the socket they ask for.
+`--join ADDR[:PORT]`, `--peer ADDR[:PORT]`, `--port`, `--delay`, `--name`, `--pads 1|2` and `--net-sim` from its command
+line (`MDRT_NET_USAGE`), `mdrt_net_open_udp` opens the socket they ask for, and
+`mdrt_net_options_pads` gives the configuration's pads for `--pads`.
 
 ## The bus by address
 

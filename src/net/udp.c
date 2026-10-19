@@ -374,6 +374,13 @@ void mdrt_net_options_init(mdrt_net_options *o)
 {
     memset(o, 0, sizeof *o);
     o->delay = 2;
+    o->pads = 1;
+}
+
+void mdrt_net_options_pads(const mdrt_net_options *o, uint8_t *host_pads, uint8_t *guest_pads)
+{
+    *host_pads = o->pads == 2 ? 0x3 : 0;
+    *guest_pads = o->pads == 2 ? 0xC : 0;
 }
 
 static int number(const char *s, long lo, long hi, long *v)
@@ -420,6 +427,12 @@ int mdrt_net_parse(mdrt_net_options *o, int argc, char **argv, int *i, char *err
     if (!strcmp(a, "--name")) {
         if (!next) { snprintf(err, errsize, "--name needs a name"); return -1; }
         snprintf(o->name, sizeof o->name, "%s", next);
+        ++*i;
+        return 1;
+    }
+    if (!strcmp(a, "--pads")) {
+        if (!next || !number(next, 1, 2, &v)) { snprintf(err, errsize, "--pads needs 1 or 2 (two each: EA's 4 Way Play)"); return -1; }
+        o->pads = (int)v;
         ++*i;
         return 1;
     }
