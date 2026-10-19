@@ -1715,7 +1715,8 @@ static void build_page(sdl *s, int page, int select)
                                     "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.:-[]");
             mdrt_menu_add_field(m, I_NET_PORT, s->net_role == NET_JOIN ? "The host's port" : "Port", port, 5, "0123456789");
             mdrt_menu_add_number(m, I_NET_DELAY, "Input delay", s->net_delay, 0, MDRT_NET_MAX_DELAY, 1, " frames");
-            if (s->net_role != NET_JOIN) mdrt_menu_add_choice(m, I_NET_PADS, "Pads each", net_pads_label, 2, s->net_pads - 1);   /* (the host's choice) */
+            if (s->net_role != NET_JOIN && s->o->net_pads >= 2)   /* (the host's choice, for a game that can play with 4 Way Play) */
+                mdrt_menu_add_choice(m, I_NET_PADS, "Pads each", net_pads_label, 2, s->net_pads - 1);
             mdrt_menu_add(m, I_NET_START, MDRT_ITEM_ACTION, s->net_role == NET_HOST ? "Start hosting" : "Connect and play");
         }
         char lan[64];
@@ -2683,11 +2684,12 @@ static void net_begin(sdl *s)
         else snprintf(addr, sizeof addr, strchr(s->net_addr, ':') ? "[%s]:%d" : "%s:%d", s->net_addr, s->net_port);
     }
     mdrt_udp *u = mdrt_udp_open(s->net_role == NET_JOIN ? 0 : (uint16_t)s->net_port, s->net_role == NET_HOST ? NULL : addr, err, sizeof err);
+    int two = s->o->net_pads >= 2 && s->net_pads == 2;    /* (two pads each: the client offers it, the player chose it) */
     if (!u) { snprintf(s->menu.message, sizeof s->menu.message, "%.120s", err); return; }
     mdrt_net_config c = { .role = s->net_role == NET_HOST ? MDRT_NET_HOST : s->net_role == NET_JOIN ? MDRT_NET_JOIN : MDRT_NET_EITHER,
                           .identity = s->o->net_identity, .name = s->net_name, .local_input = net_input, .input_user = s, .delay = s->net_delay,
                           .window = 8, .rollback = 30, .check_every = 60,
-                          .host_pads = s->net_pads == 2 ? 0x3 : 0, .guest_pads = s->net_pads == 2 ? 0xC : 0 };
+                          .host_pads = two ? 0x3 : 0, .guest_pads = two ? 0xC : 0 };
     c.link = mdrt_udp_link(u);
     int playing = s->thread != NULL;
     if (!stop_game(s)) { mdrt_udp_close(u); snprintf(s->menu.message, sizeof s->menu.message, "The game would not stop"); return; }

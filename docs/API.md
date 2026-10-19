@@ -279,8 +279,8 @@ comes, for a caller told to wait; `mdrt_udp_simulate` delays, reorders, loses an
 sends, for tests. In the SDL2 platform a client that plays online gives `mdrt_sdl_options.net_identity`, and the
 menu has an Online play page: the player's name; host, join a host, or both connecting at once;
 the other's address and the port (fields the player types into, kept in the settings file); this
-machine's LAN address (`mdrt_udp_lan_address`); the input delay; for a host, the pads each player
-plays (one, or two: EA's 4 Way Play, the host pads 1 and 2, the guest 3 and 4, the adaptor in the
+machine's LAN address (`mdrt_udp_lan_address`); the input delay; for a host, when the client offers it
+(`mdrt_sdl_options.net_pads` 2), the pads each player plays (one, or two: EA's 4 Way Play, the host pads 1 and 2, the guest 3 and 4, the adaptor in the
 ports on both, the window's players 1 and 2 at each machine); and Start,
 which stops the game, connects, and powers on again in the session (or Leave, during one). What the
 game plays by that is sent rather than compared (its options, its data, save RAM) comes from

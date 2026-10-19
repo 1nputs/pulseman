@@ -141,8 +141,8 @@ typedef struct mdrt_sdl_options {
     /* netplay (mdrt/netplay.h). net_identity: the client's identity for a session (what must match
      * between the two: its build, the ROM, settings), which puts the Online page in the menu: the
      * player picks host, join or both connecting, the address, port and input delay, and a host
-     * one pad each or two (EA's 4 Way Play: the host pads 1 and 2, the guest 3 and 4, the adaptor in
-     * the ports on both) (kept in the settings file), and starts a session there; NULL: no netplay. net: a session the client made
+     * one pad each or two when net_pads offers it (kept in the settings file), and starts a
+     * session there; NULL: no netplay. net: a session the client made
      * from its command line instead (mdrt_net_parse, mdrt_net_open_udp, mdrt_net_new; its
      * local_input reading mdrt_platform_input), and net_udp its UDP link (NULL: another link).
      * Either way the window connects first, showing it (Esc gives up), then powers on a new console
@@ -162,6 +162,10 @@ typedef struct mdrt_sdl_options {
     const char *net_identity;
     mdrt_net *net;
     struct mdrt_udp *net_udp;
+    /* the most pads each player may play in the window's sessions: 0 or 1, one; 2, the Online
+     * page offers a host two each (EA's 4 Way Play: the host pads 1 and 2, the guest 3 and 4, the
+     * adaptor in the ports on both), for a game that can play with it */
+    int net_pads;
     /* the session's settings this player sends if it hosts (mdrt_net_config.settings: what the
      * game plays by that is not compared in the identity but sent, such as its options, its data
      * and save RAM), asked when the Online page's Start makes a session, after options_use with the
