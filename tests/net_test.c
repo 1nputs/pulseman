@@ -7,8 +7,8 @@
  * frame either peer finally played must be the lone console's, bit for bit (the simulation hash),
  * and the session must have rolled back, checked for desyncs, and given frames back. Then: a game
  * made to differ on one peer ends the session as a desync; a guest of another game is refused,
- * two joiners refuse each other, two "either"s settle who hosts and the host's settings (20,000
- * bytes) reach the guest through loss; goodbye ends the other's session, and silence ends it as
+ * two joiners refuse each other, two "either"s settle who hosts and the host's settings (15,000 or
+ * 20,000 bytes, in chunks) reach the guest through loss; goodbye ends the other's session, and silence ends it as
  * lost after 10 seconds (lost from 3). */
 #include <stdlib.h>
 #include <string.h>
@@ -373,8 +373,9 @@ static void protocol(void)
     CHECK(A.state != MDRT_NET_READY && B.state != MDRT_NET_READY);
     finish(&A, &B);
     /* two eithers: one hosts, its settings reach the other */
-    static uint8_t sa[20000], sb[500];
+    static uint8_t sa[20000], sb[15000];
     for (size_t i = 0; i < sizeof sa; i++) sa[i] = (uint8_t)(i * 7 + 3);
+    for (size_t i = 0; i < sizeof sb; i++) sb[i] = (uint8_t)(i * 13 + 5);
     setup(&A, &B, "a", MDRT_NET_EITHER, 1, 16684);
     setup(&B, &A, "b", MDRT_NET_EITHER, 2, 16684);
     A.cfg.settings = sa; A.cfg.settings_size = sizeof sa;

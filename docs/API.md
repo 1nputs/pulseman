@@ -262,6 +262,17 @@ on from in the state's parts, and make its identity. `mdrt_net_stats_get` gives 
 rollbacks, waits and checks for the platform to show; `mdrt_net_set_log` writes every frame's
 buttons as they become known, a replay of the session from power on.
 
+`mdrt/net_udp.h` is the native link: UDP (POSIX sockets; Winsock 2 on Windows, linking `ws2_32`),
+IPv4 and IPv6, names resolved. `mdrt_udp_open(port, peer, err, n)`: a host gives no peer and takes
+the first one it hears from, following whoever sends until `mdrt_udp_lock` (call it once the
+session starts); a joiner names the host's address; two peers that both connect each name the
+other's (a simultaneous open, which most home routers let through without a forwarded port).
+`mdrt_udp_link(u)` is the link for the configuration; `mdrt_udp_wait(u, ms)` sleeps until a datagram
+comes, for a caller told to wait; `mdrt_udp_simulate` delays, reorders, loses and doubles what it
+sends, for tests. Every client reads the same options: `mdrt_net_parse` takes `--host [PORT]`,
+`--join ADDR[:PORT]`, `--peer ADDR[:PORT]`, `--port`, `--delay` and `--net-sim` from its command
+line (`MDRT_NET_USAGE`), and `mdrt_net_open_udp` opens the socket they ask for.
+
 ## The bus by address
 
 `mdrt_bus_read8/16/32` and `mdrt_bus_write8/16/32` reach the 68k's bus by address, with the
