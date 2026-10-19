@@ -168,6 +168,13 @@ typedef struct mdrt_sdl_options {
      * The session copies them. At power on the game finds the host's with mdrt_net_settings (the
      * host's own on the host) and plays by them on both; NULL: no settings. */
     const void *(*net_settings)(size_t *size, void *user);
+    /* the values the session's game plays by (the host's, which its settings gave the game), for
+     * the client's pages while a session lasts, asked on the window's thread each time one is
+     * shown: the client fills values (noptions of them, as options_use has them; they come
+     * holding the player's own) and returns nonzero, or 0 for none yet (the pages as ever). The
+     * pages then show those, greyed: no option there changes until the session ends, and the
+     * settings keep the player's own. NULL: the pages as ever in a session too. */
+    int (*options_session)(int *values, void *user);
 } mdrt_sdl_options;
 
 /* the client's game: runs on the game thread with the console made from the configuration; when

@@ -231,6 +231,7 @@ typedef struct sdl {
     int *opt_values;            /* the client's options (mdrt_sdl_options.options): a choice's index or a number
                                  * (a choice standing for a number: the number) */
     struct custom *opt_custom;  /* each option's custom number (a choice standing for a number) */
+    int *sess_values;           /* in a session: the values its game plays by (options_session) */
     int cpage;                  /* the page of them shown (mdrt_sdl_options.pages) */
     /* the client's lines under a page in sections (options_text: \f before each), a section shown
      * at a time: their titles (a choice's), how many, the one shown on each page */
@@ -769,13 +770,13 @@ static void text_items(mdrt_menu *m, char *line, const char *stop)
 /* the client's lines under the page's options (options_text). In sections (a \f before each, its
  * first line its title): the lines before the first, then a choice of the sections (LEFT / RIGHT
  * step through them), then the lines of the one chosen */
-static void client_text(sdl *s, mdrt_menu *m)
+static void client_text(sdl *s, mdrt_menu *m, const int *values)
 {
     static char text[16384];
     text[0] = 0;
     if (!s->o->options_text) return;
     int page = s->o->npages > 0 ? s->cpage : 0;
-    s->o->options_text(page, s->opt_values, text, sizeof text, s->user);
+    s->o->options_text(page, values, text, sizeof text, s->user);
     text[sizeof text - 1] = 0;
     char *at[SECTIONS], *p = strchr(text, '\f');
     s->nsec = 0;
@@ -812,6 +813,28 @@ static void option_item(sdl *s, mdrt_menu *m, int i)
         if (s->o->options_detail) s->o->options_detail(i, v, it->detail, sizeof it->detail, s->user);
         else put_text(it->detail, sizeof it->detail, op->names[clamp(v, 0, op->count - 1)], 1);
     }
+}
+
+/* in a session, the values its game plays by (options_session), or NULL: none (yet) */
+static const int *session_values(sdl *s)
+{
+    if (!SDL_AtomicGet(&s->session) || !s->o->options_session || !s->opt_values) return NULL;
+    if (!s->sess_values && !(s->sess_values = calloc((size_t)s->o->noptions, sizeof *s->sess_values))) return NULL;
+    memcpy(s->sess_values, s->opt_values, (size_t)s->o->noptions * sizeof *s->sess_values);
+    return s->o->options_session(s->sess_values, s->user) ? s->sess_values : NULL;
+}
+
+/* an option as the session plays it (v): greyed, its choice's label or its number */
+static void option_shown(sdl *s, mdrt_menu *m, int i, int v)
+{
+    const mdrt_sdl_option *op = &s->o->options[i];
+    const char *const *labels = op->labels ? op->labels : op->names;
+    mdrt_menu_item *it = mdrt_menu_add(m, I_COPTION + i, MDRT_ITEM_TEXT, op->label);
+    if (!it) return;
+    int k = op->count > 0 ? (op->numbers ? numbered(op, v) : clamp(v, 0, op->count - 1)) : -1;
+    if (k >= 0) put_text(it->detail, sizeof it->detail, labels[k], 1);
+    else if (op->count > 0 && op->numbers) snprintf(it->detail, sizeof it->detail, "custom (%d%s)", v, op->unit ? op->unit : "");
+    else snprintf(it->detail, sizeof it->detail, "%d%s", v, op->unit ? op->unit : "");
 }
 
 /* the FM core and chip a console is made with: the client's, else the settings' */
@@ -1520,8 +1543,13 @@ static void build_page(sdl *s, int page, int select)
         mdrt_sdl_page cp = client_page(s, s->cpage);
         mdrt_menu_page(m, cp.title ? cp.title : "");
         if (cp.note) put_text(m->subtitle, sizeof m->subtitle, cp.note, 0);
-        for (int i = cp.first; i < cp.first + cp.count; i++) option_item(s, m, i);
-        client_text(s, m);
+        const int *sv = session_values(s);                /* (online: the session's, greyed) */
+        if (sv) put_text(m->subtitle, sizeof m->subtitle, "Online: the host's, for both (yours after the session)", 0);
+        for (int i = cp.first; i < cp.first + cp.count; i++) {
+            if (sv) option_shown(s, m, i, sv[i]);
+            else option_item(s, m, i);
+        }
+        client_text(s, m, sv ? sv : s->opt_values);
         mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
         break;
     }
@@ -2801,6 +2829,7 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
     free(s->frame); free(s->blended); free(s->big); free(s->big_scratch); free(s->pending_pic); free(s->opt_values);
     for (int i = 0; s->opt_custom && i < s->o->noptions; i++) free(s->opt_custom[i].labels);
     free(s->opt_custom);
+    free(s->sess_values);
     if (stopped) {                                        /* (else the thread still has them) */
         mdrt_free(s->m);
         mdrt_capture_free(s->cap);

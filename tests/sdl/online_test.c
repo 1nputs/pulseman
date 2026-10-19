@@ -5,7 +5,9 @@
  * open the menu's Online play, type a name, pick "join a host", type the host's address (a first
  * try put back by Esc) and port into their fields, and connect: the game stops and starts again in
  * the session, the host hearing the name and the window's game finding the host's settings at its
- * power on (the window's own asked for once, when its Start made the session).
+ * power on (the window's own asked for once, when its Start made the session). In the session the
+ * window's page of the game's options shows the session's choice (the host's, which the game gives
+ * it), greyed, its own kept in the settings file.
  * Then pad 1's keys are pressed and let go while both play (so the one ahead has guesses shown
  * wrong to play again), the menu is opened during play (the game does not stop), and the session is
  * left from the menu. It checks that the session played (the window's game and the host in step:
@@ -28,7 +30,26 @@
 #define IDENTITY "online test 1"
 static const char host_settings[] = "the host's rules: 7 minute periods";
 
-static SDL_atomic_t settings_asked, settings_found;
+static SDL_atomic_t settings_asked, settings_found, session_asked, text_value, used_value;
+
+/* the game's option, on its page: the window's own is "a"; the session's (the host's) "c" */
+static const char *const rule_names[] = { "a", "b", "c" };
+static const mdrt_sdl_option rule = { "test.rule", "Test rule", 3, rule_names, NULL, 0, 0, 0, 0, NULL, NULL, NULL };
+static void options_use(const int *v, void *user) { (void)user; SDL_AtomicSet(&used_value, v[0]); }
+static void options_text(int page, const int *v, char *text, size_t size, void *user)
+{
+    (void)page; (void)user;
+    SDL_AtomicSet(&text_value, v[0]);
+    snprintf(text, size, "Played\t%s\n", rule_names[v[0] % 3]);
+}
+static int options_session(int *v, void *user)
+{
+    (void)user;
+    SDL_AtomicAdd(&session_asked, 1);
+    if (!SDL_AtomicGet(&settings_found)) return 0;        /* (none until the game has the host's) */
+    v[0] = 2;
+    return 1;
+}
 static const void *window_settings(size_t *size, void *user)
 {
     (void)user;
@@ -229,6 +250,17 @@ static int player(void *user)
            SDL_AtomicGet(&settings_found) ? "yes" : "NO");
     CHECK_EQ(SDL_AtomicGet(&settings_asked), 1);
     CHECK_EQ(SDL_AtomicGet(&settings_found), 1);
+    press(SDL_SCANCODE_ESCAPE);                           /* the game's page (below Online play): the session's choice, greyed */
+    keys(SDL_SCANCODE_DOWN, 9);
+    press(SDL_SCANCODE_RETURN);
+    keys(SDL_SCANCODE_LEFT, 2);                           /* (on Back: the option is not to be changed) */
+    press(SDL_SCANCODE_ESCAPE);
+    press(SDL_SCANCODE_ESCAPE);
+    printf("  the game's page in the session: asked %d time(s) for the session's choices, its lines showing %s\n", SDL_AtomicGet(&session_asked),
+           rule_names[SDL_AtomicGet(&text_value) % 3]);
+    CHECK(SDL_AtomicGet(&session_asked) >= 1);
+    CHECK_EQ(SDL_AtomicGet(&text_value), 2);
+    CHECK_EQ(SDL_AtomicGet(&used_value), 0);              /* (the game was powered on with the window's own: its settings say which it plays) */
     /* both play: pad 1's keys pressed and let go, so the host's guesses of this player go wrong */
     static const SDL_Scancode pads[] = { SDL_SCANCODE_RIGHT, SDL_SCANCODE_Z, SDL_SCANCODE_X, SDL_SCANCODE_LEFT };
     for (int i = 0; i < 24; i++) { key(pads[i % 4], 1); SDL_Delay(90 + 37 * (i % 3)); key(pads[i % 4], 0); SDL_Delay(60); }
@@ -282,14 +314,16 @@ int main(int argc, char **argv)
     remove("sound.raw");
     mdrt_config c = { 0 };
     c.audio_rate = 48000;
-    mdrt_sdl_options o = { .title = "online test", .app = "online-test", .net_identity = IDENTITY, .net_settings = window_settings };
+    mdrt_sdl_options o = { .title = "online test", .app = "online-test", .net_identity = IDENTITY, .net_settings = window_settings,
+                           .options_title = "Test rules", .options = &rule, .noptions = 1, .options_use = options_use,
+                           .options_text = options_text, .options_session = options_session };
     SDL_Thread *h = SDL_CreateThread(host, "host", NULL), *p = SDL_CreateThread(player, "player", NULL);
     CHECK_EQ(mdrt_sdl_run(&c, &o, window_game, NULL), 0);
     SDL_WaitThread(p, NULL);
     SDL_WaitThread(h, NULL);
     const char *set = slurp("settings.ini");
     CHECK(set && strstr(set, "netplay.role = join") && strstr(set, "netplay.address = 127.0.0.1") && strstr(set, "netplay.port = 7491") &&
-          strstr(set, "netplay.name = Tester"));
+          strstr(set, "netplay.name = Tester") && strstr(set, "test.rule = a"));
     printf("  the settings kept: %s\n", set && strstr(set, "netplay.address = 127.0.0.1") ? "join 127.0.0.1, port 7491" : "NOT kept");
     return check_done("online_test");
 }
