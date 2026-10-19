@@ -23,6 +23,7 @@
 #include "mdrt/capture.h"
 #include "mdrt/look.h"
 #include "mdrt/menu.h"
+#include "mdrt/net_udp.h"
 #include "mdrt/platform_sdl2.h"
 #include "mdrt/png.h"
 #include "mdrt/settings.h"
@@ -152,6 +153,13 @@ typedef struct sdl {
     uint64_t next_tick;         /* pacing by the clock */
     unsigned waits, queued;
     int16_t *loud;              /* the frame's sound at the volume */
+    /* netplay (o->net): a session going on (until it ends, the window's thread clears it), the game
+     * thread's word that it ended, and its line for the title (s->lock); the sound stretched */
+    SDL_atomic_t session, net_over;
+    char net_line[200];
+    uint32_t net_shown;
+    int16_t *stretched;
+    size_t stretched_cap;
     size_t loud_cap;
     /* the main thread's */
     mdrt_settings *set;
@@ -226,7 +234,7 @@ typedef struct sdl {
 static void sram_save(sdl *s)
 {
     mdrt_sram *r = mdrt_get_sram(s->m);
-    if (!s->sram_file[0] || !r->size || !r->dirty) return;
+    if (!s->sram_file[0] || !r->size || !r->dirty || SDL_AtomicGet(&s->session)) return;   /* (netplay: the session's own) */
     FILE *f = fopen(s->sram_file, "wb");
     if (!f) return;
     if (fwrite(r->bytes, 1, r->size, f) == r->size) r->dirty = 0;
@@ -236,7 +244,7 @@ static void sram_save(sdl *s)
 static void sram_load(sdl *s)
 {
     mdrt_sram *r = mdrt_get_sram(s->m);
-    if (!s->sram_file[0] || !r->size) return;
+    if (!s->sram_file[0] || !r->size || SDL_AtomicGet(&s->session)) return;
     FILE *f = fopen(s->sram_file, "rb");
     if (!f) return;
     if (fread(r->bytes, 1, r->size, f) != r->size) fprintf(stderr, "%s: short save RAM file\n", s->sram_file);
@@ -271,13 +279,38 @@ static void present(void *user, const uint16_t *px, int w, int h, int pitch)
     }
 }
 
-static int held(sdl *s) { return SDL_AtomicGet(&s->paused) || SDL_AtomicGet(&s->in_menu); }
+static int held(sdl *s) { return !SDL_AtomicGet(&s->session) && (SDL_AtomicGet(&s->paused) || SDL_AtomicGet(&s->in_menu)); }
+
+/* netplay's sound: the frames go by the clock, so the sound is stretched or squeezed (by half a per
+ * cent at most) to keep its queue at the latency: out samples from n, linearly */
+static int stretch(sdl *s, const int16_t *in, int n)
+{
+    Uint32 queued = SDL_GetQueuedAudioSize(s->dev) / 4, target = (Uint32)s->queue_frames * s->rate / 60;
+    double err = ((double)target - (double)queued) / (target ? target : 1);   /* (above 0: too little queued) */
+    if (err > 1) err = 1;
+    if (err < -1) err = -1;
+    int out = (int)(n * (1.0 + 0.005 * err) + 0.5);
+    if (n < 2 || out < 2) return 0;
+    if ((size_t)out * 2 > s->stretched_cap) {
+        int16_t *b = realloc(s->stretched, (size_t)out * 2 * sizeof *b);
+        if (!b) return 0;
+        s->stretched = b;
+        s->stretched_cap = (size_t)out * 2;
+    }
+    for (int i = 0; i < out; i++) {
+        double pos = (double)i * (n - 1) / (out - 1), f = pos - (int)pos;
+        int k = (int)pos, k2 = k + 1 < n ? k + 1 : k;
+        for (int ch = 0; ch < 2; ch++) s->stretched[2 * i + ch] = (int16_t)(in[2 * k + ch] * (1 - f) + in[2 * k2 + ch] * f);
+    }
+    return out;
+}
 
 /* the frame's sound, at the volume; none while fast, slow, paused or in the menu (the clock paces those) */
 static void audio(void *user, const int16_t *samples, int frames)
 {
     sdl *s = user;
-    if (!s->dev || SDL_AtomicGet(&s->fast) || SDL_AtomicGet(&s->slow) || held(s)) return;
+    int session = SDL_AtomicGet(&s->session);
+    if (!s->dev || (!session && (SDL_AtomicGet(&s->fast) || SDL_AtomicGet(&s->slow) || held(s)))) return;
     int vol = SDL_AtomicGet(&s->mute) ? 0 : SDL_AtomicGet(&s->volume);
     if (vol < 100) {
         size_t n = (size_t)frames * 2;
@@ -290,15 +323,45 @@ static void audio(void *user, const int16_t *samples, int frames)
         for (size_t i = 0; i < n; i++) s->loud[i] = (int16_t)(samples[i] * vol / 100);
         samples = s->loud;
     }
+    int k = session && s->queued >= (unsigned)s->queue_frames ? stretch(s, samples, frames) : 0;
+    if (k) { samples = s->stretched; frames = k; }
     SDL_QueueAudio(s->dev, samples, (Uint32)frames * 4);
     if (++s->queued == (unsigned)s->queue_frames) SDL_PauseAudioDevice(s->dev, 0);   /* start once there is some */
 }
 
 static int ending(sdl *s) { return SDL_AtomicGet(&s->quit) || SDL_AtomicGet(&s->stop); }
 
+/* netplay's line for the title, and its end, from the game thread (twice a second) */
+static void net_status(sdl *s)
+{
+    if (s->waits % 30) return;
+    mdrt_net_stats st;
+    mdrt_net_stats_get(s->o->net, &st);
+    int state = mdrt_net_state(s->o->net);
+    SDL_LockMutex(s->lock);
+    if (state == MDRT_NET_ENDED || state == MDRT_NET_REFUSED) snprintf(s->net_line, sizeof s->net_line, "netplay: %s", mdrt_net_why(s->o->net));
+    else snprintf(s->net_line, sizeof s->net_line, "netplay: %d ms, delay %d, rollback %d (%d at most)%s", st.rtt_ms, st.delay,
+                  st.last_replayed, st.most_replayed, st.lost ? ", connection lost" : "");
+    SDL_UnlockMutex(s->lock);
+    if (state == MDRT_NET_ENDED || state == MDRT_NET_REFUSED) SDL_AtomicSet(&s->net_over, 1);
+}
+
 static int wait(void *user)
 {
     sdl *s = user;
+    if (SDL_AtomicGet(&s->session)) {                     /* netplay: by the clock, lost time not made up */
+        s->waits++;
+        net_status(s);
+        uint64_t freq = SDL_GetPerformanceFrequency(), now = SDL_GetPerformanceCounter();
+        uint64_t period = freq * mdrt_frame_mclks(s->m) / mdrt_master_clock(s->m);
+        if (!s->next_tick || now > s->next_tick) s->next_tick = now;
+        s->next_tick += period;
+        while ((now = SDL_GetPerformanceCounter()) < s->next_tick && !ending(s)) {
+            uint64_t ms = (s->next_tick - now) * 1000 / freq;
+            if (ms > 1) SDL_Delay((Uint32)(ms - 1));
+        }
+        return ending(s);
+    }
     if (++s->waits % 300 == 0) sram_save(s);              /* every 5 s when written */
     while (held(s) && !ending(s)) {
         if (!SDL_AtomicGet(&s->in_menu) && SDL_AtomicSet(&s->step, 0)) break;   /* one frame on */
@@ -338,6 +401,7 @@ static unsigned requests(void *user)
 {
     sdl *s = user;
     unsigned r = 0;
+    if (SDL_AtomicGet(&s->session)) { SDL_AtomicSet(&s->saves, 0); SDL_AtomicSet(&s->loads, 0); return 0; }
     if (SDL_AtomicSet(&s->saves, 0)) r |= MDRT_REQUEST_SAVE;
     if (SDL_AtomicSet(&s->loads, 0)) r |= MDRT_REQUEST_LOAD;
     if (SDL_AtomicGet(&s->rewind)) r |= MDRT_REQUEST_REWIND;
@@ -353,6 +417,8 @@ static const char *request_path(void *user)
     SDL_UnlockMutex(s->lock);
     return s->game_path[0] ? s->game_path : NULL;
 }
+
+static int idle(void *user) { return ending(user); }
 
 static int game_thread(void *user)
 {
@@ -371,7 +437,7 @@ static int start_game(sdl *s)
 {
     s->m = mdrt_new(s->cfg);
     if (!s->m) return 0;
-    mdrt_pads_set_adaptor(mdrt_get_pads(s->m), s->adaptor);   /* (in the ports at power on) */
+    mdrt_pads_set_adaptor(mdrt_get_pads(s->m), SDL_AtomicGet(&s->session) ? MDRT_ADAPTOR_NONE : s->adaptor);   /* (in the ports at power on) */
     if (s->o->options_use && s->opt_values) s->o->options_use(s->opt_values, s->user);   /* (the client's, for this game) */
     const char *save = s->o->sram_file ? s->o->sram_file(s->user) : NULL;
     snprintf(s->sram_file, sizeof s->sram_file, "%s", save ? save : s->o->sram_path ? s->o->sram_path : "");
@@ -793,7 +859,12 @@ static void title_now(sdl *s)
         n += (size_t)snprintf(s->title + n, sizeof s->title - n, " - recording %u:%02u", t / 60, t % 60);
     }
     int pc = saving_percent(s);
-    if (pc >= 0 && n < sizeof s->title) snprintf(s->title + n, sizeof s->title - n, " - saving the GIF, %d%%", pc);
+    if (pc >= 0 && n < sizeof s->title) n += (size_t)snprintf(s->title + n, sizeof s->title - n, " - saving the GIF, %d%%", pc);
+    if (SDL_AtomicGet(&s->session) && n < sizeof s->title) {
+        SDL_LockMutex(s->lock);
+        if (s->net_line[0]) snprintf(s->title + n, sizeof s->title - n, " - %.120s", s->net_line);
+        SDL_UnlockMutex(s->lock);
+    }
     SDL_SetWindowTitle(s->win, s->title);
 }
 
@@ -1581,7 +1652,7 @@ static void check_pending(sdl *s)
 /* the window closing: with quick resume, the game's state first (in play), then quit */
 static void request_quit(sdl *s)
 {
-    if (!s->resume || !s->thread || s->quitting) { quit(s); return; }
+    if (!s->resume || !s->thread || s->quitting || SDL_AtomicGet(&s->session)) { quit(s); return; }   /* (netplay: no quick resume) */
     s->quitting = 1;
     if (s->menu_open) close_menu(s);
     SDL_AtomicSet(&s->paused, 0);
@@ -1706,6 +1777,12 @@ static void act(sdl *s, int id)
 {
     mdrt_menu_item *it = mdrt_menu_find(&s->menu, id);
     int running = s->thread != NULL;
+    if (SDL_AtomicGet(&s->session) && (id == I_ROM || id == I_RESET || id == I_SAVE || id == I_LOAD || id == I_FM_CORE ||
+                                       id == I_FM_CHIP || id == I_ADAPTOR)) {
+        if (id == I_FM_CORE || id == I_FM_CHIP || id == I_ADAPTOR) build_page(s, s->page, id);   /* (the choice as it was) */
+        snprintf(s->menu.message, sizeof s->menu.message, "Not during netplay");
+        return;
+    }
     switch (id) {
     case I_RESUME: close_menu(s); return;
     case I_ROM:
@@ -1939,6 +2016,7 @@ static void key_pressed(sdl *s, SDL_Scancode k, SDL_Keymod mod, int repeat)
         if (s->key[i] == k && k != SDL_SCANCODE_UNKNOWN && s->key_mod[i] && (held_mods & s->key_mod[i])) a = i;
     for (int i = 0; i < K_COUNT && a == K_COUNT; i++)
         if (s->key[i] == k && k != SDL_SCANCODE_UNKNOWN && !s->key_mod[i]) a = i;
+    if (SDL_AtomicGet(&s->session) && (a == K_PAUSE || a == K_SLOW || a == K_STEP)) { notice(s, "not during netplay"); return; }
     switch (a) {
     case K_MENU: open_menu(s, PAGE_MAIN, I_RESUME); break;
     case K_PAUSE:
@@ -2010,8 +2088,9 @@ static void read_buttons(sdl *s)
         b |= pad & ~s->pad_ignore[p];
         SDL_AtomicSet(&s->buttons[p], s->menu_open ? 0 : b);
     }
-    SDL_AtomicSet(&s->rewind, control_held(s, K_REWIND));
-    SDL_AtomicSet(&s->fast, control_held(s, K_FAST));
+    int session = SDL_AtomicGet(&s->session);              /* (netplay: neither) */
+    SDL_AtomicSet(&s->rewind, !session && control_held(s, K_REWIND));
+    SDL_AtomicSet(&s->fast, !session && control_held(s, K_FAST));
 }
 
 /* ---- the picture ------------------------------------------------------------------------------- */
@@ -2143,7 +2222,7 @@ static void window_event(sdl *s, const SDL_WindowEvent *e)
     switch (e->event) {
     case SDL_WINDOWEVENT_FOCUS_LOST:
         memset(s->down, 0, sizeof s->down);               /* (no key stays held) */
-        if (s->focus_pause && !SDL_AtomicGet(&s->paused) && !s->menu_open) {
+        if (s->focus_pause && !SDL_AtomicGet(&s->session) && !SDL_AtomicGet(&s->paused) && !s->menu_open) {
             SDL_AtomicSet(&s->paused, 1);
             s->auto_paused = 1;
             title_now(s);
@@ -2197,6 +2276,61 @@ static SDL_AudioDeviceID open_sound(sdl *s, SDL_AudioSpec *want)
     return SDL_OpenAudioDevice(NULL, 0, want, &got, 0);
 }
 
+/* netplay's connecting, before the game starts: a page of its own (Esc gives up); 1 when connected */
+static void net_page(sdl *s, const char *const *lines, int n)
+{
+    SDL_LockMutex(s->lock);
+    for (int i = 0; i < 320 * 224; i++) s->picture[i] = 0xFF101828u;
+    for (int i = 0; i < n; i++) mdrt_menu_text(s->picture, 320, 224, 320, 16, 80 + 14 * i, lines[i], i ? 0xFFB0B8C8u : 0xFFFFFFFFu);
+    s->width = 320;
+    s->height = 224;
+    s->fresh = 1;
+    SDL_UnlockMutex(s->lock);
+    draw(s);
+}
+
+static int connect_session(sdl *s)
+{
+    mdrt_net *n = s->o->net;
+    char where[160], peer[96], why[200];
+    if (s->o->net_udp) snprintf(where, sizeof where, mdrt_net_is_host(n) ? "Hosting on port %u" : "On port %u, reaching %s",
+                                (unsigned)mdrt_udp_port(s->o->net_udp), mdrt_udp_peer(s->o->net_udp, peer, sizeof peer));
+    else snprintf(where, sizeof where, "Connecting");
+    notice(s, "netplay: waiting for the other player");
+    for (uint32_t t0 = SDL_GetTicks();;) {
+        SDL_Event e;
+        while (SDL_PollEvent(&e)) {
+            if (e.type == SDL_QUIT || (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_ESCAPE)) return 0;
+            if (e.type == SDL_WINDOWEVENT || e.type == SDL_RENDER_TARGETS_RESET) s->redraw = 1;
+        }
+        int r = mdrt_net_connect(n);
+        if (r == MDRT_NET_READY) {
+            if (s->o->net_udp) mdrt_udp_lock(s->o->net_udp);
+            snprintf(why, sizeof why, "netplay: playing with %s, %s", s->o->net_udp ? mdrt_udp_peer(s->o->net_udp, peer, sizeof peer) : "the other player",
+                     mdrt_net_is_host(n) ? "you are player 1" : "you are player 2");
+            notice(s, why);
+            return 1;
+        }
+        if (r != MDRT_NET_CONNECTING) {                   /* (refused: said until a key or the window closes) */
+            snprintf(why, sizeof why, "%s", mdrt_net_why(n));
+            const char *lines[] = { "Netplay: no game", why, "", "Esc or close the window" };
+            net_page(s, lines, 4);
+            fprintf(stderr, "netplay: %s\n", why);
+            for (;;) {
+                if (SDL_WaitEvent(&e) && (e.type == SDL_QUIT || e.type == SDL_KEYDOWN)) return 0;
+                if (e.type == SDL_WINDOWEVENT) { s->redraw = 1; net_page(s, lines, 4); }
+            }
+        }
+        char since[64];
+        snprintf(since, sizeof since, "Waiting %u s", (unsigned)((SDL_GetTicks() - t0) / 1000));
+        const char *refused = mdrt_net_why(n);
+        const char *lines[] = { "Netplay: waiting for the other player", where, since, refused[0] ? refused : "", "", "Esc gives up" };
+        net_page(s, lines, 6);
+        if (s->o->net_udp) mdrt_udp_wait(s->o->net_udp, 15);
+        else SDL_Delay(15);
+    }
+}
+
 int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game, void *user)
 {
     sdl *s = calloc(1, sizeof *s);
@@ -2245,7 +2379,7 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
     if (!s->cap) s->replay = 0;
     else capture_set(s);
     cfg->platform = (mdrt_platform){ .user = s, .present = present, .audio = audio, .wait = wait, .input = input, .requests = requests,
-                                     .request_path = request_path };
+                                     .request_path = request_path, .idle = idle };
     mdrt_menu_init(&s->menu);
     char why[1200] = "";
     if (o->rom_check && !first_rom(s, why, sizeof why)) {   /* no ROM yet: the menu's ROM page */
@@ -2253,8 +2387,12 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
         s->menu_open = 1;
         SDL_AtomicSet(&s->in_menu, 1);
         put_text(s->menu.message, sizeof s->menu.message, why[0] ? why : o->rom_hint ? o->rom_hint : "", 0);
-    } else if (!start_game(s)) { fprintf(stderr, "the game could not start (no FM core %s in this build?)\n", cfg->fm_core); SDL_Quit(); return 1; }
-    else if (s->resume) ask_load(s, 0);                   /* (quick resume: where the last run left off, if it was in play) */
+    } else if (o->net && !connect_session(s)) SDL_AtomicSet(&s->quit, 1);   /* (netplay: given up, or refused) */
+    else {
+        if (o->net) SDL_AtomicSet(&s->session, 1);
+        if (!start_game(s)) { fprintf(stderr, "the game could not start (no FM core %s in this build?)\n", cfg->fm_core); SDL_Quit(); return 1; }
+        if (s->resume && !o->net) ask_load(s, 0);         /* (quick resume: where the last run left off, if it was in play) */
+    }
     while (!SDL_AtomicGet(&s->quit)) {
         SDL_Event e;
         if (SDL_WaitEventTimeout(&e, 4)) do {
@@ -2280,6 +2418,16 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
         check_saves(s, 0);
         capture_status(s);
         if (s->quitting && s->pending < 0) quit(s);       /* (quick resume's state saved, or not to be) */
+        if (SDL_AtomicGet(&s->session) && SDL_AtomicGet(&s->net_over)) {   /* (netplay over: the game plays on alone) */
+            SDL_AtomicSet(&s->session, 0);
+            char line[200];
+            SDL_LockMutex(s->lock);
+            snprintf(line, sizeof line, "%s", s->net_line);
+            SDL_UnlockMutex(s->lock);
+            notice(s, line);
+            s->notice_until = SDL_GetTicks() + 6000;
+        }
+        if (SDL_AtomicGet(&s->session) && SDL_GetTicks() - s->net_shown >= 1000) { s->net_shown = SDL_GetTicks(); title_now(s); }
         if (s->notice_until) title_now(s);
         if (mdrt_settings_dirty(s->set) && SDL_GetTicks() - s->set_saved > 1000) settings_write(s);
     }
@@ -2306,7 +2454,7 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
         mdrt_free(s->m);
         mdrt_capture_free(s->cap);
         SDL_DestroyMutex(s->lock); SDL_DestroyMutex(s->cap_lock); SDL_DestroyMutex(s->save_lock);
-        free(s->loud); free(s->rom); free(s);
+        free(s->loud); free(s->stretched); free(s->rom); free(s);
     }
     SDL_Quit();
     return 0;

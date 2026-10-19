@@ -51,6 +51,10 @@ typedef struct mdrt_platform {
     /* the file a SAVE or LOAD request names (NULL, or no callback: the client's own choice); kept
      * by the platform until the next handshake */
     const char *(*request_path)(void *user);
+    /* the client waits on something of its own between handshakes (netplay's other player):
+     * called every millisecond or so while it does; nonzero: the platform is closing, and the game
+     * should stop (NULL: never) */
+    int (*idle)(void *user);
 } mdrt_platform;
 
 /* requests from the person playing, which the client carries out where it can (a state saved at
@@ -218,6 +222,8 @@ int mdrt_quiet(const mdrt *m);
 /* the platform's input now (the buttons its players hold), whether or not a pad source is set;
  * zeros when the platform has no input */
 void mdrt_platform_input(mdrt *m, uint16_t buttons[MDRT_PADS]);
+/* the client is waiting (mdrt_platform.idle): nonzero when the platform is closing */
+int mdrt_idle(mdrt *m);
 /* A hash of what the game can see, to compare two consoles (peers checking for a desync, tests):
  * the clock (the frame count, the position, the lines passed, the H-interrupt counter, the HV
  * counter's nudge), the VDP, the pads, save RAM, and the client's parts; not what only the player

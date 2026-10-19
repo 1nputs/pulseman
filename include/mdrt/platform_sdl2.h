@@ -48,6 +48,7 @@
 #ifndef MDRT_PLATFORM_SDL2_H
 #define MDRT_PLATFORM_SDL2_H
 #include "mdrt/mdrt.h"
+#include "mdrt/netplay.h"
 
 /* how a choice can also be found on disk (mdrt_sdl_option.browse): a line under it, label's,
  * with options_detail's text at its right, opens the menu's file browser in dir (from the working
@@ -133,6 +134,20 @@ typedef struct mdrt_sdl_options {
     /* the save RAM's file for the game about to start, asked after options_use (so it can follow
      * the client's options: another save for another set of its data); NULL, or a NULL return: sram_path */
     const char *(*sram_file)(void *user);
+    /* netplay (mdrt/netplay.h): a session the client made from its command line (mdrt_net_parse,
+     * mdrt_net_open_udp, mdrt_net_new; its local_input reading mdrt_platform_input), and its UDP
+     * link (locked once connected; NULL: another link). The window connects first, showing it (Esc
+     * gives up), then powers on; the game's function calls mdrt_net_start and mdrt_net_frame at its
+     * waits, mdrt_idle while told to wait. While the session lasts the window paces the frames by
+     * its clock without making up lost time (so a frame given back to keep in step is given) and
+     * stretches the sound a little to keep its queue; the menu does not stop the game; pause, the
+     * frame step, slow motion, fast-forward, rewind, the save slots, quick resume, reset, another
+     * ROM, the FM core and chip, the 4 Way Play adaptor (two pads) and pausing when the window loses
+     * focus are not to be had; save RAM is not written back; the title shows the round trip, the
+     * delay and the rollbacks. When it ends (the other left, the connection lost, a desync) the
+     * window says why and the game plays on alone. */
+    mdrt_net *net;
+    struct mdrt_udp *net_udp;
 } mdrt_sdl_options;
 
 /* the client's game: runs on the game thread with the console made from the configuration; when

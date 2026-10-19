@@ -45,6 +45,8 @@ struct mdrt_udp {
     int nq, capq;
 };
 
+static void put_out(mdrt_udp *u, const void *b, size_t n);
+
 static uint64_t ticks(void)
 {
 #ifdef _WIN32
@@ -194,6 +196,7 @@ mdrt_udp *mdrt_udp_open(uint16_t port, const char *peer, char *err, size_t errsi
 void mdrt_udp_close(mdrt_udp *u)
 {
     if (!u) return;
+    for (int i = 0; i < u->nq; i++) put_out(u, u->q[i].b, u->q[i].n);   /* (what the simulator held: sent now) */
     if (u->s != BAD_SOCK) close_sock(u->s);
     free(u->q);
     free(u);

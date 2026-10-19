@@ -76,6 +76,9 @@ void mdrt_net_free(mdrt_net *n);
 enum { MDRT_NET_CONNECTING, MDRT_NET_READY, MDRT_NET_REFUSED, MDRT_NET_ENDED,
        MDRT_NET_GO, MDRT_NET_WAIT, MDRT_NET_RESTART };
 int mdrt_net_connect(mdrt_net *n);
+/* where the session is: MDRT_NET_CONNECTING, MDRT_NET_GO (connected: playing), MDRT_NET_REFUSED or
+ * MDRT_NET_ENDED (mdrt_net_why) */
+int mdrt_net_state(const mdrt_net *n);
 int mdrt_net_is_host(const mdrt_net *n);
 uint8_t mdrt_net_pads(const mdrt_net *n);                /* the pads this peer plays (bit p: pad p + 1) */
 int mdrt_net_delay(const mdrt_net *n);
@@ -91,13 +94,17 @@ void mdrt_net_start(mdrt_net *n, mdrt *m);
  * loaded (a rollback): restart at the resumable point and play on. MDRT_NET_ENDED: the session is
  * over (mdrt_net_why); the console is as it was and can play on alone. */
 int mdrt_net_frame(mdrt_net *n, int resumable);
-/* say goodbye (the other's session ends at once rather than when it stops hearing from this one) */
+/* say goodbye (the other's session ends at once rather than when it stops hearing from this one).
+ * Neither this nor mdrt_net_free touches the console, which may be gone by then: a client that
+ * plays on alone after it sets its own pad source. (A session that ends inside mdrt_net_frame
+ * leaves the console as it was, its pad source the platform's.) */
 void mdrt_net_quit(mdrt_net *n);
 const char *mdrt_net_why(const mdrt_net *n);
 
 typedef struct mdrt_net_stats {
     uint32_t frame, remote_frame;   /* the last frame played here; the newest the other is known to have played */
     uint32_t confirmed;             /* frames whose buttons are all known */
+    uint32_t remote_has;            /* the newest frame of this peer's buttons the other is known to have */
     int rtt_ms;                     /* the round trip, smoothed (-1: not measured yet) */
     int delay;
     long rollbacks, replayed;       /* rollbacks, and the frames they played again */

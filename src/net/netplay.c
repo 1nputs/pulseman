@@ -119,17 +119,19 @@ static int count_bits(uint8_t v) { int k = 0; for (; v; v &= (uint8_t)(v - 1)) k
 static uint8_t my_pads(const mdrt_net *n) { return n->pads[n->host ? 0 : 1]; }
 static uint8_t their_pads(const mdrt_net *n) { return n->pads[n->host ? 1 : 0]; }
 
-static void end(mdrt_net *n, int result, const char *why)
+/* the session over; from inside mdrt_net_frame (detach: the console plays on alone) or not */
+static void end_with(mdrt_net *n, int result, const char *why, int detach)
 {
     if (n->phase == P_DONE) return;
     n->phase = P_DONE;
     n->result = result;
     snprintf(n->why, sizeof n->why, "%s", why);
-    if (n->m) {                                           /* (the console plays on alone) */
+    if (n->m && detach) {
         mdrt_set_pad_source(n->m, NULL, NULL);
         mdrt_set_quiet(n->m, 0);
     }
 }
+static void end(mdrt_net *n, int result, const char *why) { end_with(n, result, why, 1); }
 
 /* ---- the session's start ------------------------------------------------------------------------ */
 
@@ -173,7 +175,6 @@ mdrt_net *mdrt_net_new(const mdrt_net_config *c)
 void mdrt_net_free(mdrt_net *n)
 {
     if (!n) return;
-    if (n->m && n->phase != P_DONE) mdrt_set_pad_source(n->m, NULL, NULL);
     for (int i = 0; i < n->nsnaps; i++) free(n->snaps[i].buf);
     free(n->snaps);
     free(n->settings);
@@ -182,6 +183,10 @@ void mdrt_net_free(mdrt_net *n)
 }
 
 int mdrt_net_is_host(const mdrt_net *n) { return n->host; }
+int mdrt_net_state(const mdrt_net *n)
+{
+    return n->phase == P_DONE ? n->result : n->phase == P_RUNNING ? MDRT_NET_GO : MDRT_NET_CONNECTING;
+}
 uint8_t mdrt_net_pads(const mdrt_net *n) { return my_pads(n); }
 int mdrt_net_delay(const mdrt_net *n) { return n->delay; }
 const char *mdrt_net_why(const mdrt_net *n) { return n->why; }
@@ -695,8 +700,8 @@ int mdrt_net_frame(mdrt_net *n, int resumable)
 
 void mdrt_net_quit(mdrt_net *n)
 {
-    if (n->session) for (int i = 0; i < 3; i++) send_session(n, T_BYE);
-    end(n, MDRT_NET_ENDED, "this player left");
+    if (n->session && n->phase != P_DONE) for (int i = 0; i < 3; i++) send_session(n, T_BYE);
+    end_with(n, MDRT_NET_ENDED, "this player left", 0);
 }
 
 void mdrt_net_stats_get(const mdrt_net *n, mdrt_net_stats *s)
@@ -705,5 +710,6 @@ void mdrt_net_stats_get(const mdrt_net *n, mdrt_net_stats *s)
     s->frame = n->frame;
     s->remote_frame = n->their_frame;
     s->confirmed = n->remote_newest < n->local_newest ? n->remote_newest : n->local_newest;
+    s->remote_has = n->acked;
     s->delay = n->delay;
 }

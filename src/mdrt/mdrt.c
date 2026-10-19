@@ -455,6 +455,12 @@ void mdrt_platform_input(mdrt *m, uint16_t buttons[MDRT_PADS])
     memset(buttons, 0, MDRT_PADS * sizeof *buttons);
     if (p->input) p->input(p->user, buttons);
 }
+
+int mdrt_idle(mdrt *m)
+{
+    const mdrt_platform *p = &m->cfg.platform;
+    return p->idle ? p->idle(p->user) : 0;
+}
 unsigned mdrt_requests(const mdrt *m) { return m->requests; }
 const char *mdrt_request_path(const mdrt *m) { return m->request_path; }
 

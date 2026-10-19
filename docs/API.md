@@ -269,7 +269,16 @@ session starts); a joiner names the host's address; two peers that both connect 
 other's (a simultaneous open, which most home routers let through without a forwarded port).
 `mdrt_udp_link(u)` is the link for the configuration; `mdrt_udp_wait(u, ms)` sleeps until a datagram
 comes, for a caller told to wait; `mdrt_udp_simulate` delays, reorders, loses and doubles what it
-sends, for tests. Every client reads the same options: `mdrt_net_parse` takes `--host [PORT]`,
+sends, for tests. In the SDL2 platform, the client puts its session in `mdrt_sdl_options.net` (and the UDP link in
+`net_udp`): the window connects before the game starts (a page that says so, Esc giving up), then
+the game's function calls `mdrt_net_start` and `mdrt_net_frame` as above, and `mdrt_idle(m)` every
+millisecond or so while told to wait (nonzero: the window is closing, so say goodbye and stop).
+While the session lasts the window paces the frames by its clock and never makes up lost time (a
+frame given back to keep in step stays given), stretches the sound by up to half a per cent to
+keep its queue, and keeps the session's rules: the menu does not stop the game, and pause, the
+frame step, slow motion, fast-forward, rewind, the save slots, quick resume, reset, another ROM,
+the FM core and chip and the 4 Way Play adaptor are not to be had; save RAM is not read or written.
+`mdrt_net_state(n)` says where a session is. Every client reads the same options: `mdrt_net_parse` takes `--host [PORT]`,
 `--join ADDR[:PORT]`, `--peer ADDR[:PORT]`, `--port`, `--delay` and `--net-sim` from its command
 line (`MDRT_NET_USAGE`), and `mdrt_net_open_udp` opens the socket they ask for.
 
