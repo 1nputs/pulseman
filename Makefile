@@ -79,13 +79,15 @@ $(B)/examples/%: examples/%.c $(B)/libmdrt_sdl2.a $(B)/libmdrt.a
 	$(CC) $(CFLAGS) $(SDLCFLAGS) -o $@ $< $(B)/libmdrt_sdl2.a $(B)/libmdrt.a $(LDFLAGS) $(LDLIBS) $(SDLLIBS) -lm
 sdl: $(B)/libmdrt_sdl2.a $(EXAMPLES)
 
-# the platform played by a test thread under SDL's dummy video and disk sound (real time, ~10 s)
+# the platform played by a test thread under SDL's dummy video and disk sound (real time, ~10 s), and
+# its Online page with another player on the loopback (~15 s)
 $(B)/tests/sdl/%: tests/sdl/%.c tests/check.c $(B)/libmdrt_sdl2.a $(B)/libmdrt.a
 	@mkdir -p $(dir $@)
 	$(CC) $(CFLAGS) $(SDLCFLAGS) -Itests -o $@ $< tests/check.c $(B)/libmdrt_sdl2.a $(B)/libmdrt.a $(LDFLAGS) $(LDLIBS) $(SDLLIBS) -lm
-sdl-check: $(B)/tests/sdl/platform_test
-	@mkdir -p $(B)/sdltest
-	ASAN_OPTIONS=detect_leaks=0 $< $(B)/sdltest
+sdl-check: $(B)/tests/sdl/platform_test $(B)/tests/sdl/online_test
+	@mkdir -p $(B)/sdltest $(B)/sdlnet
+	ASAN_OPTIONS=detect_leaks=0 $(B)/tests/sdl/platform_test $(B)/sdltest
+	ASAN_OPTIONS=detect_leaks=0 $(B)/tests/sdl/online_test $(B)/sdlnet
 
 # (record_test records the runtime's own traces into build/record; they are replayed as vectors)
 check: all

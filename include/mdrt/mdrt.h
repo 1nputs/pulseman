@@ -224,6 +224,11 @@ int mdrt_quiet(const mdrt *m);
 void mdrt_platform_input(mdrt *m, uint16_t buttons[MDRT_PADS]);
 /* the client is waiting (mdrt_platform.idle): nonzero when the platform is closing */
 int mdrt_idle(mdrt *m);
+/* the netplay session this console plays in (mdrt/netplay.h), kept here for the client to find
+ * whoever made it (the client from its command line, or the platform from its menu); NULL: none */
+struct mdrt_net;
+void mdrt_set_net(mdrt *m, struct mdrt_net *n);
+struct mdrt_net *mdrt_get_net(const mdrt *m);
 /* A hash of what the game can see, to compare two consoles (peers checking for a desync, tests):
  * the clock (the frame count, the position, the lines passed, the H-interrupt counter, the HV
  * counter's nudge), the VDP, the pads, save RAM, and the client's parts; not what only the player

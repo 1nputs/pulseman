@@ -94,18 +94,22 @@ static const char *const replay_label[5] = { "off", "10 seconds", "20 seconds", 
 static const char *const gif_scale_label[3] = { "1x", "2x", "3x" };
 static const int fast_speeds[6] = { 2, 3, 4, 6, 8, 0 };
 static const char *const fast_label[6] = { "2x", "3x", "4x", "6x", "8x", "as fast as it goes" };
+enum { NET_HOST, NET_JOIN, NET_BOTH };
+static const char *const net_role_name[3] = { "host", "join", "both" };
+static const char *const net_role_label[3] = { "host (player 1)", "join a host", "both connect" };
 
 #define VOLUME_STEP 10
 #define ROM_MAX (16u << 20)                               /* (no cartridge is larger) */
 
 /* the menu's pages and items */
 enum { PAGE_MAIN, PAGE_VIDEO, PAGE_SOUND, PAGE_OPTIONS, PAGE_KEYS, PAGE_ROM, PAGE_PLAYERS, PAGE_CBUTTONS, PAGE_SAVE, PAGE_LOAD, PAGE_CAPTURE,
-       PAGE_CLIENT, PAGE_PICK };
+       PAGE_CLIENT, PAGE_PICK, PAGE_NET };
 enum { SLOT_COUNT = 8 };                                  /* save slots; 0 is quick resume's */
 enum { I_RESUME = 1, I_ROM, I_RESET, I_SAVE, I_LOAD, I_VIDEO, I_SOUND, I_OPTIONS, I_KEYS, I_QUIT, I_BACK,
        I_UPSCALE, I_SCALE, I_ASPECT, I_FULL, I_VSYNC, I_COLOURS, I_BLEND, I_SCANLINES, I_MASK, I_VOLUME, I_MUTE, I_FM_CORE, I_FM_CHIP, I_FOCUS, I_FAST, I_UP,
        I_PLAYERS, I_ADAPTOR, I_TURBO, I_DEADZONE, I_CBUTTONS, I_RESUME_OPT,
        I_CAPTURE, I_CAP_REPLAY, I_CAP_RECORD, I_CAP_SECONDS, I_CAP_GIFSCALE, I_USE,
+       I_NET, I_NET_ROLE, I_NET_ADDR, I_NET_PORT, I_NET_DELAY, I_NET_START, I_NET_LEAVE,
        I_SLOT = 800,             /* + slot (1-8) */
        I_PLAYER = 900,           /* + player (0-3) */
        I_PAD = 1000,             /* + pad * BUTTONS + button */
@@ -155,8 +159,14 @@ typedef struct sdl {
     int16_t *loud;              /* the frame's sound at the volume */
     /* netplay (o->net): a session going on (until it ends, the window's thread clears it), the game
      * thread's word that it ended, and its line for the title (s->lock); the sound stretched */
-    SDL_atomic_t session, net_over;
+    SDL_atomic_t session, net_over, net_leave;
     char net_line[200];
+    mdrt_net *net;              /* the session (the client's from its command line, or the menu's: owned) */
+    mdrt_udp *net_udp;
+    int net_owned;
+    int net_role, net_port, net_delay;   /* the Online page's, kept in the settings */
+    uint64_t net_idle;          /* the game thread's time in mdrt_idle since its last frame (performance counts) */
+    char net_addr[96];
     uint32_t net_shown;
     int16_t *stretched;
     size_t stretched_cap;
@@ -334,12 +344,17 @@ static int ending(sdl *s) { return SDL_AtomicGet(&s->quit) || SDL_AtomicGet(&s->
 /* netplay's line for the title, and its end, from the game thread (twice a second) */
 static void net_status(sdl *s)
 {
-    if (s->waits % 30) return;
+    if (s->waits % 30 && !SDL_AtomicGet(&s->net_leave)) return;
+    if (SDL_AtomicSet(&s->net_leave, 0) && mdrt_net_state(s->net) == MDRT_NET_GO) {   /* (the player left from the menu) */
+        mdrt_net_quit(s->net);
+        mdrt_set_pad_source(s->m, NULL, NULL);
+        mdrt_set_quiet(s->m, 0);
+    }
     mdrt_net_stats st;
-    mdrt_net_stats_get(s->o->net, &st);
-    int state = mdrt_net_state(s->o->net);
+    mdrt_net_stats_get(s->net, &st);
+    int state = mdrt_net_state(s->net);
     SDL_LockMutex(s->lock);
-    if (state == MDRT_NET_ENDED || state == MDRT_NET_REFUSED) snprintf(s->net_line, sizeof s->net_line, "netplay: %s", mdrt_net_why(s->o->net));
+    if (state == MDRT_NET_ENDED || state == MDRT_NET_REFUSED) snprintf(s->net_line, sizeof s->net_line, "netplay: %s", mdrt_net_why(s->net));
     else snprintf(s->net_line, sizeof s->net_line, "netplay: %d ms, delay %d, rollback %d (%d at most)%s", st.rtt_ms, st.delay,
                   st.last_replayed, st.most_replayed, st.lost ? ", connection lost" : "");
     SDL_UnlockMutex(s->lock);
@@ -349,12 +364,15 @@ static void net_status(sdl *s)
 static int wait(void *user)
 {
     sdl *s = user;
-    if (SDL_AtomicGet(&s->session)) {                     /* netplay: by the clock, lost time not made up */
+    if (SDL_AtomicGet(&s->session)) {                     /* netplay: by the clock; time spent waiting on the other not made up */
         s->waits++;
         net_status(s);
         uint64_t freq = SDL_GetPerformanceFrequency(), now = SDL_GetPerformanceCounter();
         uint64_t period = freq * mdrt_frame_mclks(s->m) / mdrt_master_clock(s->m);
-        if (!s->next_tick || now > s->next_tick) s->next_tick = now;
+        if (!s->next_tick) s->next_tick = now;
+        s->next_tick += s->net_idle;                      /* (a frame given back stays given) */
+        s->net_idle = 0;
+        if (now > s->next_tick + period * 4) s->next_tick = now;   /* (far behind: from now) */
         s->next_tick += period;
         while ((now = SDL_GetPerformanceCounter()) < s->next_tick && !ending(s)) {
             uint64_t ms = (s->next_tick - now) * 1000 / freq;
@@ -418,7 +436,24 @@ static const char *request_path(void *user)
     return s->game_path[0] ? s->game_path : NULL;
 }
 
-static int idle(void *user) { return ending(user); }
+/* the client waits on netplay: a millisecond (until a datagram comes), a leaving seen to */
+static int idle(void *user)
+{
+    sdl *s = user;
+    uint64_t t0 = SDL_GetPerformanceCounter();
+    if (SDL_AtomicGet(&s->session) && SDL_AtomicGet(&s->net_leave)) net_status(s);
+    if (s->net_udp) mdrt_udp_wait(s->net_udp, 1);
+    else SDL_Delay(1);
+    s->net_idle += SDL_GetPerformanceCounter() - t0;
+    return ending(s);
+}
+
+/* the window's sessions: each player's buttons from the window's players in turn */
+static void net_input(void *user, uint16_t b[MDRT_PADS])
+{
+    sdl *s = user;
+    for (int p = 0; p < MDRT_PADS; p++) b[p] = (uint16_t)SDL_AtomicGet(&s->buttons[p]);
+}
 
 static int game_thread(void *user)
 {
@@ -438,6 +473,10 @@ static int start_game(sdl *s)
     s->m = mdrt_new(s->cfg);
     if (!s->m) return 0;
     mdrt_pads_set_adaptor(mdrt_get_pads(s->m), SDL_AtomicGet(&s->session) ? MDRT_ADAPTOR_NONE : s->adaptor);   /* (in the ports at power on) */
+    if (SDL_AtomicGet(&s->session) && s->net) {           /* (netplay: from this power on) */
+        mdrt_set_net(s->m, s->net);
+        mdrt_net_start(s->net, s->m);
+    }
     if (s->o->options_use && s->opt_values) s->o->options_use(s->opt_values, s->user);   /* (the client's, for this game) */
     const char *save = s->o->sram_file ? s->o->sram_file(s->user) : NULL;
     snprintf(s->sram_file, sizeof s->sram_file, "%s", save ? save : s->o->sram_path ? s->o->sram_path : "");
@@ -758,7 +797,9 @@ static void settings_load(sdl *s)
             "# audio.fm_core: nuked or ymfm. audio.fm_chip: YM2612 or YM3438.\n"
             "# general.fast_forward: times the speed while it is held (0: as fast as it goes).\n"
             "# capture.replay: the seconds kept for the replay (0: off). capture.gif_scale: 1-3. A\n"
-            "# control's key may have Shift+, Ctrl+ or Alt+ before it.\n";
+            "# control's key may have Shift+, Ctrl+ or Alt+ before it.\n"
+            "# netplay (the Online page): role host, join or both (each connecting to the other at once);\n"
+            "# address: the other's (join, both); port: the host's, or both's; delay: input delay, frames.\n";
         mdrt_settings_parse(s->set, head, sizeof head - 1);
     }
     const char *defaults[][2] = {
@@ -771,6 +812,16 @@ static void settings_load(sdl *s)
         { "general.pause_on_focus_loss", "1" }, { "general.fast_forward", "4" }, { "general.screenshots", "screenshots" },
     };
     for (size_t i = 0; i < sizeof defaults / sizeof *defaults; i++) mdrt_settings_default(s->set, defaults[i][0], defaults[i][1]);
+    if (s->o->net_identity) {                             /* (the Online page's: a client that plays online) */
+        mdrt_settings_default(s->set, "netplay.role", "host");
+        mdrt_settings_default(s->set, "netplay.address", "");
+        mdrt_settings_default(s->set, "netplay.port", "7000");
+        mdrt_settings_default(s->set, "netplay.delay", "2");
+        s->net_role = named(mdrt_settings_get(s->set, "netplay.role"), net_role_name, 3, NET_HOST);
+        snprintf(s->net_addr, sizeof s->net_addr, "%s", mdrt_settings_get(s->set, "netplay.address") ? mdrt_settings_get(s->set, "netplay.address") : "");
+        s->net_port = clamp(mdrt_settings_get_int(s->set, "netplay.port", MDRT_UDP_PORT), 1, 65535);
+        s->net_delay = clamp(mdrt_settings_get_int(s->set, "netplay.delay", 2), 0, MDRT_NET_MAX_DELAY);
+    }
     for (int p = 0; p < MDRT_PADS; p++) {
         char k[48];
         for (int b = 0; b < BUTTONS; b++) {
@@ -1245,6 +1296,7 @@ static void kept_path(char *out, size_t size, const char *path)
 }
 
 static void build_page(sdl *s, int page, int select);
+static void net_begin(sdl *s);
 
 /* the Players page's choices: none, then each controller slot with what is plugged into it */
 static void ctrl_choices(sdl *s)
@@ -1377,6 +1429,8 @@ static void build_page(sdl *s, int page, int select)
         mdrt_menu_add(m, I_CAPTURE, MDRT_ITEM_ACTION, "Capture");
         mdrt_menu_add(m, I_SOUND, MDRT_ITEM_ACTION, "Sound");
         mdrt_menu_add(m, I_PLAYERS, MDRT_ITEM_ACTION, "Players");
+        if (s->o->net_identity && (it = mdrt_menu_add(m, I_NET, MDRT_ITEM_ACTION, "Online play")))
+            snprintf(it->detail, sizeof it->detail, "%s", SDL_AtomicGet(&s->session) ? "playing" : "");
         for (int p = 0; s->opt_values && p < client_pages(s); p++) {
             mdrt_sdl_page cp = client_page(s, p);
             if (cp.title) mdrt_menu_add(m, I_CPAGE + p, MDRT_ITEM_ACTION, cp.title);
@@ -1539,6 +1593,37 @@ static void build_page(sdl *s, int page, int select)
         if (dir_up(up)) mdrt_menu_add(m, I_UP, MDRT_ITEM_ACTION, "..  (the folder above)");
         for (int i = 0; i < s->nentries; i++) mdrt_menu_add(m, I_ENTRY + i, MDRT_ITEM_ACTION, s->entries[i]);
         if (!s->nentries) mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "(nothing here)");
+        break;
+    }
+    case PAGE_NET: {                                      /* two players, each at their own machine */
+        int on = SDL_AtomicGet(&s->session);
+        mdrt_menu_page(m, "Online play");
+        SDL_LockMutex(s->lock);
+        if (on) snprintf(m->subtitle, sizeof m->subtitle, "Playing online: %.120s", s->net_line[0] ? s->net_line + 9 : "connected");
+        else if (s->net_line[0]) snprintf(m->subtitle, sizeof m->subtitle, "Last time: %.120s", s->net_line + 9);
+        else snprintf(m->subtitle, sizeof m->subtitle, "Two players, each at their own machine, from power on");
+        SDL_UnlockMutex(s->lock);
+        char port[8];
+        snprintf(port, sizeof port, "%d", s->net_port);
+        if (on) mdrt_menu_add(m, I_NET_LEAVE, MDRT_ITEM_ACTION, "Leave the session");
+        else {
+            mdrt_menu_add_choice(m, I_NET_ROLE, "Play as", net_role_label, 3, s->net_role);
+            if (s->net_role != NET_HOST)
+                mdrt_menu_add_field(m, I_NET_ADDR, s->net_role == NET_JOIN ? "Host's address" : "Their address", s->net_addr, 60,
+                                    "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.:-[]");
+            mdrt_menu_add_field(m, I_NET_PORT, s->net_role == NET_JOIN ? "The host's port" : "Port", port, 5, "0123456789");
+            mdrt_menu_add_number(m, I_NET_DELAY, "Input delay", s->net_delay, 0, MDRT_NET_MAX_DELAY, 1, " frames");
+            mdrt_menu_add(m, I_NET_START, MDRT_ITEM_ACTION, s->net_role == NET_HOST ? "Start hosting" : "Connect and play");
+        }
+        mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "");
+        static const char *const help[3][3] = {
+            { "Tell the other player your public address.", "Your router must let this UDP port in to you,", "or play on one LAN, or a VPN such as Tailscale." },
+            { "The host's public address (or LAN or VPN one).", "Add :port to it if the host's port is another.", "The host is player 1, you player 2." },
+            { "Each of you types the other's public address", "and starts: most routers need no setup then.", "The two games decide who is player 1." },
+        };
+        for (int i = 0; i < 3; i++) mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, help[s->net_role][i]);
+        mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "Both need this build. While you play together,");
+        mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "pause, rewind and the save slots are off.");
         break;
     }
     }
@@ -1804,6 +1889,37 @@ static void act(sdl *s, int id)
         mdrt_settings_set_int(s->set, "general.resume", s->resume);
         return;
     case I_VIDEO: build_page(s, PAGE_VIDEO, I_UPSCALE); return;
+    case I_NET: build_page(s, PAGE_NET, SDL_AtomicGet(&s->session) ? I_NET_LEAVE : I_NET_START); return;
+    case I_NET_ROLE:
+        s->net_role = it->value;
+        mdrt_settings_set(s->set, "netplay.role", net_role_name[s->net_role]);
+        build_page(s, PAGE_NET, I_NET_ROLE);
+        return;
+    case I_NET_ADDR:
+        snprintf(s->net_addr, sizeof s->net_addr, "%s", it->detail);
+        mdrt_settings_set(s->set, "netplay.address", s->net_addr);
+        return;
+    case I_NET_PORT: {
+        int port = atoi(it->detail);
+        if (port < 1 || port > 65535) {
+            snprintf(it->detail, sizeof it->detail, "%d", s->net_port);
+            snprintf(s->menu.message, sizeof s->menu.message, "A port is 1 to 65535");
+            return;
+        }
+        s->net_port = port;
+        mdrt_settings_set_int(s->set, "netplay.port", port);
+        return;
+    }
+    case I_NET_DELAY:
+        s->net_delay = it->value;
+        mdrt_settings_set_int(s->set, "netplay.delay", s->net_delay);
+        return;
+    case I_NET_START: net_begin(s); return;
+    case I_NET_LEAVE:
+        SDL_AtomicSet(&s->net_leave, 1);
+        close_menu(s);
+        notice(s, "netplay: leaving");
+        return;
     case I_CAPTURE: build_page(s, PAGE_CAPTURE, s->replay ? I_CAP_REPLAY : I_CAP_RECORD); return;
     case I_CAP_REPLAY:                                    /* (saved while the menu stays) */
         snprintf(s->menu.message, sizeof s->menu.message, "%s", save_replay(s));
@@ -1848,7 +1964,8 @@ static void act(sdl *s, int id)
     case I_QUIT: if (!running || confirmed(s, id, "quit")) request_quit(s); return;
     case I_BACK:
         if (s->page == PAGE_CBUTTONS) { build_page(s, PAGE_PLAYERS, I_CBUTTONS); return; }
-        build_page(s, PAGE_MAIN, s->page == PAGE_VIDEO ? I_VIDEO : s->page == PAGE_CAPTURE ? I_CAPTURE : s->page == PAGE_CLIENT ? I_CPAGE + s->cpage
+        build_page(s, PAGE_MAIN, s->page == PAGE_VIDEO ? I_VIDEO : s->page == PAGE_CAPTURE ? I_CAPTURE : s->page == PAGE_NET ? I_NET
+                                 : s->page == PAGE_CLIENT ? I_CPAGE + s->cpage
                                  : s->page == PAGE_SOUND ? I_SOUND : s->page == PAGE_OPTIONS ? I_OPTIONS
                                  : s->page == PAGE_PLAYERS ? I_PLAYERS : s->page == PAGE_SAVE ? I_SAVE : s->page == PAGE_LOAD ? I_LOAD : I_KEYS);
         return;
@@ -2002,6 +2119,17 @@ static void key_pressed(sdl *s, SDL_Scancode k, SDL_Keymod mod, int repeat)
     if (k == SDL_SCANCODE_RETURN && (mod & KMOD_ALT)) { if (!repeat) set_fullscreen(s, !is_fullscreen(s)); return; }
     if (s->menu_open) {
         if (s->binding >= 0) { if (!repeat) bind_key(s, k, mod); s->redraw = 1; return; }
+        if (s->menu.editing >= 0) {                       /* (a field: its text comes as SDL_TEXTINPUT) */
+            if (k == SDL_SCANCODE_BACKSPACE) mdrt_menu_erase(&s->menu);
+            else if ((k == SDL_SCANCODE_RETURN || k == SDL_SCANCODE_KP_ENTER) && !repeat) menu_input(s, MDRT_MENU_OK);
+            else if (k == SDL_SCANCODE_ESCAPE && !repeat) menu_input(s, MDRT_MENU_BACK);
+            else if (k == SDL_SCANCODE_V && (mod & (KMOD_CTRL | KMOD_GUI))) {
+                char *clip = SDL_GetClipboardText();
+                if (clip) { mdrt_menu_type(&s->menu, clip); SDL_free(clip); }
+            }
+            s->redraw = 1;
+            return;
+        }
         int in = k == SDL_SCANCODE_UP ? MDRT_MENU_UP : k == SDL_SCANCODE_DOWN ? MDRT_MENU_DOWN :
                  k == SDL_SCANCODE_LEFT ? MDRT_MENU_LEFT : k == SDL_SCANCODE_RIGHT ? MDRT_MENU_RIGHT :
                  k == SDL_SCANCODE_RETURN || k == SDL_SCANCODE_KP_ENTER || k == SDL_SCANCODE_SPACE ? MDRT_MENU_OK :
@@ -2291,22 +2419,23 @@ static void net_page(sdl *s, const char *const *lines, int n)
 
 static int connect_session(sdl *s)
 {
-    mdrt_net *n = s->o->net;
+    mdrt_net *n = s->net;
     char where[160], peer[96], why[200];
-    if (s->o->net_udp) snprintf(where, sizeof where, mdrt_net_is_host(n) ? "Hosting on port %u" : "On port %u, reaching %s",
-                                (unsigned)mdrt_udp_port(s->o->net_udp), mdrt_udp_peer(s->o->net_udp, peer, sizeof peer));
+    if (s->net_udp) snprintf(where, sizeof where, mdrt_net_is_host(n) ? "Hosting on port %u" : "On port %u, reaching %s",
+                             (unsigned)mdrt_udp_port(s->net_udp), mdrt_udp_peer(s->net_udp, peer, sizeof peer));
     else snprintf(where, sizeof where, "Connecting");
     notice(s, "netplay: waiting for the other player");
     for (uint32_t t0 = SDL_GetTicks();;) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
-            if (e.type == SDL_QUIT || (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_ESCAPE)) return 0;
+            if (e.type == SDL_QUIT) return -1;
+            if (e.type == SDL_KEYDOWN && e.key.keysym.scancode == SDL_SCANCODE_ESCAPE) return 0;
             if (e.type == SDL_WINDOWEVENT || e.type == SDL_RENDER_TARGETS_RESET) s->redraw = 1;
         }
         int r = mdrt_net_connect(n);
         if (r == MDRT_NET_READY) {
-            if (s->o->net_udp) mdrt_udp_lock(s->o->net_udp);
-            snprintf(why, sizeof why, "netplay: playing with %s, %s", s->o->net_udp ? mdrt_udp_peer(s->o->net_udp, peer, sizeof peer) : "the other player",
+            if (s->net_udp) mdrt_udp_lock(s->net_udp);
+            snprintf(why, sizeof why, "netplay: playing with %s, %s", s->net_udp ? mdrt_udp_peer(s->net_udp, peer, sizeof peer) : "the other player",
                      mdrt_net_is_host(n) ? "you are player 1" : "you are player 2");
             notice(s, why);
             return 1;
@@ -2316,8 +2445,10 @@ static int connect_session(sdl *s)
             const char *lines[] = { "Netplay: no game", why, "", "Esc or close the window" };
             net_page(s, lines, 4);
             fprintf(stderr, "netplay: %s\n", why);
+            snprintf(s->net_line, sizeof s->net_line, "netplay: %.180s", why);
             for (;;) {
-                if (SDL_WaitEvent(&e) && (e.type == SDL_QUIT || e.type == SDL_KEYDOWN)) return 0;
+                if (SDL_WaitEvent(&e) && e.type == SDL_QUIT) return -1;
+                if (e.type == SDL_KEYDOWN) return 0;
                 if (e.type == SDL_WINDOWEVENT) { s->redraw = 1; net_page(s, lines, 4); }
             }
         }
@@ -2326,8 +2457,60 @@ static int connect_session(sdl *s)
         const char *refused = mdrt_net_why(n);
         const char *lines[] = { "Netplay: waiting for the other player", where, since, refused[0] ? refused : "", "", "Esc gives up" };
         net_page(s, lines, 6);
-        if (s->o->net_udp) mdrt_udp_wait(s->o->net_udp, 15);
+        if (s->net_udp) mdrt_udp_wait(s->net_udp, 15);
         else SDL_Delay(15);
+    }
+}
+
+/* the menu's session, once its game has stopped: freed */
+static void net_free_owned(sdl *s)
+{
+    if (!s->net_owned) return;
+    if (mdrt_net_state(s->net) == MDRT_NET_GO) mdrt_net_quit(s->net);   /* (still playing: goodbye) */
+    mdrt_net_free(s->net);
+    mdrt_udp_close(s->net_udp);
+    s->net = NULL;
+    s->net_udp = NULL;
+    s->net_owned = 0;
+}
+
+/* the Online page's Start: a socket and a session as it says, the game stopped, connected, then a new
+ * power on in the session (or, given up or refused, alone again with the page saying why) */
+static void net_begin(sdl *s)
+{
+    char err[200], addr[128];
+    if (s->net_role != NET_HOST && !s->net_addr[0]) { snprintf(s->menu.message, sizeof s->menu.message, "Type their address first"); return; }
+    if (s->thread && !confirmed(s, I_NET_START, "stop this game and play online")) return;
+    if (s->net_role != NET_HOST) {                        /* (the port the page says, unless the address has one) */
+        const char *colon = strrchr(s->net_addr, ':');
+        int has_port = colon && (s->net_addr[0] == '[' ? colon > strchr(s->net_addr, ']') : strchr(s->net_addr, ':') == colon);
+        if (has_port) snprintf(addr, sizeof addr, "%s", s->net_addr);
+        else snprintf(addr, sizeof addr, strchr(s->net_addr, ':') ? "[%s]:%d" : "%s:%d", s->net_addr, s->net_port);
+    }
+    mdrt_udp *u = mdrt_udp_open(s->net_role == NET_JOIN ? 0 : (uint16_t)s->net_port, s->net_role == NET_HOST ? NULL : addr, err, sizeof err);
+    if (!u) { snprintf(s->menu.message, sizeof s->menu.message, "%.120s", err); return; }
+    mdrt_net_config c = { .role = s->net_role == NET_HOST ? MDRT_NET_HOST : s->net_role == NET_JOIN ? MDRT_NET_JOIN : MDRT_NET_EITHER,
+                          .identity = s->o->net_identity, .local_input = net_input, .input_user = s, .delay = s->net_delay,
+                          .window = 8, .rollback = 30, .check_every = 60 };
+    c.link = mdrt_udp_link(u);
+    mdrt_net *n = mdrt_net_new(&c);
+    if (!n) { mdrt_udp_close(u); snprintf(s->menu.message, sizeof s->menu.message, "Netplay could not start"); return; }
+    if (!stop_game(s)) { mdrt_net_free(n); mdrt_udp_close(u); snprintf(s->menu.message, sizeof s->menu.message, "The game would not stop"); return; }
+    net_free_owned(s);
+    s->net = n;
+    s->net_udp = u;
+    s->net_owned = 1;
+    SDL_AtomicSet(&s->net_over, 0);
+    s->net_line[0] = 0;
+    close_menu(s);
+    int r = connect_session(s);
+    if (r < 0) { SDL_AtomicSet(&s->quit, 1); return; }
+    if (r > 0) SDL_AtomicSet(&s->session, 1);
+    if (!start_game(s)) { open_menu(s, PAGE_MAIN, I_ROM); snprintf(s->menu.message, sizeof s->menu.message, "The game could not start"); return; }
+    if (!r) {                                             /* (alone again: the page says why) */
+        if (!s->net_line[0]) snprintf(s->net_line, sizeof s->net_line, "netplay: given up");
+        net_free_owned(s);
+        open_menu(s, PAGE_NET, I_NET_START);
     }
 }
 
@@ -2387,7 +2570,7 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
         s->menu_open = 1;
         SDL_AtomicSet(&s->in_menu, 1);
         put_text(s->menu.message, sizeof s->menu.message, why[0] ? why : o->rom_hint ? o->rom_hint : "", 0);
-    } else if (o->net && !connect_session(s)) SDL_AtomicSet(&s->quit, 1);   /* (netplay: given up, or refused) */
+    } else if (o->net && (s->net = o->net, s->net_udp = o->net_udp, connect_session(s) <= 0)) SDL_AtomicSet(&s->quit, 1);   /* (netplay: given up, or refused) */
     else {
         if (o->net) SDL_AtomicSet(&s->session, 1);
         if (!start_game(s)) { fprintf(stderr, "the game could not start (no FM core %s in this build?)\n", cfg->fm_core); SDL_Quit(); return 1; }
@@ -2401,6 +2584,8 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
                 SDL_Scancode k = e.key.keysym.scancode;
                 if (k > SDL_SCANCODE_UNKNOWN && k < SDL_NUM_SCANCODES && !s->menu_open) s->down[k] = e.type == SDL_KEYDOWN;
                 if (e.type == SDL_KEYDOWN) key_pressed(s, k, (SDL_Keymod)e.key.keysym.mod, e.key.repeat);
+            } else if (e.type == SDL_TEXTINPUT) {
+                if (s->menu_open && s->menu.editing >= 0 && mdrt_menu_type(&s->menu, e.text.text)) s->redraw = 1;
             } else if (e.type == SDL_CONTROLLERBUTTONDOWN) pad_pressed(s, (SDL_GameControllerButton)e.cbutton.button);
             else if (e.type == SDL_WINDOWEVENT) window_event(s, &e.window);
             else if (e.type == SDL_RENDER_TARGETS_RESET) s->redraw = 1;
@@ -2454,6 +2639,7 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
         mdrt_free(s->m);
         mdrt_capture_free(s->cap);
         SDL_DestroyMutex(s->lock); SDL_DestroyMutex(s->cap_lock); SDL_DestroyMutex(s->save_lock);
+        net_free_owned(s);
         free(s->loud); free(s->stretched); free(s->rom); free(s);
     }
     SDL_Quit();

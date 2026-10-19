@@ -269,12 +269,19 @@ session starts); a joiner names the host's address; two peers that both connect 
 other's (a simultaneous open, which most home routers let through without a forwarded port).
 `mdrt_udp_link(u)` is the link for the configuration; `mdrt_udp_wait(u, ms)` sleeps until a datagram
 comes, for a caller told to wait; `mdrt_udp_simulate` delays, reorders, loses and doubles what it
-sends, for tests. In the SDL2 platform, the client puts its session in `mdrt_sdl_options.net` (and the UDP link in
-`net_udp`): the window connects before the game starts (a page that says so, Esc giving up), then
-the game's function calls `mdrt_net_start` and `mdrt_net_frame` as above, and `mdrt_idle(m)` every
-millisecond or so while told to wait (nonzero: the window is closing, so say goodbye and stop).
-While the session lasts the window paces the frames by its clock and never makes up lost time (a
-frame given back to keep in step stays given), stretches the sound by up to half a per cent to
+sends, for tests. In the SDL2 platform a client that plays online gives `mdrt_sdl_options.net_identity`, and the
+menu has an Online play page: host, join a host, or both connecting at once; the other's address
+and the port (fields the player types into, kept in the settings file); the input delay; and Start,
+which stops the game, connects, and powers on again in the session (or Leave, during one). A client
+can also make a session from its command line and put it in `mdrt_sdl_options.net` (its UDP link
+in `net_udp`). Either way the window connects before the game starts (a page that says so, Esc
+giving up), then powers on a new console with the session started on it: the game's function
+finds it with `mdrt_get_net(m)`, calls `mdrt_net_frame` at its waits as above, and `mdrt_idle(m)`
+while told to wait (the window waits a millisecond there; nonzero: the window is closing, so say
+goodbye and stop).
+While the session lasts the window paces the frames by its clock and never makes up the time the
+game spent waiting on the other player in `mdrt_idle` (a frame given back to keep in step stays
+given; other lateness is caught up as ever), stretches the sound by up to half a per cent to
 keep its queue, and keeps the session's rules: the menu does not stop the game, and pause, the
 frame step, slow motion, fast-forward, rewind, the save slots, quick resume, reset, another ROM,
 the FM core and chip and the 4 Way Play adaptor are not to be had; save RAM is not read or written.

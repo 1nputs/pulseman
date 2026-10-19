@@ -50,8 +50,9 @@ motion and frame step, full screen and hi-DPI, vsync (no tearing; the game keeps
 scaling (sharp, integer, fit; square or 4:3) with the upscalers and looks above, screenshots,
 replays and recordings as GIFs, save slots with a picture each, quick resume, and a menu (Esc) with
 the ROM browser, reset, states, video, capture, sound (the FM core and chip changed live), players,
-keys, and pages of the client's own options handed to it before every power on. And netplay's
-window: it connects before the game starts, then paces by the clock and keeps the session's
+keys, and pages of the client's own options handed to it before every power on. And netplay: an
+Online play page (host, join, or both connecting; the address and port typed in; the input delay),
+the window connecting before the game starts, then pacing by the clock and keeping the session's
 rules (no pause, rewind or states while two play).
 
 ## Building and checking

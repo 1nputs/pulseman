@@ -134,18 +134,27 @@ typedef struct mdrt_sdl_options {
     /* the save RAM's file for the game about to start, asked after options_use (so it can follow
      * the client's options: another save for another set of its data); NULL, or a NULL return: sram_path */
     const char *(*sram_file)(void *user);
-    /* netplay (mdrt/netplay.h): a session the client made from its command line (mdrt_net_parse,
-     * mdrt_net_open_udp, mdrt_net_new; its local_input reading mdrt_platform_input), and its UDP
-     * link (locked once connected; NULL: another link). The window connects first, showing it (Esc
-     * gives up), then powers on; the game's function calls mdrt_net_start and mdrt_net_frame at its
-     * waits, mdrt_idle while told to wait. While the session lasts the window paces the frames by
-     * its clock without making up lost time (so a frame given back to keep in step is given) and
+    /* netplay (mdrt/netplay.h). net_identity: the client's identity for a session (what must match
+     * between the two: its build, the ROM, settings), which puts the Online page in the menu: the
+     * player picks host, join or both connecting, the address, port and input delay (kept in the
+     * settings file), and starts a session there; NULL: no netplay. net: a session the client made
+     * from its command line instead (mdrt_net_parse, mdrt_net_open_udp, mdrt_net_new; its
+     * local_input reading mdrt_platform_input), and net_udp its UDP link (NULL: another link).
+     * Either way the window connects first, showing it (Esc gives up), then powers on a new console
+     * with the session started on it (mdrt_set_net, mdrt_net_start: the console's pad source); the
+     * game's function finds it with mdrt_get_net and calls mdrt_net_frame at its waits, and
+     * mdrt_idle while told to wait (the window waits a millisecond there, and says when it is
+     * closing). The window's own sessions take each player's buttons from the window's players in
+     * turn (pad 1's controls for the first pad the peer plays). While the session lasts the window paces the frames by
+     * its clock, never making up the time the game spent waiting on the other (in mdrt_idle: so a
+     * frame given back to keep in step is given), and
      * stretches the sound a little to keep its queue; the menu does not stop the game; pause, the
      * frame step, slow motion, fast-forward, rewind, the save slots, quick resume, reset, another
      * ROM, the FM core and chip, the 4 Way Play adaptor (two pads) and pausing when the window loses
      * focus are not to be had; save RAM is not written back; the title shows the round trip, the
      * delay and the rollbacks. When it ends (the other left, the connection lost, a desync) the
      * window says why and the game plays on alone. */
+    const char *net_identity;
     mdrt_net *net;
     struct mdrt_udp *net_udp;
 } mdrt_sdl_options;

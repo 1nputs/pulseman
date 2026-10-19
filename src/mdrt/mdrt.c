@@ -51,6 +51,7 @@ struct mdrt {
     mdrt_hint_fn hint;
     void *hint_user;
     int quiet;                  /* quiet handshakes to come (frames played again: mdrt_set_quiet) */
+    struct mdrt_net *net;       /* the netplay session it plays in (mdrt_set_net) */
     uint8_t fixed_kind[8];      /* the console's sections' kinds (CONS's own: mdrt_sim_hash) */
     uint8_t *scratch;           /* a section's bytes, for the simulation hash */
     size_t scratch_cap;
@@ -455,6 +456,9 @@ void mdrt_platform_input(mdrt *m, uint16_t buttons[MDRT_PADS])
     memset(buttons, 0, MDRT_PADS * sizeof *buttons);
     if (p->input) p->input(p->user, buttons);
 }
+
+void mdrt_set_net(mdrt *m, struct mdrt_net *n) { m->net = n; }
+struct mdrt_net *mdrt_get_net(const mdrt *m) { return m->net; }
 
 int mdrt_idle(mdrt *m)
 {

@@ -124,6 +124,7 @@ void mdrt_menu_init(mdrt_menu *m)
 {
     memset(m, 0, sizeof *m);
     m->rows = 16;
+    m->editing = -1;
 }
 
 void mdrt_menu_free(mdrt_menu *m)
@@ -135,6 +136,7 @@ void mdrt_menu_free(mdrt_menu *m)
 void mdrt_menu_page(mdrt_menu *m, const char *title)
 {
     m->count = m->sel = m->top = 0;
+    m->editing = -1;
     m->image = NULL;
     COPY(m->title, title);
     m->subtitle[0] = m->message[0] = 0;
@@ -179,6 +181,42 @@ mdrt_menu_item *mdrt_menu_add_number(mdrt_menu *m, int id, const char *label, in
     return it;
 }
 
+mdrt_menu_item *mdrt_menu_add_field(mdrt_menu *m, int id, const char *label, const char *text, int max, const char *allow)
+{
+    mdrt_menu_item *it = mdrt_menu_add(m, id, MDRT_ITEM_FIELD, label);
+    if (!it) return NULL;
+    it->max = max > 0 && max < (int)sizeof it->detail ? max : (int)sizeof it->detail - 1;
+    it->allow = allow;
+    snprintf(it->detail, (size_t)it->max + 1, "%s", text ? text : "");
+    return it;
+}
+
+int mdrt_menu_type(mdrt_menu *m, const char *text)
+{
+    if (m->editing < 0 || m->editing >= m->count) return 0;
+    mdrt_menu_item *it = &m->items[m->editing];
+    size_t n = strlen(it->detail);
+    int changed = 0;
+    for (const unsigned char *c = (const unsigned char *)text; *c; c++) {
+        if (*c < 32 || *c > 126 || (it->allow && !strchr(it->allow, *c))) continue;   /* (one of its characters only) */
+        if ((int)n >= it->max) break;
+        it->detail[n++] = (char)*c;
+        it->detail[n] = 0;
+        changed = 1;
+    }
+    return changed;
+}
+
+int mdrt_menu_erase(mdrt_menu *m)
+{
+    if (m->editing < 0 || m->editing >= m->count) return 0;
+    char *d = m->items[m->editing].detail;
+    size_t n = strlen(d);
+    if (!n) return 0;
+    d[n - 1] = 0;
+    return 1;
+}
+
 static int selectable(const mdrt_menu *m, int i) { return i >= 0 && i < m->count && m->items[i].kind != MDRT_ITEM_TEXT; }
 
 mdrt_menu_item *mdrt_menu_find(mdrt_menu *m, int id)
@@ -209,6 +247,13 @@ static void move(mdrt_menu *m, int dir)
 
 int mdrt_menu_input(mdrt_menu *m, int input)
 {
+    if (m->editing >= 0 && m->editing < m->count) {      /* typing into a field */
+        mdrt_menu_item *f = &m->items[m->editing];
+        if (input == MDRT_MENU_OK) { m->editing = -1; return f->id; }
+        if (input == MDRT_MENU_BACK) { COPY(f->detail, m->was); m->editing = -1; return MDRT_MENU_NOTHING; }
+        if (input == MDRT_MENU_LEFT) mdrt_menu_erase(m);
+        return MDRT_MENU_NOTHING;
+    }
     if (input == MDRT_MENU_BACK) return MDRT_MENU_CLOSE;
     if (!m->count) return MDRT_MENU_NOTHING;
     if (!selectable(m, m->sel)) move(m, 1);
@@ -240,6 +285,7 @@ int mdrt_menu_input(mdrt_menu *m, int input)
         return MDRT_MENU_NOTHING;
     case MDRT_MENU_OK:
         if (it->kind == MDRT_ITEM_ACTION) return it->id;
+        if (it->kind == MDRT_ITEM_FIELD) { m->editing = m->sel; COPY(m->was, it->detail); return MDRT_MENU_NOTHING; }
         if (it->kind == MDRT_ITEM_CHOICE && it->count > 0) {
             it->value = (it->value + 1) % it->count;
             return it->id;
@@ -324,6 +370,9 @@ void mdrt_menu_draw(mdrt_menu *m, uint32_t *px, int w, int h, int pitch)
         } else if (it->kind == MDRT_ITEM_NUMBER) {
             if (i == m->sel) snprintf(right, sizeof right, "< %d%s >", it->value, it->unit ? it->unit : "");
             else snprintf(right, sizeof right, "%d%s", it->value, it->unit ? it->unit : "");
+        } else if (it->kind == MDRT_ITEM_FIELD) {
+            if (i == m->editing) snprintf(right, sizeof right, "[%s_]", it->detail);
+            else snprintf(right, sizeof right, "[%s]", it->detail);
         } else copy(right, sizeof right, it->detail);
         int room = cols - 4, label = (int)strlen(it->label), rlen = (int)strlen(right);
         if (rlen && label + 2 + rlen > room) {           /* the label keeps up to 16 columns, the detail the rest */
@@ -335,7 +384,7 @@ void mdrt_menu_draw(mdrt_menu *m, uint32_t *px, int w, int h, int pitch)
         fit(buf, sizeof buf, it->label, label, 0);
         row_text(px, w, h, pitch, x0, y0, 3, 3 + r, buf, ink);
         if (rlen > 0) {
-            fit(buf, sizeof buf, right, rlen, it->kind == MDRT_ITEM_ACTION || it->kind == MDRT_ITEM_TEXT);
+            fit(buf, sizeof buf, right, rlen, it->kind == MDRT_ITEM_ACTION || it->kind == MDRT_ITEM_TEXT || it->kind == MDRT_ITEM_FIELD);
             row_text(px, w, h, pitch, x0, y0, cols - 2 - (int)strlen(buf), 3 + r, buf, i == m->sel ? TITLE : ink);
         }
     }
@@ -351,7 +400,9 @@ void mdrt_menu_draw(mdrt_menu *m, uint32_t *px, int w, int h, int pitch)
     fit(buf, sizeof buf, m->message, cols - 2, 0);
     row_text(px, w, h, pitch, x0, y0, 1, rows - 2, buf, WARN);
     const mdrt_menu_item *it = m->count && selectable(m, m->sel) ? &m->items[m->sel] : NULL;
-    const char *keys = it && (it->kind == MDRT_ITEM_CHOICE || it->kind == MDRT_ITEM_NUMBER)
+    const char *keys = m->editing >= 0 ? "Type it   Enter: keep it   Esc: as it was"
+                     : it && it->kind == MDRT_ITEM_FIELD ? "Enter: type into it   Esc/B: back"
+                     : it && (it->kind == MDRT_ITEM_CHOICE || it->kind == MDRT_ITEM_NUMBER)
                      ? "Enter/A: choose   Esc/B: back   < >: change" : "Enter/A: choose   Esc/B: back";
     fit(buf, sizeof buf, keys, cols - 2, 0);
     row_text(px, w, h, pitch, x0 + (cols - (int)strlen(buf)) * CW / 2, y0, 0, rows - 1, buf, GREY);
