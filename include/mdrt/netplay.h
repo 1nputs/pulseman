@@ -28,7 +28,8 @@
 #include <stdint.h>
 #include "mdrt/mdrt.h"
 
-#define MDRT_NET_PROTOCOL 1             /* the messages' version: peers must agree */
+#define MDRT_NET_PROTOCOL 2             /* the messages' version: peers must agree (2: the players' names) */
+#define MDRT_NET_NAME 24                /* a player's name, at most (printable ASCII) */
 
 /* the other peer, as the platform reaches it (UDP natively: mdrt/net_udp.h). send: one datagram
  * (at most MDRT_NET_MTU bytes) to the peer, 0, or -1 when it could not go (it is lost, as any may
@@ -47,6 +48,7 @@ enum { MDRT_NET_HOST, MDRT_NET_JOIN, MDRT_NET_EITHER };    /* roles: EITHER sett
 typedef struct mdrt_net_config {
     int role;
     const char *identity;       /* what must match (compared whole; up to 255 bytes) */
+    const char *name;           /* the player's name, for the other to show (NULL or "": none) */
     mdrt_net_link link;
     /* the local players' buttons now: buttons[0] the first pad this peer plays, [1] the second ... */
     void (*local_input)(void *user, uint16_t buttons[MDRT_PADS]);
@@ -82,6 +84,9 @@ int mdrt_net_state(const mdrt_net *n);
 int mdrt_net_is_host(const mdrt_net *n);
 uint8_t mdrt_net_pads(const mdrt_net *n);                /* the pads this peer plays (bit p: pad p + 1) */
 int mdrt_net_delay(const mdrt_net *n);
+/* the other player's name ("" when they gave none), once connected: the player the window says has
+ * joined. The other's player number: 1 when this peer is not the host, else 2 */
+const char *mdrt_net_peer_name(const mdrt_net *n);
 /* the host's settings, once ready (the host's own on the host): NULL and 0 when it gave none */
 const void *mdrt_net_settings(const mdrt_net *n, size_t *size);
 

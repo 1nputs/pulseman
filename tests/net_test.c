@@ -220,7 +220,7 @@ static void setup(peer *p, peer *other, const char *name, int role, uint32_t see
     p->other = other;
     p->seed = seed;
     p->period = period;
-    p->cfg = (mdrt_net_config){ .role = role, .identity = "net_test 1", .delay = DELAY, .window = 8, .rollback = 30,
+    p->cfg = (mdrt_net_config){ .role = role, .identity = "net_test 1", .name = name, .delay = DELAY, .window = 8, .rollback = 30,
                                 .check_every = 60, .seed = seed * 7919u + 1 };
     p->cfg.link = (mdrt_net_link){ .user = p, .send = link_send, .recv = link_recv, .ticks = link_ticks };
     p->cfg.local_input = local_input;
@@ -335,6 +335,8 @@ static void session(void)
     CHECK(sa.gave_back > 0);
     CHECK(sa.rtt_ms >= 70 && sa.rtt_ms <= 120);
     CHECK_EQ(mdrt_net_pads(A.net), 1); CHECK_EQ(mdrt_net_pads(B.net), 2);
+    printf("    names: the host sees \"%s\", the guest \"%s\"\n", mdrt_net_peer_name(A.net), mdrt_net_peer_name(B.net));
+    CHECK(!strcmp(mdrt_net_peer_name(A.net), "guest") && !strcmp(mdrt_net_peer_name(B.net), "host"));
     finish(&A, &B);
 }
 
@@ -396,7 +398,9 @@ static void protocol(void)
     play(&A, &B, 1000, 2000000);
     printf("  goodbye: the host \"%s\"\n", mdrt_net_why(host->net));
     CHECK_EQ(host->state, MDRT_NET_ENDED);
-    CHECK(strstr(mdrt_net_why(host->net), "left") != NULL);
+    char left[64];
+    snprintf(left, sizeof left, "%s left", guest->name);
+    CHECK(!strcmp(mdrt_net_why(host->net), left));
     finish(&A, &B);
     /* silence */
     cond = (net_cond){ .latency = 10000, .jitter = 4000 };

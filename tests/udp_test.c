@@ -88,7 +88,8 @@ static void options(void)
 {
     mdrt_net_options o;
     mdrt_net_options_init(&o);
-    char *argv[] = { "game", "--join", "10.0.0.5:7100", "--delay", "3", "--net-sim", "40,10,5,1", "--rom", "x", "--host", "--port", "7200" };
+    char *argv[] = { "game", "--join", "10.0.0.5:7100", "--delay", "3", "--net-sim", "40,10,5,1", "--rom", "x", "--host", "--port", "7200",
+                     "--name", "Sam" };
     int argc = (int)(sizeof argv / sizeof *argv), taken = 0, i;
     for (i = 1; i < argc; i++) {
         int r = mdrt_net_parse(&o, argc, argv, &i, err, sizeof err);
@@ -96,8 +97,12 @@ static void options(void)
         if (r > 0) taken++;
         else i++;                                         /* (--rom x is the client's) */
     }
-    CHECK_EQ(taken, 5);
-    CHECK(o.on && o.role == MDRT_NET_HOST && o.port == 7200 && o.delay == 3 && !strcmp(o.peer, "10.0.0.5:7100"));
+    CHECK_EQ(taken, 6);
+    CHECK(o.on && o.role == MDRT_NET_HOST && o.port == 7200 && o.delay == 3 && !strcmp(o.peer, "10.0.0.5:7100") && !strcmp(o.name, "Sam"));
+    char lan[64];
+    mdrt_udp_lan_address(lan, sizeof lan);
+    printf("  this machine on its network: %s\n", lan[0] ? lan : "(none)");
+    CHECK(!lan[0] || (strchr(lan, '.') && strncmp(lan, "127.", 4)));
     CHECK(o.sim[0] == 40 && o.sim[1] == 10 && o.sim[2] == 5 && o.sim[3] == 1);
     char *bad[] = { "game", "--delay", "99" };
     i = 1;

@@ -2,8 +2,9 @@
  * while a small game runs under SDL's dummy video and real-time disk sound, and another thread is
  * the other player, a host on the loopback (a console of its own, no window, over UDP, what it sends
  * 60-80 ms late, longer than the input delay, so that the window guesses its buttons). The keys
- * open the menu's Online play, pick "join a host", type the host's address (a first try put back
- * by Esc) and port into their fields, and connect: the game stops and starts again in the session.
+ * open the menu's Online play, type a name, pick "join a host", type the host's address (a first
+ * try put back by Esc) and port into their fields, and connect: the game stops and starts again in
+ * the session, the host hearing the name.
  * Then pad 1's keys are pressed and let go while both play (so the one ahead has guesses shown
  * wrong to play again), the menu is opened during play (the game does not stop), and the session is
  * left from the menu. It checks that the session played (the window's game and the host in step:
@@ -26,7 +27,7 @@
 #define IDENTITY "online test 1"
 
 static SDL_atomic_t frames, online, starts, window_checks, window_rollbacks, host_done, host_checks, host_rollbacks;
-static char host_why[200];
+static char host_why[200], host_heard[64];
 
 /* ---- the game, the same on both: the pads read through the I/O chip, into its sum ------------- */
 
@@ -103,13 +104,14 @@ static int host(void *user)
     mdrt *m = mdrt_new(&cfg);
     static game g;
     CHECK_EQ(mdrt_add_state_part(m, "GAME", part_save, part_load, &g), 0);
-    mdrt_net_config c = { .role = MDRT_NET_HOST, .identity = IDENTITY, .delay = 2, .local_input = host_input, .input_user = m };
+    mdrt_net_config c = { .role = MDRT_NET_HOST, .identity = IDENTITY, .name = "Hostess", .delay = 2, .local_input = host_input, .input_user = m };
     c.link = mdrt_udp_link(u);
     mdrt_net *n = mdrt_net_new(&c);
     int r = MDRT_NET_CONNECTING;
     for (Uint32 t0 = SDL_GetTicks(); r == MDRT_NET_CONNECTING && SDL_GetTicks() - t0 < 30000;) { r = mdrt_net_connect(n); mdrt_udp_wait(u, 10); }
     CHECK_EQ(r, MDRT_NET_READY);
     if (r == MDRT_NET_READY) {
+        snprintf(host_heard, sizeof host_heard, "%s", mdrt_net_peer_name(n));
         mdrt_udp_lock(u);
         mdrt_net_start(n, m);
         Uint64 freq = SDL_GetPerformanceFrequency(), next = SDL_GetPerformanceCounter();
@@ -176,9 +178,13 @@ static int player(void *user)
     (void)user;
     while (SDL_AtomicGet(&frames) < 60) SDL_Delay(10);
     CHECK_EQ(SDL_AtomicGet(&online), 0);
-    online_page();                                        /* (on Start hosting, below Play as, Port and Input delay) */
-    keys(SDL_SCANCODE_UP, 3);
-    press(SDL_SCANCODE_RIGHT);                            /* join a host: Play as, Host's address, The host's port, ... */
+    online_page();                                        /* (on Start hosting, below Your name, Play as, Port and Input delay) */
+    keys(SDL_SCANCODE_UP, 4);
+    press(SDL_SCANCODE_RETURN);                           /* the name */
+    type("Tester");
+    press(SDL_SCANCODE_RETURN);
+    press(SDL_SCANCODE_DOWN);
+    press(SDL_SCANCODE_RIGHT);                            /* join a host: Your name, Play as, Host's address, The host's port, ... */
     press(SDL_SCANCODE_DOWN);
     press(SDL_SCANCODE_RETURN);
     type("10.9.8.7");
@@ -197,8 +203,10 @@ static int player(void *user)
     int on = until(&online, 1, 15000);
     CHECK(on);
     int starts_then = SDL_AtomicGet(&starts);
-    printf("  the Online page: %s (the game started %d times)\n", on ? "connected, playing in the session" : "NOT connected", starts_then);
+    printf("  the Online page: %s (the game started %d times); the host heard the name \"%s\"\n",
+           on ? "connected, playing in the session" : "NOT connected", starts_then, host_heard);
     CHECK_EQ(starts_then, 2);
+    CHECK(!strcmp(host_heard, "Tester"));
     /* both play: pad 1's keys pressed and let go, so the host's guesses of this player go wrong */
     static const SDL_Scancode pads[] = { SDL_SCANCODE_RIGHT, SDL_SCANCODE_Z, SDL_SCANCODE_X, SDL_SCANCODE_LEFT };
     for (int i = 0; i < 24; i++) { key(pads[i % 4], 1); SDL_Delay(90 + 37 * (i % 3)); key(pads[i % 4], 0); SDL_Delay(60); }
@@ -218,7 +226,7 @@ static int player(void *user)
     SDL_Delay(500);
     f1 = SDL_AtomicGet(&frames);
     printf("  left from the menu: the host heard \"%s\"; the game plays on alone (%d frames in half a second)\n", host_why, f1 - f0);
-    CHECK(strstr(host_why, "left") != NULL);
+    CHECK(!strcmp(host_why, "Tester left"));
     CHECK(f1 - f0 > 15);
     printf("  in step: the window rolled back %d times and the host %d; desync checks agreeing %d and %d\n",
            SDL_AtomicGet(&window_rollbacks), SDL_AtomicGet(&host_rollbacks), SDL_AtomicGet(&window_checks), SDL_AtomicGet(&host_checks));
@@ -258,7 +266,8 @@ int main(int argc, char **argv)
     SDL_WaitThread(p, NULL);
     SDL_WaitThread(h, NULL);
     const char *set = slurp("settings.ini");
-    CHECK(set && strstr(set, "netplay.role = join") && strstr(set, "netplay.address = 127.0.0.1") && strstr(set, "netplay.port = 7491"));
+    CHECK(set && strstr(set, "netplay.role = join") && strstr(set, "netplay.address = 127.0.0.1") && strstr(set, "netplay.port = 7491") &&
+          strstr(set, "netplay.name = Tester"));
     printf("  the settings kept: %s\n", set && strstr(set, "netplay.address = 127.0.0.1") ? "join 127.0.0.1, port 7491" : "NOT kept");
     return check_done("online_test");
 }

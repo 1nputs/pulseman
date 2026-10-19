@@ -243,7 +243,8 @@ and `ticks`, a clock in microseconds) and the local players' buttons (`local_inp
 
 1. `mdrt_net_new(&config)`: the role (host, join, or either, settled with the other), the
    identity (a string of everything the simulation depends on: the build, the ROM, settings that
-   must match; another one is refused), and for the host the pads each plays (pad 1 and pad 2 by
+   must match; another one is refused), the player's name (the other is told it:
+   `mdrt_net_peer_name`; protocol 2), and for the host the pads each plays (pad 1 and pad 2 by
    default), the input delay, the window (frames played on guesses before waiting), how far a
    rollback may go back, how often to check for a desync, and its settings (a blob of up to 1 MB
    for the guest's client: rules, save RAM).
@@ -274,15 +275,17 @@ other's (a simultaneous open, which most home routers let through without a forw
 `mdrt_udp_link(u)` is the link for the configuration; `mdrt_udp_wait(u, ms)` sleeps until a datagram
 comes, for a caller told to wait; `mdrt_udp_simulate` delays, reorders, loses and doubles what it
 sends, for tests. In the SDL2 platform a client that plays online gives `mdrt_sdl_options.net_identity`, and the
-menu has an Online play page: host, join a host, or both connecting at once; the other's address
-and the port (fields the player types into, kept in the settings file); the input delay; and Start,
+menu has an Online play page: the player's name; host, join a host, or both connecting at once;
+the other's address and the port (fields the player types into, kept in the settings file); this
+machine's LAN address (`mdrt_udp_lan_address`); the input delay; and Start,
 which stops the game, connects, and powers on again in the session (or Leave, during one). A client
 can also make a session from its command line and put it in `mdrt_sdl_options.net` (its UDP link
 in `net_udp`). Either way the window connects before the game starts (a page that says so, Esc
 giving up), then powers on a new console with the session started on it: the game's function
 finds it with `mdrt_get_net(m)`, calls `mdrt_net_frame` at its waits as above, and `mdrt_idle(m)`
 while told to wait (the window waits a millisecond there; nonzero: the window is closing, so say
-goodbye and stop).
+goodbye and stop). The window says who joined ("Sam has joined") and why a session ended ("Sam
+left") on a band across the bottom row of the game's picture for a few seconds.
 While the session lasts the window paces the frames by its clock and never makes up the time the
 game spent waiting on the other player in `mdrt_idle` (a frame given back to keep in step stays
 given; other lateness is caught up as ever), stretches the sound by up to half a per cent to

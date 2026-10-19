@@ -32,7 +32,7 @@ The console, in `libmdrt` (no SDL):
 - **Recording**: `mdrt_record` writes the console's own `.vdptrace`, `.padtrace` and `.sndtrace`.
 - **Rollback netplay**: `mdrt/netplay.h`, two consoles on two machines playing one game (each
   player's buttons at once, the other's guessed, frames played again quietly when a guess was
-  wrong, desync checks), knowing no game and never blocking; `mdrt/net_udp.h` its UDP link (IPv4
+  wrong, desync checks, the players' names), knowing no game and never blocking; `mdrt/net_udp.h` its UDP link (IPv4
   and IPv6, host and join or both connecting at once) and the options every client reads; quiet
   frames (`mdrt_set_quiet`) and the simulation's hash (`mdrt_sim_hash`) beneath them.
 - **Libraries a platform uses**: `mdrt/png.h` (screenshots, indexed pictures, any PNG read back,
@@ -51,7 +51,8 @@ scaling (sharp, integer, fit; square or 4:3) with the upscalers and looks above,
 replays and recordings as GIFs, save slots with a picture each, quick resume, and a menu (Esc) with
 the ROM browser, reset, states, video, capture, sound (the FM core and chip changed live), players,
 keys, and pages of the client's own options handed to it before every power on. And netplay: an
-Online play page (host, join, or both connecting; the address and port typed in; the input delay),
+Online play page (your name; host, join, or both connecting; the address and port typed in; this
+machine's LAN address; the input delay), who joined and who left said over the game's bottom row,
 the window connecting before the game starts, then pacing by the clock and keeping the session's
 rules (no pause, rewind or states while two play).
 

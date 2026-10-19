@@ -26,6 +26,9 @@ uint16_t mdrt_udp_port(const mdrt_udp *u);
 const char *mdrt_udp_peer(const mdrt_udp *u, char *buf, size_t size);   /* the peer's address ("" none yet) */
 /* the link for mdrt_net_config (its clock: a monotonic one, in microseconds) */
 mdrt_net_link mdrt_udp_link(mdrt_udp *u);
+/* this machine's address on its own network (a LAN's, as 192.168.1.20: the one its traffic to the
+ * internet leaves by; no datagram is sent), into buf; "" when it has none */
+const char *mdrt_udp_lan_address(char *buf, size_t size);
 /* wait until a datagram comes or ms milliseconds pass (for a caller that has nothing to do) */
 void mdrt_udp_wait(mdrt_udp *u, int ms);
 /* a simulated network, for tests: every datagram sent delayed by delay_ms plus up to jitter_ms
@@ -38,6 +41,7 @@ void mdrt_udp_simulate(mdrt_udp *u, int delay_ms, int jitter_ms, int loss_pct, i
  *   --peer ADDR[:PORT]     both connect: each gives the other's address (and --port its own)
  *   --port PORT            this peer's port (with --peer; with --join, to fix it)
  *   --delay N              input delay in frames (the host's choice; 2 by default)
+ *   --name NAME            the player's name, for the other to see
  *   --net-sim MS,MS,%,%    a simulated network: delay, jitter, loss, duplicates */
 typedef struct mdrt_net_options {
     int on;                     /* a session was asked for */
@@ -45,9 +49,10 @@ typedef struct mdrt_net_options {
     char peer[256];
     uint16_t port;              /* 0: MDRT_UDP_PORT for a host or --peer, any for a joiner */
     int delay;
+    char name[MDRT_NET_NAME + 1];
     int sim[4];                 /* delay, jitter, loss, duplicates (all 0: none) */
 } mdrt_net_options;
-#define MDRT_NET_USAGE "[--host [PORT] | --join ADDR[:PORT] | --peer ADDR[:PORT]] [--port PORT] [--delay N] [--net-sim MS,MS,%,%]"
+#define MDRT_NET_USAGE "[--host [PORT] | --join ADDR[:PORT] | --peer ADDR[:PORT]] [--port PORT] [--delay N] [--name NAME] [--net-sim MS,MS,%,%]"
 void mdrt_net_options_init(mdrt_net_options *o);
 /* argv[*i] (and what follows it) if it is one of them: 1, with *i on the last word it took; 0
  * when it is not one; -1 when it is malformed (err says why) */

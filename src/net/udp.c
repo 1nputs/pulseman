@@ -318,6 +318,28 @@ static uint64_t link_ticks(void *user) { (void)user; return ticks(); }
 
 mdrt_net_link mdrt_udp_link(mdrt_udp *u) { return (mdrt_net_link){ .user = u, .send = link_send, .recv = link_recv, .ticks = link_ticks }; }
 
+const char *mdrt_udp_lan_address(char *buf, size_t size)
+{
+    if (!size) return buf;
+    buf[0] = 0;
+    if (!started()) return buf;
+    sock_t s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    if (s == BAD_SOCK) return buf;
+    struct sockaddr_in to, me;
+    memset(&to, 0, sizeof to);
+    to.sin_family = AF_INET;
+    to.sin_port = htons(53);
+    to.sin_addr.s_addr = htonl(0x08080808u);              /* (a public address: the route there names the LAN's) */
+    socklen len = (socklen)sizeof me;
+    if (!connect(s, (struct sockaddr *)&to, (socklen)sizeof to) && !getsockname(s, (struct sockaddr *)&me, &len)) {
+        uint32_t a = ntohl(me.sin_addr.s_addr);
+        if (a && a != 0x7F000001u)
+            snprintf(buf, size, "%u.%u.%u.%u", (unsigned)(a >> 24), (unsigned)(a >> 16 & 255), (unsigned)(a >> 8 & 255), (unsigned)(a & 255));
+    }
+    close_sock(s);
+    return buf;
+}
+
 void mdrt_udp_wait(mdrt_udp *u, int ms)
 {
     release(u);
@@ -389,6 +411,12 @@ int mdrt_net_parse(mdrt_net_options *o, int argc, char **argv, int *i, char *err
     if (!strcmp(a, "--delay")) {
         if (!next || !number(next, 0, MDRT_NET_MAX_DELAY, &v)) { snprintf(err, errsize, "--delay needs frames (0-%d)", MDRT_NET_MAX_DELAY); return -1; }
         o->delay = (int)v;
+        ++*i;
+        return 1;
+    }
+    if (!strcmp(a, "--name")) {
+        if (!next) { snprintf(err, errsize, "--name needs a name"); return -1; }
+        snprintf(o->name, sizeof o->name, "%s", next);
         ++*i;
         return 1;
     }

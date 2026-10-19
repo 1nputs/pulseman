@@ -1,7 +1,8 @@
 /* Rollback netplay (mdrt/netplay.h). The messages, all little-endian after "MN" and a type:
- *   HELLO      protocol u16, role u8, nonce u64, identity (length u8, bytes)
+ *   HELLO      protocol u16, role u8, nonce u64, identity (length u8, bytes), name (length u8, bytes)
  *   ACCEPT     the guest's nonce u64, session u32, host's pads u8, guest's pads u8, delay u8,
- *              window u8, rollback u8, check_every u16, settings' size u32
+ *              window u8, rollback u8, check_every u16, settings' size u32, the host's name
+ *              (length u8, bytes)
  *   REFUSE     the guest's nonce u64, why (length u8, bytes)
  *   CHUNK      session u32, index u32, length u16, bytes (the settings, CHUNK bytes at a time)
  *   CHUNK_ACK  session u32, the chunks had in a row u32
@@ -35,6 +36,7 @@ typedef struct snap { uint32_t frame; int valid; size_t len, cap; uint8_t *buf; 
 struct mdrt_net {
     mdrt_net_config c;
     char identity[256];
+    char name[MDRT_NET_NAME + 1], peer_name[MDRT_NET_NAME + 1];   /* this player's, the other's */
     int phase, result;
     char why[200];
     int host;
@@ -115,6 +117,14 @@ static uint64_t next_random(mdrt_net *n)          /* (splitmix64) */
     return z ^ (z >> 31);
 }
 
+/* a name as the other may show it: printable ASCII, cut short */
+static void take_name(char *to, const uint8_t *from, size_t n)
+{
+    size_t k = 0;
+    for (size_t i = 0; i < n && k < MDRT_NET_NAME; i++) to[k++] = from[i] >= 32 && from[i] < 127 ? (char)from[i] : '?';
+    to[k] = 0;
+}
+
 static int count_bits(uint8_t v) { int k = 0; for (; v; v &= (uint8_t)(v - 1)) k++; return k; }
 static uint8_t my_pads(const mdrt_net *n) { return n->pads[n->host ? 0 : 1]; }
 static uint8_t their_pads(const mdrt_net *n) { return n->pads[n->host ? 1 : 0]; }
@@ -146,6 +156,8 @@ mdrt_net *mdrt_net_new(const mdrt_net_config *c)
     n->c = *c;
     snprintf(n->identity, sizeof n->identity, "%s", c->identity ? c->identity : "");
     n->c.identity = n->identity;
+    take_name(n->name, (const uint8_t *)(c->name ? c->name : ""), c->name ? strlen(c->name) : 0);
+    n->c.name = n->name;
     n->pads[0] = c->host_pads || c->guest_pads ? c->host_pads : 1;
     n->pads[1] = c->host_pads || c->guest_pads ? c->guest_pads : 2;
     n->delay = c->delay;
@@ -189,6 +201,7 @@ int mdrt_net_state(const mdrt_net *n)
 }
 uint8_t mdrt_net_pads(const mdrt_net *n) { return my_pads(n); }
 int mdrt_net_delay(const mdrt_net *n) { return n->delay; }
+const char *mdrt_net_peer_name(const mdrt_net *n) { return n->peer_name; }
 const char *mdrt_net_why(const mdrt_net *n) { return n->why; }
 const void *mdrt_net_settings(const mdrt_net *n, size_t *size)
 {
@@ -203,6 +216,8 @@ static void send_hello(mdrt_net *n)
     p16(&o, MDRT_NET_PROTOCOL); p8(&o, (uint32_t)n->c.role); p64(&o, n->nonce);
     size_t k = strlen(n->identity);
     p8(&o, (uint32_t)k); pbytes(&o, n->identity, k);
+    k = strlen(n->name);
+    p8(&o, (uint32_t)k); pbytes(&o, n->name, k);
     transmit(n, &o);
 }
 
@@ -213,6 +228,8 @@ static void send_accept(mdrt_net *n)
     p64(&o, n->guest_nonce); p32(&o, n->session); p8(&o, n->pads[0]); p8(&o, n->pads[1]);
     p8(&o, (uint32_t)n->delay); p8(&o, (uint32_t)n->window); p8(&o, (uint32_t)n->rollback); p16(&o, (uint32_t)n->check_every);
     p32(&o, (uint32_t)n->settings_size);
+    size_t k = strlen(n->name);
+    p8(&o, (uint32_t)k); pbytes(&o, n->name, k);
     transmit(n, &o);
 }
 
@@ -256,7 +273,7 @@ static void send_chunks(mdrt_net *n)
 }
 
 /* a guest's HELLO, taken by this peer as the host */
-static void host_guest(mdrt_net *n, uint64_t nonce, uint32_t protocol, const uint8_t *id, size_t idn)
+static void host_guest(mdrt_net *n, uint64_t nonce, uint32_t protocol, const uint8_t *id, size_t idn, const uint8_t *name, size_t namen)
 {
     if (n->phase == P_HOSTING || n->phase == P_RUNNING) {
         if (nonce == n->guest_nonce) send_accept(n);      /* (it did not hear the first) */
@@ -277,6 +294,7 @@ static void host_guest(mdrt_net *n, uint64_t nonce, uint32_t protocol, const uin
     n->host = 1;
     n->phase = P_HOSTING;
     n->guest_nonce = nonce;
+    take_name(n->peer_name, name, namen);
     n->session = (uint32_t)next_random(n) | 1;
     n->chunks = (uint32_t)((n->settings_size + CHUNK - 1) / CHUNK);
     n->chunks_have = 0;
@@ -460,6 +478,8 @@ static void handle(mdrt_net *n, const uint8_t *b, size_t size)
         uint64_t nonce = g64(&i);
         uint32_t idn = g8(&i);
         const uint8_t *id = gbytes(&i, idn);
+        uint32_t namen = protocol == MDRT_NET_PROTOCOL ? g8(&i) : 0;   /* (an older protocol's has none: refused below) */
+        const uint8_t *name = namen ? gbytes(&i, namen) : NULL;
         if (i.bad || n->phase == P_DONE || nonce == n->nonce) return;
         if (n->phase == P_GUEST) return;
         int host_it = n->c.role == MDRT_NET_HOST || (n->c.role == MDRT_NET_EITHER && (role == MDRT_NET_JOIN ||
@@ -470,7 +490,7 @@ static void handle(mdrt_net *n, const uint8_t *b, size_t size)
             return;
         }
         if (n->c.role == MDRT_NET_HOST && role == MDRT_NET_HOST) return;   /* (a host never says hello) */
-        if (host_it) host_guest(n, nonce, protocol, id, idn);
+        if (host_it) host_guest(n, nonce, protocol, id, idn, name, namen);
         return;
     }
     if (type == T_ACCEPT || type == T_REFUSE) {
@@ -485,11 +505,13 @@ static void handle(mdrt_net *n, const uint8_t *b, size_t size)
             return;
         }
         uint32_t session = g32(&i), hp = g8(&i), gp = g8(&i), delay = g8(&i), window = g8(&i), rollback = g8(&i);
-        uint32_t every = g16(&i), ssize = g32(&i);
+        uint32_t every = g16(&i), ssize = g32(&i), namen = g8(&i);
+        const uint8_t *name = namen ? gbytes(&i, namen) : NULL;
         if (i.bad || !hp || !gp || (hp & gp) || ((hp | gp) >> MDRT_PADS) || delay > MDRT_NET_MAX_DELAY || !window || !rollback ||
             !every || window + delay + rollback + 8 > RING / 2 || ssize > MDRT_NET_MAX_SETTINGS) return;
         n->host = 0;
         n->session = session;
+        take_name(n->peer_name, name, namen);
         n->pads[0] = (uint8_t)hp; n->pads[1] = (uint8_t)gp;
         n->delay = (int)delay; n->window = (int)window; n->rollback = (int)rollback; n->check_every = (int)every;
         free(n->settings);
@@ -558,9 +580,12 @@ static void handle(mdrt_net *n, const uint8_t *b, size_t size)
         n->rtt_us = n->rtt_us < 0 ? sample : (n->rtt_us * 7 + sample) / 8;
         break;
     }
-    case T_BYE:
-        end(n, MDRT_NET_ENDED, "the other player left");
+    case T_BYE: {
+        char why[64];
+        snprintf(why, sizeof why, "%s left", n->peer_name[0] ? n->peer_name : "the other player");
+        end(n, MDRT_NET_ENDED, why);
         break;
+    }
     default: break;
     }
 }
