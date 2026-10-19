@@ -36,6 +36,9 @@ LDLIBS  += -lstdc++
 CFLAGS  += -DMDRT_HAVE_YMFM
 CXXFLAGS += -DMDRT_HAVE_YMFM
 endif
+ifeq ($(OS),Windows_NT)
+LDLIBS  += -lws2_32                                      # (the UDP link, src/net/udp.c: Winsock)
+endif
 LIBOBJ  := $(LIBSRC:%.c=$(B)/%.o) $(LIBCXX:%.cpp=$(B)/%.o)
 TESTLIB := tests/check.c tests/png.c tests/sndtrace.c tests/spectrum.c
 TESTS   := $(patsubst tests/%.c,$(B)/tests/%,$(filter-out $(TESTLIB),$(wildcard tests/*.c)))
