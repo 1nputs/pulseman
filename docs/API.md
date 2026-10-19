@@ -226,6 +226,42 @@ same on every host for a given build when the client's parts are written the sam
 Netplay is the pad source, and the person playing is still at the platform:
 `mdrt_platform_input(m, buttons)` reads the platform's buttons whatever the pad source.
 
+## Netplay
+
+`mdrt/netplay.h` plays a game between two machines with rollback: each console plays its own
+pads at once and guesses the other's (the buttons last heard, held); when the other's buttons for
+a frame come and differ from the guess, it loads its state from before that frame and plays the
+frames since again, quietly, within one frame of the player's time. The module knows no game and
+touches no sockets or clocks; it never blocks.
+
+The platform gives it a link (`send` and `recv` of datagrams to the other peer, without blocking,
+and `ticks`, a clock in microseconds) and the local players' buttons (`local_input`). A session:
+
+1. `mdrt_net_new(&config)`: the role (host, join, or either, settled with the other), the
+   identity (a string of everything the simulation depends on: the build, the ROM, settings that
+   must match; another one is refused), and for the host the pads each plays (pad 1 and pad 2 by
+   default), the input delay, the window (frames played on guesses before waiting), how far a
+   rollback may go back, how often to check for a desync, and its settings (a blob of up to 1 MB
+   for the guest's client: rules, save RAM).
+2. `mdrt_net_connect(n)` until it returns `MDRT_NET_READY` (or `_REFUSED`, with `mdrt_net_why`);
+   the guest's client then applies `mdrt_net_settings(n, &size)` and powers on.
+3. `mdrt_net_start(n, m)` on the console just powered on: the module becomes its pad source.
+4. At every wait after its vertical blank code the client calls `mdrt_net_frame(n, resumable)`,
+   `resumable` saying whether it could go on from here after a state is loaded (its game loop's
+   wait). `MDRT_NET_GO`: play the next frame. `MDRT_NET_WAIT`: call again a little later without
+   playing on (the other's buttons are too far behind, or this peer gives a frame back to stay in
+   step). `MDRT_NET_RESTART`: a state was loaded; restart at the resumable point and play on
+   (the frames played again are quiet: `mdrt_quiet`). `MDRT_NET_ENDED`: the session is over
+   (desync, the other left, the connection lost: `mdrt_net_why`), and the console plays on alone.
+5. `mdrt_net_quit(n)` says goodbye; `mdrt_net_free(n)`.
+
+A state is taken at every resumable point. Where a game has none for a while (a menu, a loading
+screen), the module guesses only as far back as it can roll back, then waits for each frame's
+buttons. The client's part is small: report its waits, restart when told, keep everything it goes
+on from in the state's parts, and make its identity. `mdrt_net_stats_get` gives the round trip,
+rollbacks, waits and checks for the platform to show; `mdrt_net_set_log` writes every frame's
+buttons as they become known, a replay of the session from power on.
+
 ## The bus by address
 
 `mdrt_bus_read8/16/32` and `mdrt_bus_write8/16/32` reach the 68k's bus by address, with the

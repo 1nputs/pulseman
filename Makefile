@@ -25,7 +25,7 @@ MDRT_VECTORS ?=
 export MDRT_VECTORS
 
 FM_CORES ?= $(if $(FM_CORE),$(FM_CORE),nuked ymfm)
-LIBSRC  := $(wildcard src/vdp/*.c src/psg/*.c src/fm/fm.c src/mix/*.c src/pad/*.c src/sram/*.c src/mdrt/*.c src/platform/*.c)
+LIBSRC  := $(wildcard src/vdp/*.c src/psg/*.c src/fm/fm.c src/mix/*.c src/pad/*.c src/sram/*.c src/mdrt/*.c src/platform/*.c src/net/*.c)
 ifneq ($(filter nuked,$(FM_CORES)),)
 LIBSRC  += src/fm/nuked.c third_party/nuked-opn2/ym3438.c
 CFLAGS  += -DMDRT_HAVE_NUKED
