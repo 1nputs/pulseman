@@ -14,7 +14,8 @@
  * the sound (volume, mute, the FM core and chip, changed as the game plays), the players (two pads, or EA's 4 Way Play for four, from the next power on;
  * each player's controller; the controllers' buttons, turbo A / B / C, the stick's dead zone),
  * the client's own options (a page it describes: mdrt_sdl_option), the platform's options (pausing
- * when the window loses focus, fast-forward's speed) and every key, each changed
+ * when the window loses focus, fast-forward's speed, quick resume, frames a second shown at the
+ * picture's top right: the frames the game makes, over each half second) and every key, each changed
  * by pressing the new one (a controller's button, on a controller). Arrows and Enter work it, or a controller's d-pad, A
  * and B. It is drawn over the picture at the console's resolution (mdrt/menu.h).
  *
@@ -42,7 +43,7 @@
  * screen, the upscaler, the scaling (sharp, integer, fit) and aspect (square, 4:3), the volume and mute, the
  * sound device and how many frames of sound are queued (latency), the FM core and chip, the
  * adaptor in the ports, each player's controller, the controllers' buttons, turbo's speed, the
- * stick's dead zone, pausing when the window loses focus, fast-forward's speed, the states'
+ * stick's dead zone, pausing when the window loses focus, fast-forward's speed, frames a second, the states'
  * directory, the slot chosen last, quick resume, the screenshots' directory, the looks, the
  * replay's length, a GIF's size, the videos' directory and every key. */
 #ifndef MDRT_PLATFORM_SDL2_H
@@ -120,7 +121,10 @@ typedef struct mdrt_sdl_options {
     int npages;
     /* lines under a page's options (may be NULL): the client's text for page p (0 when there are
      * no pages) with the values now, \n between lines, a tab in one putting what follows it at
-     * the right; asked when the page is shown and after each change on it, on the window's thread */
+     * the right; asked when the page is shown and after each change on it, on the window's thread.
+     * In sections (a \f before each section, its first line its title; 16 at most): the lines
+     * before the first, then a line ("2 of 6", the title) that LEFT / RIGHT step through the
+     * sections with, then the lines of the one shown */
     void (*options_text)(int page, const int *values, char *text, size_t size, void *user);
     /* a browsed option's (mdrt_sdl_browse): path is what the player chose there (a folder
      * or a file, from the working directory when inside it), or what the settings file names
