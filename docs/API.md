@@ -232,24 +232,35 @@ Netplay is the pad source, and the person playing is still at the platform:
 
 ## Netplay
 
-`mdrt/netplay.h` plays a game between two machines with rollback: each console plays its own
-pads at once and guesses the other's (the buttons last heard, held); when the other's buttons for
+`mdrt/netplay.h` plays a game between two to four machines with rollback: each console plays its
+own pads at once and guesses the others' (the buttons last heard, held); when another's buttons for
 a frame come and differ from the guess, it loads its state from before that frame and plays the
-frames since again, quietly, within one frame of the player's time. The module knows no game and
-touches no sockets or clocks; it never blocks.
+frames since again, quietly, within one frame of the player's time. The machines are a star: a
+host and up to three guests, each guest talking to the host alone, the host passing every guest's
+buttons on to the others as they come. The module knows no game and touches no sockets or clocks;
+it never blocks.
 
 The platform gives it a link (`send` and `recv` of datagrams to the other peer, without blocking,
-and `ticks`, a clock in microseconds) and the local players' buttons (`local_input`). A session:
+and `ticks`, a clock in microseconds; a host's, `send_to` and `recv_from` too, for several guests
+by an index the link gives each address) and the local players' buttons (`local_input`). A
+session:
 
-1. `mdrt_net_new(&config)`: the role (host, join, or either, settled with the other), the
+1. `mdrt_net_new(&config)`: the role (host, join, or either: two machines that settle it), the
    identity (a string of everything the simulation depends on: the build, the ROM, settings that
-   must match; another one is refused), the player's name (the other is told it:
-   `mdrt_net_peer_name`; protocol 2), and for the host the pads each plays (pad 1 and pad 2 by
-   default), the input delay, the window (frames played on guesses before waiting), how far a
-   rollback may go back, how often to check for a desync, and its settings (a blob of up to 1 MB
-   for the guest's client: rules, save RAM).
-2. `mdrt_net_connect(n)` until it returns `MDRT_NET_READY` (or `_REFUSED`, with `mdrt_net_why`);
-   the guest's client then applies `mdrt_net_settings(n, &size)` and powers on.
+   must match; another one is refused), the player's name (the others are told it), the players
+   at this machine (the pads it plays: one by default), and for the host the players in all it
+   waits for (two by default; the pads go out in the order the guests came, its own first: two
+   machines with one each, pads 1 and 2; four with one each, pads 1 to 4; two and one and one;
+   one and three ...; a guest that would make more is refused), the input delay, the window
+   (frames played on guesses before waiting), how far a rollback may go back, how often to check
+   for a desync, and its settings for the guests' clients (rules, save RAM, a game's league with
+   its art: a blob of up to 16 MB, sent to each 1 KB at a time with 128 in flight; the guest says
+   which it has, and the lost ones go again a round trip on).
+2. `mdrt_net_connect(n)` until it returns `MDRT_NET_READY` (or `_REFUSED`, with `mdrt_net_why`):
+   every player is in; each guest's client then applies `mdrt_net_settings(n, &size)` and powers
+   on. `mdrt_net_peers`, `mdrt_net_me`, `mdrt_net_name_of`, `mdrt_net_players_of` and
+   `mdrt_net_pads_of` say who is in (a host's waiting room as it fills); `mdrt_net_all_pads`, the
+   pads played (pads 3 or 4: the ports need EA's 4 Way Play). Protocol 4.
 3. `mdrt_net_start(n, m)` on the console just powered on: the module becomes its pad source.
 4. At every wait after its vertical blank code the client calls `mdrt_net_frame(n, resumable)`,
    `resumable` saying whether it could go on from here after a state is loaded (its game loop's
@@ -257,7 +268,8 @@ and `ticks`, a clock in microseconds) and the local players' buttons (`local_inp
    playing on (the other's buttons are too far behind, or this peer gives a frame back to stay in
    step). `MDRT_NET_RESTART`: a state was loaded; restart at the resumable point and play on
    (the frames played again are quiet: `mdrt_quiet`). `MDRT_NET_ENDED`: the session is over
-   (desync, the other left, the connection lost: `mdrt_net_why`), and the console plays on alone.
+   for every machine (a desync, a player who left, a connection lost: `mdrt_net_why`, the same
+   words on each), and the console plays on alone.
 5. `mdrt_net_quit(n)` says goodbye; `mdrt_net_free(n)`.
 
 A state is taken at every resumable point. Where a game has none for a while (a menu, a loading
@@ -268,20 +280,29 @@ rollbacks, waits and checks for the platform to show; `mdrt_net_set_log` writes 
 buttons as they become known, a replay of the session from power on.
 
 `mdrt/net_udp.h` is the native link: UDP (POSIX sockets; Winsock 2 on Windows, linking `ws2_32`),
-IPv4 and IPv6, names resolved. `mdrt_udp_open(port, peer, err, n)`: a host gives no peer and takes
-the first one it hears from, following whoever sends until `mdrt_udp_lock` (call it once the
-session starts); a joiner names the host's address; two peers that both connect each name the
-other's (a simultaneous open, which most home routers let through without a forwarded port).
+IPv4 and IPv6, names resolved. `mdrt_udp_open(port, peer, err, n)`: a host gives no peer and hears
+whoever sends (each address a place for `send_to` and `recv_from`, up to eight) until
+`mdrt_udp_lock` (call it once the session starts); a joiner names the host's address; two peers
+that both connect each name the other's (a simultaneous open, which most home routers let through
+without a forwarded port).
 `mdrt_udp_link(u)` is the link for the configuration; `mdrt_udp_wait(u, ms)` sleeps until a datagram
 comes, for a caller told to wait; `mdrt_udp_simulate` delays, reorders, loses and doubles what it
 sends, for tests. In the SDL2 platform a client that plays online gives `mdrt_sdl_options.net_identity`, and the
 menu has an Online play page: the player's name; host, join a host, or both connecting at once;
 the other's address and the port (fields the player types into, kept in the settings file); this
-machine's LAN address (`mdrt_udp_lan_address`); the input delay; and Start,
-which stops the game, connects, and powers on again in the session (or Leave, during one). A client
+machine's LAN address (`mdrt_udp_lan_address`); the input delay; for a game of more than two players
+(`mdrt_sdl_options.net_pads`, up to 4), the players at this machine (the window's players 1, 2 ...
+on its pads) and a host's players in all, with EA's 4 Way Play in the ports when pads 3 or 4 are
+played; and Start,
+which stops the game, connects, and powers on again in the session (or Leave, during one). What the
+game plays by that is sent rather than compared (its options, its data, save RAM) comes from
+`mdrt_sdl_options.net_settings`, asked when Start makes the session, once the game has stopped and
+`options_use` has had the menu's values: the bytes this player sends if it hosts (the session
+copies them). At power on the game reads the host's with `mdrt_net_settings` (the host its own) and
+plays by them on both. A client
 can also make a session from its command line and put it in `mdrt_sdl_options.net` (its UDP link
-in `net_udp`). Either way the window connects before the game starts (a page that says so, Esc
-giving up), then powers on a new console with the session started on it: the game's function
+in `net_udp`). Either way the window connects before the game starts (a page that says so, a
+host's with who has joined so far, Esc giving up), then powers on a new console with the session started on it: the game's function
 finds it with `mdrt_get_net(m)`, calls `mdrt_net_frame` at its waits as above, and `mdrt_idle(m)`
 while told to wait (the window waits a millisecond there; nonzero: the window is closing, so say
 goodbye and stop). The window says who joined ("Sam has joined") and why a session ended ("Sam
@@ -291,10 +312,12 @@ game spent waiting on the other player in `mdrt_idle` (a frame given back to kee
 given; other lateness is caught up as ever), stretches the sound by up to half a per cent to
 keep its queue, and keeps the session's rules: the menu does not stop the game, and pause, the
 frame step, slow motion, fast-forward, rewind, the save slots, quick resume, reset, another ROM,
-the FM core and chip and the 4 Way Play adaptor are not to be had; save RAM is not read or written.
+the FM core and chip and the Players page's adaptor (the session's pads say) are not to be had; save RAM is not read from the player's file, nor written back to it by that
+console ever (after the session too, while the game plays on alone: its save RAM is the session's).
 `mdrt_net_state(n)` says where a session is. Every client reads the same options: `mdrt_net_parse` takes `--host [PORT]`,
-`--join ADDR[:PORT]`, `--peer ADDR[:PORT]`, `--port`, `--delay` and `--net-sim` from its command
-line (`MDRT_NET_USAGE`), and `mdrt_net_open_udp` opens the socket they ask for.
+`--join ADDR[:PORT]`, `--peer ADDR[:PORT]`, `--port`, `--delay`, `--name`, `--here N` (the players
+at this machine), `--players N` (a host's players in all) and `--net-sim` from its command line
+(`MDRT_NET_USAGE`), and `mdrt_net_open_udp` opens the socket they ask for.
 
 ## The bus by address
 

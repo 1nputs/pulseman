@@ -140,8 +140,9 @@ typedef struct mdrt_sdl_options {
     const char *(*sram_file)(void *user);
     /* netplay (mdrt/netplay.h). net_identity: the client's identity for a session (what must match
      * between the two: its build, the ROM, settings), which puts the Online page in the menu: the
-     * player picks host, join or both connecting, the address, port and input delay (kept in the
-     * settings file), and starts a session there; NULL: no netplay. net: a session the client made
+     * player picks host, join or both connecting (two machines), the address, port and input
+     * delay, and for a game of more than two players (net_pads) the players at this machine and a
+     * host's players in all (kept in the settings file), and starts a session there; NULL: no netplay. net: a session the client made
      * from its command line instead (mdrt_net_parse, mdrt_net_open_udp, mdrt_net_new; its
      * local_input reading mdrt_platform_input), and net_udp its UDP link (NULL: another link).
      * Either way the window connects first, showing it (Esc gives up), then powers on a new console
@@ -154,13 +155,33 @@ typedef struct mdrt_sdl_options {
      * frame given back to keep in step is given), and
      * stretches the sound a little to keep its queue; the menu does not stop the game; pause, the
      * frame step, slow motion, fast-forward, rewind, the save slots, quick resume, reset, another
-     * ROM, the FM core and chip, the 4 Way Play adaptor (two pads) and pausing when the window loses
-     * focus are not to be had; save RAM is not written back; the title shows the round trip, the
+     * ROM, the FM core and chip, the Players page's adaptor (the session's pads say) and pausing when the window loses
+     * focus are not to be had; save RAM is not read from the player's file, nor ever written back to it
+     * by that console (after the session too, while it plays on alone); the title shows the round trip, the
      * delay and the rollbacks. When it ends (the other left, the connection lost, a desync) the
      * window says why and the game plays on alone. */
     const char *net_identity;
     mdrt_net *net;
     struct mdrt_udp *net_udp;
+    /* the most pads the game plays in the window's sessions: 0 to 2, two (a player at each of two
+     * machines); up to MDRT_PADS, the Online page asks each machine its players and a host the
+     * players in all, the host waits for them all (up to four machines), and the window puts EA's
+     * 4 Way Play in the ports when pads 3 or 4 are played, for a game that can play with it */
+    int net_pads;
+    /* the session's settings this player sends if it hosts (mdrt_net_config.settings: what the
+     * game plays by that is not compared in the identity but sent, such as its options, its data
+     * and save RAM), asked when the Online page's Start makes a session, after options_use with the
+     * menu's values (and before sram_file is asked again): the bytes and *size, or NULL for none.
+     * The session copies them. At power on the game finds the host's with mdrt_net_settings (the
+     * host's own on the host) and plays by them on both; NULL: no settings. */
+    const void *(*net_settings)(size_t *size, void *user);
+    /* the values the session's game plays by (the host's, which its settings gave the game), for
+     * the client's pages while a session lasts, asked on the window's thread each time one is
+     * shown: the client fills values (noptions of them, as options_use has them; they come
+     * holding the player's own) and returns nonzero, or 0 for none yet (the pages as ever). The
+     * pages then show those, greyed: no option there changes until the session ends, and the
+     * settings keep the player's own. NULL: the pages as ever in a session too. */
+    int (*options_session)(int *values, void *user);
 } mdrt_sdl_options;
 
 /* the client's game: runs on the game thread with the console made from the configuration; when

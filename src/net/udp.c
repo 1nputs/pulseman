@@ -30,7 +30,9 @@ typedef int sock_t;
 typedef socklen_t socklen;
 #endif
 
-typedef struct held { uint64_t at; size_t n; uint8_t b[MDRT_NET_MTU]; } held;
+typedef struct held { uint64_t at; size_t n; struct sockaddr_storage to; socklen to_len; uint8_t b[MDRT_NET_MTU]; } held;
+
+#define SLOTS 8                         /* a host's addresses it hears from (send_to, recv_from), the latest kept */
 
 struct mdrt_udp {
     sock_t s;
@@ -38,6 +40,7 @@ struct mdrt_udp {
     struct sockaddr_storage peer;
     socklen peer_len;
     int have_peer, locked;
+    struct { struct sockaddr_storage a; socklen len; uint64_t heard; int used; } slot[SLOTS];
     uint16_t port;
     int sim[4];                         /* the simulated network */
     uint32_t rng;
@@ -45,7 +48,7 @@ struct mdrt_udp {
     int nq, capq;
 };
 
-static void put_out(mdrt_udp *u, const void *b, size_t n);
+static void put_out(mdrt_udp *u, const struct sockaddr_storage *to, socklen len, const void *b, size_t n);
 
 static uint64_t ticks(void)
 {
@@ -138,6 +141,9 @@ static sock_t make_socket(int family, uint16_t port, uint16_t *bound)
 {
     sock_t s = socket(family, SOCK_DGRAM, IPPROTO_UDP);
     if (s == BAD_SOCK) return BAD_SOCK;
+    int room = 1 << 20;                                   /* (room for a burst of the settings' chunks; the system caps it) */
+    setsockopt(s, SOL_SOCKET, SO_RCVBUF, (const char *)&room, sizeof room);
+    setsockopt(s, SOL_SOCKET, SO_SNDBUF, (const char *)&room, sizeof room);
     if (family == AF_INET6) {
         int off = 0;                                      /* (IPv4 too, as mapped addresses) */
         setsockopt(s, IPPROTO_IPV6, IPV6_V6ONLY, (const char *)&off, sizeof off);
@@ -196,7 +202,7 @@ mdrt_udp *mdrt_udp_open(uint16_t port, const char *peer, char *err, size_t errsi
 void mdrt_udp_close(mdrt_udp *u)
 {
     if (!u) return;
-    for (int i = 0; i < u->nq; i++) put_out(u, u->q[i].b, u->q[i].n);   /* (what the simulator held: sent now) */
+    for (int i = 0; i < u->nq; i++) put_out(u, &u->q[i].to, u->q[i].to_len, u->q[i].b, u->q[i].n);   /* (what the simulator held: sent now) */
     if (u->s != BAD_SOCK) close_sock(u->s);
     free(u->q);
     free(u);
@@ -218,23 +224,34 @@ int mdrt_udp_set_peer(mdrt_udp *u, const char *peer, char *err, size_t errsize)
 void mdrt_udp_lock(mdrt_udp *u) { u->locked = 1; }
 uint16_t mdrt_udp_port(const mdrt_udp *u) { return u->port; }
 
-const char *mdrt_udp_peer(const mdrt_udp *u, char *buf, size_t size)
+static const char *address(const struct sockaddr_storage *a, socklen len, char *buf, size_t size)
 {
-    if (!size) return buf;
-    buf[0] = 0;
-    if (!u->have_peer) return buf;
     char host[128] = "", service[16] = "";
-    getnameinfo((const struct sockaddr *)&u->peer, u->peer_len, host, sizeof host, service, sizeof service, NI_NUMERICHOST | NI_NUMERICSERV);
+    getnameinfo((const struct sockaddr *)a, len, host, sizeof host, service, sizeof service, NI_NUMERICHOST | NI_NUMERICSERV);
     const char *h = !strncmp(host, "::ffff:", 7) ? host + 7 : host;   /* (an IPv4 address mapped) */
     snprintf(buf, size, strchr(h, ':') ? "[%s]:%s" : "%s:%s", h, service);
     return buf;
 }
 
+const char *mdrt_udp_peer(const mdrt_udp *u, char *buf, size_t size)
+{
+    if (!size) return buf;
+    buf[0] = 0;
+    return u->have_peer ? address(&u->peer, u->peer_len, buf, size) : buf;
+}
+
+const char *mdrt_udp_peer_of(const mdrt_udp *u, int k, char *buf, size_t size)
+{
+    if (!size) return buf;
+    buf[0] = 0;
+    return k >= 0 && k < SLOTS && u->slot[k].used ? address(&u->slot[k].a, u->slot[k].len, buf, size) : buf;
+}
+
 static uint32_t rnd(mdrt_udp *u) { u->rng ^= u->rng << 13; u->rng ^= u->rng >> 17; u->rng ^= u->rng << 5; return u->rng; }
 
-static void put_out(mdrt_udp *u, const void *b, size_t n)
+static void put_out(mdrt_udp *u, const struct sockaddr_storage *to, socklen len, const void *b, size_t n)
 {
-    sendto(u->s, (const char *)b, (int)n, 0, (const struct sockaddr *)&u->peer, u->peer_len);
+    sendto(u->s, (const char *)b, (int)n, 0, (const struct sockaddr *)to, len);
 }
 
 /* the datagrams held back whose time has come */
@@ -242,12 +259,12 @@ static void release(mdrt_udp *u)
 {
     uint64_t t = ticks();
     for (int i = 0; i < u->nq;) {
-        if (u->q[i].at <= t) { put_out(u, u->q[i].b, u->q[i].n); u->q[i] = u->q[--u->nq]; }
+        if (u->q[i].at <= t) { put_out(u, &u->q[i].to, u->q[i].to_len, u->q[i].b, u->q[i].n); u->q[i] = u->q[--u->nq]; }
         else i++;
     }
 }
 
-static void hold(mdrt_udp *u, const void *b, size_t n)
+static void hold(mdrt_udp *u, const struct sockaddr_storage *to, socklen len, const void *b, size_t n)
 {
     if (u->nq == u->capq) {
         int cap = u->capq ? 2 * u->capq : 64;
@@ -259,51 +276,110 @@ static void hold(mdrt_udp *u, const void *b, size_t n)
     held *h = &u->q[u->nq++];
     h->at = ticks() + (uint64_t)u->sim[0] * 1000u + (u->sim[1] ? rnd(u) % ((uint32_t)u->sim[1] * 1000u) : 0);
     h->n = n;
+    h->to = *to;
+    h->to_len = len;
     memcpy(h->b, b, n);
+}
+
+/* a datagram to an address, through the simulated network when there is one */
+static int send_one(mdrt_udp *u, const struct sockaddr_storage *to, socklen len, const void *b, size_t n)
+{
+    if (n > MDRT_NET_MTU) return -1;
+    release(u);
+    if (!(u->sim[0] | u->sim[1] | u->sim[2] | u->sim[3])) { put_out(u, to, len, b, n); return 0; }
+    if ((int)(rnd(u) % 100) < u->sim[2]) return 0;
+    hold(u, to, len, b, n);
+    if ((int)(rnd(u) % 100) < u->sim[3]) hold(u, to, len, b, n);
+    return 0;
 }
 
 static int link_send(void *user, const void *b, size_t n)
 {
     mdrt_udp *u = user;
-    if (!u->have_peer || n > MDRT_NET_MTU) return -1;
-    release(u);
-    if (!(u->sim[0] | u->sim[1] | u->sim[2] | u->sim[3])) { put_out(u, b, n); return 0; }
-    if ((int)(rnd(u) % 100) < u->sim[2]) return 0;
-    hold(u, b, n);
-    if ((int)(rnd(u) % 100) < u->sim[3]) hold(u, b, n);
-    return 0;
+    if (!u->have_peer) return -1;
+    return send_one(u, &u->peer, u->peer_len, b, n);
 }
 
-static int same_peer(const mdrt_udp *u, const struct sockaddr_storage *a, socklen len)
+static int link_send_to(void *user, int to, const void *b, size_t n)
 {
-    if (len != u->peer_len) return 0;
+    mdrt_udp *u = user;
+    if (to < 0 || to >= SLOTS || !u->slot[to].used) return -1;
+    return send_one(u, &u->slot[to].a, u->slot[to].len, b, n);
+}
+
+static int same_address(const struct sockaddr_storage *a, socklen alen, const struct sockaddr_storage *b, socklen blen)
+{
+    if (alen != blen || a->ss_family != b->ss_family) return 0;
     if (a->ss_family == AF_INET6) {
-        const struct sockaddr_in6 *x = (const struct sockaddr_in6 *)a, *y = (const struct sockaddr_in6 *)&u->peer;
+        const struct sockaddr_in6 *x = (const struct sockaddr_in6 *)a, *y = (const struct sockaddr_in6 *)b;
         return x->sin6_port == y->sin6_port && !memcmp(&x->sin6_addr, &y->sin6_addr, sizeof x->sin6_addr);
     }
-    const struct sockaddr_in *x = (const struct sockaddr_in *)a, *y = (const struct sockaddr_in *)&u->peer;
+    const struct sockaddr_in *x = (const struct sockaddr_in *)a, *y = (const struct sockaddr_in *)b;
     return x->sin_port == y->sin_port && x->sin_addr.s_addr == y->sin_addr.s_addr;
+}
+static int same_peer(const mdrt_udp *u, const struct sockaddr_storage *a, socklen len) { return same_address(a, len, &u->peer, u->peer_len); }
+
+/* the next datagram there is: its length (0: none, -1: an error) and its sender */
+static int take(mdrt_udp *u, void *buf, size_t size, struct sockaddr_storage *from, socklen *len)
+{
+    release(u);
+    for (;;) {
+        *len = (socklen)sizeof *from;
+        int n = (int)recvfrom(u->s, (char *)buf, (int)size, 0, (struct sockaddr *)from, len);
+        if (n >= 0) return n;
+#ifdef _WIN32
+        int e = WSAGetLastError();
+        if (e == WSAEWOULDBLOCK) return 0;
+        if (e == WSAECONNRESET || e == WSAEMSGSIZE) continue;   /* (an ICMP reply to an earlier send; too long) */
+#else
+        if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
+        if (errno == EINTR || errno == ECONNREFUSED) continue;
+#endif
+        return -1;
+    }
+}
+
+/* a host's: the datagram's sender by its place among the addresses heard (a new one takes a free
+ * place, else the one heard from least lately; locked: none new) */
+static int link_recv_from(void *user, void *buf, size_t size, int *from)
+{
+    mdrt_udp *u = user;
+    for (;;) {
+        struct sockaddr_storage a;
+        socklen len;
+        int n = take(u, buf, size, &a, &len);
+        if (n <= 0) return n;
+        int k = -1;
+        for (int i = 0; i < SLOTS && k < 0; i++) if (u->slot[i].used && same_address(&u->slot[i].a, u->slot[i].len, &a, len)) k = i;
+        if (k < 0) {
+            if (u->locked) continue;                      /* (someone else) */
+            for (int i = 0; i < SLOTS && k < 0; i++) if (!u->slot[i].used) k = i;
+            for (int i = 0; i < SLOTS && k < 0; i++) {
+                int old = 0;
+                for (int j = 1; j < SLOTS; j++) if (u->slot[j].heard < u->slot[old].heard) old = j;
+                k = old;
+            }
+            u->slot[k].a = a;
+            u->slot[k].len = len;
+            u->slot[k].used = 1;
+            u->peer = a;                                  /* (mdrt_udp_peer: the latest) */
+            u->peer_len = len;
+            u->have_peer = 1;
+        }
+        u->slot[k].heard = ticks();
+        *from = k;
+        return n;
+    }
 }
 
 static int link_recv(void *user, void *buf, size_t size)
 {
     mdrt_udp *u = user;
-    release(u);
     for (;;) {
         struct sockaddr_storage from;
-        socklen len = (socklen)sizeof from;
-        int n = (int)recvfrom(u->s, (char *)buf, (int)size, 0, (struct sockaddr *)&from, &len);
-        if (n < 0) {
-#ifdef _WIN32
-            int e = WSAGetLastError();
-            if (e == WSAEWOULDBLOCK) return 0;
-            if (e == WSAECONNRESET || e == WSAEMSGSIZE) continue;   /* (an ICMP reply to an earlier send; too long) */
-#else
-            if (errno == EAGAIN || errno == EWOULDBLOCK) return 0;
-            if (errno == EINTR || errno == ECONNREFUSED) continue;
-#endif
-            return -1;
-        }
+        socklen len;
+        int n = take(u, buf, size, &from, &len);
+        if (n <= 0) return n;
         if (u->locked && !same_peer(u, &from, len)) continue;   /* (someone else) */
         if (!u->locked && (!u->have_peer || !same_peer(u, &from, len))) {   /* (a host follows whoever sends) */
             u->peer = from;
@@ -316,7 +392,10 @@ static int link_recv(void *user, void *buf, size_t size)
 
 static uint64_t link_ticks(void *user) { (void)user; return ticks(); }
 
-mdrt_net_link mdrt_udp_link(mdrt_udp *u) { return (mdrt_net_link){ .user = u, .send = link_send, .recv = link_recv, .ticks = link_ticks }; }
+mdrt_net_link mdrt_udp_link(mdrt_udp *u)
+{
+    return (mdrt_net_link){ .user = u, .send = link_send, .recv = link_recv, .ticks = link_ticks, .send_to = link_send_to, .recv_from = link_recv_from };
+}
 
 const char *mdrt_udp_lan_address(char *buf, size_t size)
 {
@@ -371,6 +450,8 @@ void mdrt_net_options_init(mdrt_net_options *o)
 {
     memset(o, 0, sizeof *o);
     o->delay = 2;
+    o->here = 1;
+    o->players = 2;
 }
 
 static int number(const char *s, long lo, long hi, long *v)
@@ -417,6 +498,18 @@ int mdrt_net_parse(mdrt_net_options *o, int argc, char **argv, int *i, char *err
     if (!strcmp(a, "--name")) {
         if (!next) { snprintf(err, errsize, "--name needs a name"); return -1; }
         snprintf(o->name, sizeof o->name, "%s", next);
+        ++*i;
+        return 1;
+    }
+    if (!strcmp(a, "--here")) {
+        if (!next || !number(next, 1, MDRT_PADS - 1, &v)) { snprintf(err, errsize, "--here needs the players at this machine (1-%d)", MDRT_PADS - 1); return -1; }
+        o->here = (int)v;
+        ++*i;
+        return 1;
+    }
+    if (!strcmp(a, "--players")) {
+        if (!next || !number(next, 2, MDRT_PADS, &v)) { snprintf(err, errsize, "--players needs the players in all (2-%d)", MDRT_PADS); return -1; }
+        o->players = (int)v;
         ++*i;
         return 1;
     }

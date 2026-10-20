@@ -1,9 +1,11 @@
 /* UDP for netplay's link (mdrt/netplay.h), natively: POSIX sockets, Winsock 2 on Windows (link
- * ws2_32), IPv4 and IPv6, names resolved. A host opens a port and takes the first peer it hears
- * from (it follows whoever sends until mdrt_udp_lock, which the platform calls once the session
- * starts); a joiner, and each of two peers that both connect (a simultaneous open: each sends to
- * the other's public address from its own port, which most home routers let through without a
- * forwarded port), names the other's address. Nothing here blocks except mdrt_udp_wait.
+ * ws2_32), IPv4 and IPv6, names resolved. A host opens a port and hears whoever sends: its link's
+ * send_to and recv_from know each address by a place (up to eight, the least lately heard given
+ * up for a new one), and its send and recv follow the latest sender, until mdrt_udp_lock (which
+ * the platform calls once the session starts: from then only the addresses it has are heard); a
+ * joiner, and each of two peers that both connect (a simultaneous open: each sends to the other's
+ * public address from its own port, which most home routers let through without a forwarded
+ * port), names the other's address. Nothing here blocks except mdrt_udp_wait.
  *
  * Also the command line's netplay options, the same for every client: mdrt_net_parse. */
 #ifndef MDRT_NET_UDP_H
@@ -23,7 +25,8 @@ void mdrt_udp_close(mdrt_udp *u);
 int mdrt_udp_set_peer(mdrt_udp *u, const char *peer, char *err, size_t errsize);   /* 0, or -1 */
 void mdrt_udp_lock(mdrt_udp *u);        /* from now only the peer it has is heard */
 uint16_t mdrt_udp_port(const mdrt_udp *u);
-const char *mdrt_udp_peer(const mdrt_udp *u, char *buf, size_t size);   /* the peer's address ("" none yet) */
+const char *mdrt_udp_peer(const mdrt_udp *u, char *buf, size_t size);   /* the peer's address ("" none yet; a host's: the latest) */
+const char *mdrt_udp_peer_of(const mdrt_udp *u, int k, char *buf, size_t size);   /* a host's peer by the link's index for it */
 /* the link for mdrt_net_config (its clock: a monotonic one, in microseconds) */
 mdrt_net_link mdrt_udp_link(mdrt_udp *u);
 /* this machine's address on its own network (a LAN's, as 192.168.1.20: the one its traffic to the
@@ -42,6 +45,9 @@ void mdrt_udp_simulate(mdrt_udp *u, int delay_ms, int jitter_ms, int loss_pct, i
  *   --port PORT            this peer's port (with --peer; with --join, to fix it)
  *   --delay N              input delay in frames (the host's choice; 2 by default)
  *   --name NAME            the player's name, for the other to see
+ *   --here N               the players at this machine (1 by default), up to MDRT_PADS - 1
+ *   --players N            a host's: the players in all it waits for (2 by default), up to
+ *                          MDRT_PADS; the pads go out in the order the guests come, its own first
  *   --net-sim MS,MS,%,%    a simulated network: delay, jitter, loss, duplicates */
 typedef struct mdrt_net_options {
     int on;                     /* a session was asked for */
@@ -51,8 +57,10 @@ typedef struct mdrt_net_options {
     int delay;
     char name[MDRT_NET_NAME + 1];
     int sim[4];                 /* delay, jitter, loss, duplicates (all 0: none) */
+    int here;                   /* the players at this machine (mdrt_net_config.players) */
+    int players;                /* a host's: the players in all (mdrt_net_config.players_total) */
 } mdrt_net_options;
-#define MDRT_NET_USAGE "[--host [PORT] | --join ADDR[:PORT] | --peer ADDR[:PORT]] [--port PORT] [--delay N] [--name NAME] [--net-sim MS,MS,%,%]"
+#define MDRT_NET_USAGE "[--host [PORT] | --join ADDR[:PORT] | --peer ADDR[:PORT]] [--port PORT] [--delay N] [--name NAME] [--here N] [--players N] [--net-sim MS,MS,%,%]"
 void mdrt_net_options_init(mdrt_net_options *o);
 /* argv[*i] (and what follows it) if it is one of them: 1, with *i on the last word it took; 0
  * when it is not one; -1 when it is malformed (err says why) */
