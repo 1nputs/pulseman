@@ -18,7 +18,9 @@
  * Last, more machines (a host and up to three guests, the host passing each guest's buttons on to
  * the others): four with a player each, three with two and one and one, two with one and three
  * and with three and one, every frame of each as a lone console's; four, one leaving: every one's
- * session over, each told who left; a game for two that a third would join: refused. And the host
+ * session over, each told who left; a game for two that a third would join: refused; the waiting
+ * room as a guest sees it (mdrt_net_room_get: answered, the settings come, the players in so far).
+ * And the host
  * resetting the console mid-game (MDRT_NET_RESET_BIT in its buttons), a guest's reset bit too: every
  * frame of both as a lone console's that powers on again at the host's frame and not the guest's,
  * a rollback across the reset playing it again. And the host loading states for everyone
@@ -841,6 +843,45 @@ static void full(void)
     finish_n(ps, 3);
 }
 
+/* the waiting room as a guest sees it (mdrt_net_room_get): no answer before the host's, then the
+ * host's settings (20,000 bytes) whole and the players in so far of the host's three; the third
+ * joining, every machine ready */
+static void room(void)
+{
+    static uint8_t rules[20000];
+    for (size_t i = 0; i < sizeof rules; i++) rules[i] = (uint8_t)(i * 7);
+    peer *ps[3] = { &A, &B, &C };
+    cond = (net_cond){ .latency = 10000, .jitter = 4000 };
+    setup(&A, &B, "host", MDRT_NET_HOST, 1, 16684);
+    setup(&B, &A, "b", MDRT_NET_JOIN, 2, 16684);
+    setup(&C, &A, "c", MDRT_NET_JOIN, 3, 16684);
+    A.cfg.players_total = 3;
+    A.cfg.settings = rules;
+    A.cfg.settings_size = sizeof rules;
+    A.net = mdrt_net_new(&A.cfg);
+    B.net = mdrt_net_new(&B.cfg);
+    mdrt_net_room before, b, host, c;
+    mdrt_net_room_get(B.net, &before);
+    for (int i = 0; i < 2000; i++, clock_us += 1000) { mdrt_net_connect(A.net); mdrt_net_connect(B.net); }
+    mdrt_net_room_get(B.net, &b);
+    mdrt_net_room_get(A.net, &host);
+    C.net = mdrt_net_new(&C.cfg);
+    int ra = 0, rb = 0, rc = 0;
+    for (int i = 0; i < 5000 && !(ra == MDRT_NET_READY && rb == MDRT_NET_READY && rc == MDRT_NET_READY); i++, clock_us += 1000) {
+        ra = mdrt_net_connect(A.net); rb = mdrt_net_connect(B.net); rc = mdrt_net_connect(C.net);
+    }
+    mdrt_net_room_get(C.net, &c);
+    printf("  the waiting room, a guest's: answered %d before the host's answer, then %d: settings %zu of %zu bytes, %d of %d players in\n"
+           "    (the host's: %d of %d); the third in, all ready: %s\n", before.answered, b.answered, b.settings_have, b.settings_size,
+           b.players, b.players_total, host.players, host.players_total, ra == MDRT_NET_READY && rb == MDRT_NET_READY && rc == MDRT_NET_READY ? "yes" : "no");
+    CHECK(!before.answered && !before.players_total);
+    CHECK(b.answered && b.settings_have == sizeof rules && b.settings_size == sizeof rules && b.players == 2 && b.players_total == 3);
+    CHECK(host.answered && host.players == 2 && host.players_total == 3);
+    CHECK(ra == MDRT_NET_READY && rb == MDRT_NET_READY && rc == MDRT_NET_READY);
+    CHECK(c.answered && c.settings_have == c.settings_size && c.settings_size == sizeof rules);
+    finish_n(ps, 3);
+}
+
 int main(void)
 {
     for (int i = 0; mdrt_fm_cores(i); i++)
@@ -859,5 +900,6 @@ int main(void)
     machines("two machines, three players and one", three_one, 2, 1100);
     leaving();
     full();
+    room();
     return check_done("net_test");
 }

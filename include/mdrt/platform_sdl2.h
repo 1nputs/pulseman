@@ -146,7 +146,9 @@ typedef struct mdrt_sdl_options {
      * host's players in all (kept in the settings file), and starts a session there; NULL: no netplay. net: a session the client made
      * from its command line instead (mdrt_net_parse, mdrt_net_open_udp, mdrt_net_new; its
      * local_input reading mdrt_platform_input), and net_udp its UDP link (NULL: another link).
-     * Either way the window connects first, showing it (Esc gives up), then powers on a new console
+     * Either way the window connects first, showing it (Esc gives up; a guest's page says whether the
+     * host has answered, why nothing can be sent when the system says, then the host's settings
+     * coming and the players in so far: mdrt_net_room_get), then powers on a new console
      * with the session started on it (mdrt_set_net, mdrt_net_start: the console's pad source); the
      * game's function finds it with mdrt_get_net and calls mdrt_net_frame at its waits, and
      * mdrt_idle while told to wait (the window waits a millisecond there, and says when it is

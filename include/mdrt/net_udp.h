@@ -1,5 +1,5 @@
 /* UDP for netplay's link (mdrt/netplay.h), natively: POSIX sockets, Winsock 2 on Windows (link
- * ws2_32), IPv4 and IPv6, names resolved. A host opens a port and hears whoever sends: its link's
+ * ws2_32), IPv4 and IPv6, names resolved (a name's IPv4 address first). A host opens a port and hears whoever sends: its link's
  * send_to and recv_from know each address by a place (up to eight, the least lately heard given
  * up for a new one), and its send and recv follow the latest sender, until mdrt_udp_lock (which
  * the platform calls once the session starts: from then only the addresses it has are heard); a
@@ -26,6 +26,9 @@ int mdrt_udp_set_peer(mdrt_udp *u, const char *peer, char *err, size_t errsize);
 void mdrt_udp_lock(mdrt_udp *u);        /* from now only the peer it has is heard */
 uint16_t mdrt_udp_port(const mdrt_udp *u);
 const char *mdrt_udp_peer(const mdrt_udp *u, char *buf, size_t size);   /* the peer's address ("" none yet; a host's: the latest) */
+/* why the last datagram could not go, as the system said ("no route to host" ...; "" when the last
+ * went: a datagram that went may still be lost) */
+const char *mdrt_udp_error(const mdrt_udp *u);
 const char *mdrt_udp_peer_of(const mdrt_udp *u, int k, char *buf, size_t size);   /* a host's peer by the link's index for it */
 /* the link for mdrt_net_config (its clock: a monotonic one, in microseconds) */
 mdrt_net_link mdrt_udp_link(mdrt_udp *u);

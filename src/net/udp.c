@@ -46,6 +46,7 @@ struct mdrt_udp {
     uint32_t rng;
     held *q;                            /* datagrams it holds back */
     int nq, capq;
+    char error[96];                     /* why the last datagram could not go ("" when it went) */
 };
 
 static void put_out(mdrt_udp *u, const struct sockaddr_storage *to, socklen len, const void *b, size_t n);
@@ -114,8 +115,10 @@ static int resolve(const char *addr, struct sockaddr_storage *out, socklen *len,
     hints.ai_family = AF_UNSPEC;
     hints.ai_socktype = SOCK_DGRAM;
     if (getaddrinfo(host, service, &hints, &res) || !res) { snprintf(err, errsize, "cannot find %s", host); return -1; }
-    memcpy(out, res->ai_addr, res->ai_addrlen);
-    *len = (socklen)res->ai_addrlen;
+    const struct addrinfo *pick = res;                    /* (a name's IPv4 address first: a LAN's IPv6 is often link-local, or not let through) */
+    for (const struct addrinfo *a = res; a; a = a->ai_next) if (a->ai_family == AF_INET) { pick = a; break; }
+    memcpy(out, pick->ai_addr, pick->ai_addrlen);
+    *len = (socklen)pick->ai_addrlen;
     freeaddrinfo(res);
     return 0;
 }
@@ -251,8 +254,20 @@ static uint32_t rnd(mdrt_udp *u) { u->rng ^= u->rng << 13; u->rng ^= u->rng >> 1
 
 static void put_out(mdrt_udp *u, const struct sockaddr_storage *to, socklen len, const void *b, size_t n)
 {
-    sendto(u->s, (const char *)b, (int)n, 0, (const struct sockaddr *)to, len);
+    if (sendto(u->s, (const char *)b, (int)n, 0, (const struct sockaddr *)to, len) >= 0) { u->error[0] = 0; return; }
+#ifdef _WIN32
+    int e = WSAGetLastError();
+    if (e == WSAEWOULDBLOCK) return;                      /* (the buffer full for now: not the network's doing) */
+    snprintf(u->error, sizeof u->error, "%s", e == WSAEHOSTUNREACH ? "no route to the host" : e == WSAENETUNREACH ? "the network is unreachable" :
+             e == WSAEACCES ? "not allowed (a firewall?)" : e == WSAEADDRNOTAVAIL ? "the address is not available" : "Winsock error");
+    if (!strcmp(u->error, "Winsock error")) snprintf(u->error, sizeof u->error, "Winsock error %d", e);
+#else
+    if (errno == EAGAIN || errno == EWOULDBLOCK || errno == ENOBUFS || errno == EINTR) return;
+    snprintf(u->error, sizeof u->error, "%s", strerror(errno));
+#endif
 }
+
+const char *mdrt_udp_error(const mdrt_udp *u) { return u->error; }
 
 /* the datagrams held back whose time has come */
 static void release(mdrt_udp *u)

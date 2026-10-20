@@ -22,7 +22,9 @@
  *   BYE        session u32, why (length u8, bytes: what ended the session, for every player)
  *   STATE      session u32, the state's number u32 (the host's count of them), its size u32, then
  *              as CHUNK: index u32, length u16, bytes (a state for everyone, in the game)
- *   STATE_ACK  session u32, the state's number u32, then as CHUNK_ACK */
+ *   STATE_ACK  session u32, the state's number u32, then as CHUNK_ACK
+ *   ROOM       session u32, the players in so far u8, the players in all u8 (the host's waiting
+ *              room, to each guest in it a few times a second) */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -42,7 +44,7 @@
 #define HOST_BITS (MDRT_NET_RESET_BIT | MDRT_NET_LOAD_BIT)   /* (the host's buttons' bits of no pad's) */
 
 enum { T_HELLO = 1, T_ACCEPT, T_REFUSE, T_CHUNK, T_CHUNK_ACK, T_READY, T_START, T_INPUT, T_PING, T_PONG, T_BYE,
-       T_STATE, T_STATE_ACK };
+       T_STATE, T_STATE_ACK, T_ROOM };
 enum { P_HELLO, P_HOSTING, P_GUEST, P_RUNNING, P_DONE };
 
 typedef struct snap { uint32_t frame; int valid; size_t len, cap; uint8_t *buf; } snap;
@@ -103,8 +105,9 @@ struct mdrt_net {
     size_t settings_size;
     uint32_t chunks;
     receiving set_in;
-    uint64_t hello_at, ready_at;
+    uint64_t hello_at, ready_at, room_at;
     int started;
+    int room_in, room_total;            /* (a guest's) the host's waiting room, as it last said */
     uint32_t period_us;                 /* a frame */
     /* the console and the frames */
     mdrt *m;
@@ -322,6 +325,23 @@ int mdrt_net_peers(const mdrt_net *n)
     return k;
 }
 int mdrt_net_me(const mdrt_net *n) { return n->me; }
+void mdrt_net_room_get(const mdrt_net *n, mdrt_net_room *r)
+{
+    memset(r, 0, sizeof *r);
+    if (n->host) {
+        r->answered = 1;
+        r->settings_have = r->settings_size = n->settings_size;
+        for (int k = 0; k < PEERS; k++) if (n->p[k].used) r->players += n->p[k].players;
+        r->players_total = n->total;
+        return;
+    }
+    r->answered = n->phase == P_GUEST || n->phase == P_RUNNING || (n->phase == P_DONE && n->session);
+    r->settings_size = n->settings_size;
+    size_t have = (size_t)n->set_in.have * CHUNK;
+    r->settings_have = n->phase == P_RUNNING || have > n->settings_size ? n->settings_size : have;
+    r->players = n->room_in;
+    r->players_total = n->room_total;
+}
 const char *mdrt_net_name_of(const mdrt_net *n, int k) { return k >= 0 && k < PEERS && n->p[k].used ? n->p[k].name : ""; }
 uint8_t mdrt_net_pads_of(const mdrt_net *n, int k) { return k >= 0 && k < PEERS && n->p[k].used ? n->p[k].pads : 0; }
 int mdrt_net_players_of(const mdrt_net *n, int k) { return k >= 0 && k < PEERS && n->p[k].used ? n->p[k].players : 0; }
@@ -619,6 +639,12 @@ int mdrt_net_connect(mdrt_net *n)
             blob b = settings_blob(n);
             send_lacking(n, k, &b);
             if (!g->ready) all_ready = 0;
+        }
+        if (t - n->room_at >= 250 * MS) {                 /* (each guest told who is in so far) */
+            n->room_at = t;
+            out o;
+            begin(&o, T_ROOM); p32(&o, n->session); p8(&o, (uint32_t)(n->total - seats)); p8(&o, (uint32_t)n->total);
+            for (int k = 1; k < PEERS; k++) if (n->p[k].used) to_peer(n, k, &o);
         }
         if (guests && all_ready && seats == 0) begin_session(n);
     }
@@ -1056,6 +1082,13 @@ static void handle(mdrt_net *n, const uint8_t *b, size_t size, int from)
         if (cf) { sp->theirs[(cf / (uint32_t)n->check_every) % CHECKS].frame = cf; sp->theirs[(cf / (uint32_t)n->check_every) % CHECKS].hash = ch; }
         if (n->host && count)                             /* (passed on to the others at once) */
             for (int k = 1; k < n->npeers; k++) if (k != s) send_buttons(n, k, s);
+        break;
+    }
+    case T_ROOM: {
+        uint32_t in_room = g8(&i), total = g8(&i);
+        if (i.bad || n->host || total > MDRT_PADS || in_room > total) return;
+        n->room_in = (int)in_room;
+        n->room_total = (int)total;
         break;
     }
     case T_PING:

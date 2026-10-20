@@ -2713,6 +2713,7 @@ static int connect_session(sdl *s)
     mdrt_net *n = s->net;
     char where[160], peer[96], why[256];
     unsigned said = 0;                                    /* (a host's guests said to have joined, by place) */
+    int answered = 0;                                     /* (a guest: the host's answer said) */
     if (s->net_udp) snprintf(where, sizeof where, mdrt_net_is_host(n) ? "Hosting on port %u" : "On port %u, reaching %s",
                              (unsigned)mdrt_udp_port(s->net_udp), mdrt_udp_peer(s->net_udp, peer, sizeof peer));
     else snprintf(where, sizeof where, "Connecting");
@@ -2769,8 +2770,19 @@ static int connect_session(sdl *s)
                 if (e.type == SDL_WINDOWEVENT) { s->redraw = 1; net_page(s, lines, 4); }
             }
         }
-        char since[64], title[64], joined[200] = "";
-        snprintf(since, sizeof since, "Waiting %u s", (unsigned)((SDL_GetTicks() - t0) / 1000));
+        char since[64], title[64], joined[200] = "", hint[2][64] = { "", "" };
+        unsigned secs = (SDL_GetTicks() - t0) / 1000;
+        snprintf(since, sizeof since, "Waiting %u s", secs);
+        mdrt_net_room room;
+        mdrt_net_room_get(n, &room);
+        if (!mdrt_net_is_host(n) && room.answered && !answered) {   /* (a guest: in the host's waiting room) */
+            const char *host = mdrt_net_peer_name(n);
+            answered = 1;
+            say(s, 5000, "Connected to %s", host[0] ? host : "the host");
+            printf("netplay: connected to %s\n", host[0] ? host : "the host");
+            fflush(stdout);
+            notice(s, "netplay: connected, waiting for the other players");
+        }
         if (mdrt_net_is_host(n)) {                        /* (a host: who is in so far) */
             int players = 0, total = s->net_all;
             for (int k = 0; k < MDRT_PADS; k++) players += mdrt_net_players_of(n, k);
@@ -2782,9 +2794,26 @@ static int connect_session(sdl *s)
                 size_t at = strlen(joined);
                 snprintf(joined + at, sizeof joined - at, "%s%s (%d)", at ? ", " : "Joined: ", name[0] ? name : "a player", mdrt_net_players_of(n, k));
             }
-        } else snprintf(title, sizeof title, "Netplay: waiting for the host");
+        } else if (!room.answered) {                      /* (a guest the host has not answered: why not, if the system says) */
+            const char *err = s->net_udp ? mdrt_udp_error(s->net_udp) : "";
+            snprintf(title, sizeof title, "Netplay: reaching the host");
+            snprintf(since, sizeof since, "No answer yet (%u s)", secs);
+            if (err[0]) snprintf(joined, sizeof joined, "Cannot send: %.34s", err);
+            if (secs >= 4) snprintf(hint[0], sizeof hint[0], "Are the host's address and port right?");
+#ifdef __APPLE__
+            if (secs >= 4 || err[0]) snprintf(hint[1], sizeof hint[1], "Mac: Privacy & Security > Local Network: allow");
+#endif
+        } else {                                          /* (a guest in the host's waiting room) */
+            const char *host = mdrt_net_peer_name(n);
+            snprintf(title, sizeof title, "Netplay: connected to %.24s", host[0] ? host : "the host");
+            if (room.settings_have < room.settings_size)
+                snprintf(since, sizeof since, "The host's settings: %u%%", (unsigned)(room.settings_have * 100 / room.settings_size));
+            else if (room.players_total)
+                snprintf(since, sizeof since, "Waiting for the others: %d of %d in", room.players, room.players_total);
+            else snprintf(since, sizeof since, "Waiting for the others");
+        }
         const char *refused = mdrt_net_why(n);
-        const char *lines[] = { title, where, since, joined, refused[0] ? refused : "", "", "Esc gives up" };
+        const char *lines[] = { title, where, since, joined, refused[0] ? refused : hint[0], hint[1], "Esc gives up" };
         net_page(s, lines, 7);
         if (s->net_udp) mdrt_udp_wait(s->net_udp, 15);
         else SDL_Delay(15);

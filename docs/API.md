@@ -264,7 +264,10 @@ session:
    every player is in; each guest's client then applies `mdrt_net_settings(n, &size)` and powers
    on. `mdrt_net_peers`, `mdrt_net_me`, `mdrt_net_name_of`, `mdrt_net_players_of` and
    `mdrt_net_pads_of` say who is in (a host's waiting room as it fills); `mdrt_net_all_pads`, the
-   pads played (pads 3 or 4: the ports need EA's 4 Way Play). Protocol 6.
+   pads played (pads 3 or 4: the ports need EA's 4 Way Play). `mdrt_net_room_get` is the waiting
+   room as this peer sees it, for the player: whether the host has answered, the host's settings
+   come so far, and the players in so far and in all (the host tells each guest a few times a
+   second). Protocol 7.
 3. `mdrt_net_start(n, m)` on the console just powered on: the module becomes its pad source.
 4. At every wait after its vertical blank code the client calls `mdrt_net_frame(n, resumable)`,
    `resumable` saying whether it could go on from here after a state is loaded (its game loop's
@@ -304,13 +307,14 @@ rollbacks, waits and checks for the platform to show; `mdrt_net_set_log` writes 
 buttons as they become known, a replay of the session from power on.
 
 `mdrt/net_udp.h` is the native link: UDP (POSIX sockets; Winsock 2 on Windows, linking `ws2_32`),
-IPv4 and IPv6, names resolved. `mdrt_udp_open(port, peer, err, n)`: a host gives no peer and hears
+IPv4 and IPv6, names resolved (a name's IPv4 address first). `mdrt_udp_open(port, peer, err, n)`: a host gives no peer and hears
 whoever sends (each address a place for `send_to` and `recv_from`, up to eight) until
 `mdrt_udp_lock` (call it once the session starts); a joiner names the host's address; two peers
 that both connect each name the other's (a simultaneous open, which most home routers let through
 without a forwarded port).
 `mdrt_udp_link(u)` is the link for the configuration; `mdrt_udp_wait(u, ms)` sleeps until a datagram
-comes, for a caller told to wait; `mdrt_udp_simulate` delays, reorders, loses and doubles what it
+comes, for a caller told to wait; `mdrt_udp_error(u)` says why the last datagram could not go, as
+the system said ("" when it went); `mdrt_udp_simulate` delays, reorders, loses and doubles what it
 sends, for tests. In the SDL2 platform a client that plays online gives `mdrt_sdl_options.net_identity`, and the
 menu has an Online play page: the player's name; host, join a host, or both connecting at once;
 the other's address and the port (fields the player types into, kept in the settings file); this
@@ -325,8 +329,11 @@ game plays by that is sent rather than compared (its options, its data) comes fr
 copies them). At power on the game reads the host's with `mdrt_net_settings` (the host its own) and
 plays by them on both. A client
 can also make a session from its command line and put it in `mdrt_sdl_options.net` (its UDP link
-in `net_udp`). Either way the window connects before the game starts (a page that says so, a
-host's with who has joined so far, Esc giving up), then powers on a new console with the session started on it: the game's function
+in `net_udp`). Either way the window connects before the game starts (a page that says so, Esc
+giving up: a host's with who has joined so far; a guest's "reaching the host" until the host
+answers, with the system's word when nothing can be sent and, after a few seconds, what to check
+(on a Mac, the Local Network permission), then "connected to" the host, its settings coming and
+the players in so far), then powers on a new console with the session started on it: the game's function
 finds it with `mdrt_get_net(m)`, calls `mdrt_net_frame` at its waits as above, and `mdrt_idle(m)`
 while told to wait (the window waits a millisecond there; nonzero: the window is closing, so say
 goodbye and stop). The window says who joined ("Sam has joined") and why a session ended ("Sam

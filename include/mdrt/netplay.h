@@ -37,10 +37,11 @@
 #include <stdint.h>
 #include "mdrt/mdrt.h"
 
-#define MDRT_NET_PROTOCOL 6             /* the messages' version: peers must agree (2: the players' names; 3: the
+#define MDRT_NET_PROTOCOL 7             /* the messages' version: peers must agree (2: the players' names; 3: the
                                            settings' chunks acknowledged selectively; 4: up to four machines;
                                            5: the host's reset, MDRT_NET_RESET_BIT; 6: the host's state loaded
-                                           for everyone, mdrt_net_load) */
+                                           for everyone, mdrt_net_load; 7: the waiting room told to the guests,
+                                           mdrt_net_room_get) */
 #define MDRT_NET_NAME 24                /* a player's name, at most (printable ASCII) */
 
 /* the other peers, as the platform reaches them (UDP natively: mdrt/net_udp.h). send: one datagram
@@ -121,6 +122,12 @@ const char *mdrt_net_peer_name(const mdrt_net *n);
  * the ports need (pads 3 and 4: EA's 4 Way Play) */
 int mdrt_net_peers(const mdrt_net *n);
 int mdrt_net_me(const mdrt_net *n);
+/* the waiting room as this peer sees it, before the game, for the player: whether the host has
+ * answered (a guest: it was accepted; a host: 1), the host's settings come so far and in all
+ * (bytes), and the players in so far and in all (a guest's: as the host last said, a few times a
+ * second; 0 and 0 before it says) */
+typedef struct mdrt_net_room { int answered; size_t settings_have, settings_size; int players, players_total; } mdrt_net_room;
+void mdrt_net_room_get(const mdrt_net *n, mdrt_net_room *r);
 const char *mdrt_net_name_of(const mdrt_net *n, int k);
 int mdrt_net_players_of(const mdrt_net *n, int k);
 uint8_t mdrt_net_pads_of(const mdrt_net *n, int k);
