@@ -389,7 +389,7 @@ static void net_status(sdl *s)
     if (state == MDRT_NET_ENDED || state == MDRT_NET_REFUSED) SDL_AtomicSet(&s->net_over, 1);
 }
 
-static int wait(void *user)
+static int frame_wait(void *user)
 {
     sdl *s = user;
     if (SDL_AtomicGet(&s->session)) {                     /* netplay: by the clock; time spent waiting on the other not made up */
@@ -2782,6 +2782,27 @@ static void net_begin(sdl *s)
     }
 }
 
+const char *mdrt_sdl_home(const char *app)
+{
+#ifdef __APPLE__
+    static char home[1024];
+    char cwd[4];
+    if (!getcwd(cwd, sizeof cwd) || strcmp(cwd, "/")) return NULL;   /* (run from a shell: its directory, as elsewhere) */
+    char *base = SDL_GetBasePath();                       /* (a bundle's: APP.app/Contents/Resources/) */
+    int bundle = base && strstr(base, ".app/Contents/");
+    SDL_free(base);
+    if (!bundle) return NULL;
+    char *pref = SDL_GetPrefPath("", app && *app ? app : "pulseman");   /* (~/Library/Application Support/APP/, made) */
+    if (!pref) return NULL;
+    snprintf(home, sizeof home, "%s", pref);
+    SDL_free(pref);
+    return chdir(home) == 0 ? home : NULL;
+#else
+    (void)app;
+    return NULL;
+#endif
+}
+
 int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game, void *user)
 {
     sdl *s = calloc(1, sizeof *s);
@@ -2829,7 +2850,7 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
     s->cap = mdrt_capture_new(0);
     if (!s->cap) s->replay = 0;
     else capture_set(s);
-    cfg->platform = (mdrt_platform){ .user = s, .present = present, .audio = audio, .wait = wait, .input = input, .requests = requests,
+    cfg->platform = (mdrt_platform){ .user = s, .present = present, .audio = audio, .wait = frame_wait, .input = input, .requests = requests,
                                      .request_path = request_path, .idle = idle };
     mdrt_menu_init(&s->menu);
     char why[1200] = "";

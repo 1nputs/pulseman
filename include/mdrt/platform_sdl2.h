@@ -38,7 +38,7 @@
  * left stick are the directions). A change shows for a moment in the window's title.
  *
  * The settings file (settings.ini in the directory the game runs in, beside its saves and
- * screenshots) is written with every setting the first time and whenever one changes; edit it
+ * screenshots: a macOS bundle's from the Finder, mdrt_sdl_home's) is written with every setting the first time and whenever one changes; edit it
  * while the game is closed. It keeps the ROM chosen last, the window's size, place and full
  * screen, the upscaler, the scaling (sharp, integer, fit) and aspect (square, 4:3), the volume and mute, the
  * sound device and how many frames of sound are queued (latency), the FM core and chip, the
@@ -194,6 +194,15 @@ typedef void (*mdrt_game_fn)(mdrt *m, void *user);
  * cfg->platform is filled in here, and cfg->fm_core and fm_model when cfg->fm_core is NULL (the
  * settings', the player's choice). The user pointer goes to game, rom_check and rom_use. */
 int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game, void *user);
+
+/* where the game's files go (the settings, saves, states, screenshots, videos: all relative to the
+ * working directory): call it first thing in main, before any of them is opened. A macOS app
+ * bundle started from the Finder (or `open`) runs in "/", where nothing can be written, so there
+ * it works in ~/Library/Application Support/APP (made if need be) and this returns that
+ * directory. Run from a shell (its program, APP.app/Contents/MacOS/...), outside a bundle, and on
+ * every other system, the game keeps the working directory it was given, as its command line's
+ * paths expect, and this returns NULL. */
+const char *mdrt_sdl_home(const char *app);
 
 /* Windows: SDL2's compile flags (pkg-config --cflags sdl2) rename the client's main to SDL_main,
  * and SDL2main supplies the real entry point; this gives it its prototype there */

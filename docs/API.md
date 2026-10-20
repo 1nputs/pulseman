@@ -18,7 +18,11 @@ return mdrt_sdl_run(&c, &o, game, NULL);   /* game(m, user) runs on the game thr
 ```
 
 The platform keeps the player's settings in `settings.ini` in the directory the game runs in
-(`settings_path` puts it elsewhere; `app` begins the screenshots' names). It writes the file with
+(`settings_path` puts it elsewhere; `app` begins the screenshots' names). On macOS an app bundle
+started from the Finder runs in `/`, where nothing can be written, so a game calls
+`mdrt_sdl_home(app)` first thing in `main`: a bundle started so works in
+`~/Library/Application Support/APP` (made if need be). Run from a shell, outside a bundle and on
+the other systems, it leaves the working directory alone. It writes the file with
 every setting the first time and whenever the player changes one: the window's size, place and full
 screen, vsync, the scaling (sharp, integer, fit) and aspect (square pixels, 4:3), the volume, mute,
 sound device and latency, pausing when the window loses focus, fast-forward's speed, frames a
