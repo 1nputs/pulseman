@@ -96,7 +96,10 @@ static const int fast_speeds[6] = { 2, 3, 4, 6, 8, 0 };
 static const char *const fast_label[6] = { "2x", "3x", "4x", "6x", "8x", "as fast as it goes" };
 enum { NET_HOST, NET_JOIN, NET_BOTH };
 static const char *const net_role_name[3] = { "host", "join", "both" };
-static const char *const net_role_label[3] = { "host (player 1)", "join a host", "both connect" };
+static const char *const net_role_label[3] = { "host", "join a host", "both connect" };
+/* the Online page's Save RAM (a host's, for a game that sends its own: net_save_ram) */
+static const char *const net_save_name[2] = { "yours", "new" };
+static const char *const net_save_label[2] = { "yours", "a new cartridge's" };
 
 #define VOLUME_STEP 10
 #define ROM_MAX (16u << 20)                               /* (no cartridge is larger) */
@@ -113,7 +116,7 @@ enum { I_RESUME = 1, I_ROM, I_RESET, I_SAVE, I_LOAD, I_VIDEO, I_SOUND, I_OPTIONS
        I_UPSCALE, I_SCALE, I_ASPECT, I_FULL, I_VSYNC, I_COLOURS, I_BLEND, I_SCANLINES, I_MASK, I_VOLUME, I_MUTE, I_FM_CORE, I_FM_CHIP, I_FOCUS, I_FAST, I_UP,
        I_PLAYERS, I_ADAPTOR, I_TURBO, I_DEADZONE, I_CBUTTONS, I_RESUME_OPT,
        I_CAPTURE, I_CAP_REPLAY, I_CAP_RECORD, I_CAP_SECONDS, I_CAP_GIFSCALE, I_USE, I_FPS, I_CSECTION,
-       I_NET, I_NET_ROLE, I_NET_ADDR, I_NET_PORT, I_NET_DELAY, I_NET_START, I_NET_LEAVE, I_NET_NAME, I_NET_HERE, I_NET_ALL,
+       I_NET, I_NET_ROLE, I_NET_ADDR, I_NET_PORT, I_NET_DELAY, I_NET_START, I_NET_LEAVE, I_NET_NAME, I_NET_HERE, I_NET_ALL, I_NET_SAVE,
        I_SLOT = 800,             /* + slot (1-8) */
        I_PLAYER = 900,           /* + player (0-3) */
        I_PAD = 1000,             /* + pad * BUTTONS + button */
@@ -171,6 +174,7 @@ typedef struct sdl {
     int net_sram;               /* this console powered on in a session: its save RAM the session's, never written to the file */
     int net_role, net_port, net_delay;   /* the Online page's, kept in the settings */
     int net_here, net_all;      /* the Online page's players at this machine, and in all (a host's) */
+    int net_fresh;              /* its Save RAM: a new cartridge's (a host's, net_save_ram) */
     uint64_t net_idle;          /* the game thread's time in mdrt_idle since its last frame (performance counts) */
     char net_addr[96];
     char net_name[MDRT_NET_NAME + 1];   /* the player's, for the other to see */
@@ -916,6 +920,10 @@ static void settings_load(sdl *s)
         s->net_delay = clamp(mdrt_settings_get_int(s->set, "netplay.delay", 2), 0, MDRT_NET_MAX_DELAY);
         s->net_here = clamp(mdrt_settings_get_int(s->set, "netplay.here", 1), 1, MDRT_PADS - 1);
         s->net_all = clamp(mdrt_settings_get_int(s->set, "netplay.players", 2), 2, MDRT_PADS);
+        if (s->o->net_save_ram) {
+            mdrt_settings_default(s->set, "netplay.save_ram", "yours");
+            s->net_fresh = named(mdrt_settings_get(s->set, "netplay.save_ram"), net_save_name, 2, 0);
+        }
     }
     for (int p = 0; p < MDRT_PADS; p++) {
         char k[48];
@@ -1704,7 +1712,7 @@ static void build_page(sdl *s, int page, int select)
         SDL_LockMutex(s->lock);
         if (on) snprintf(m->subtitle, sizeof m->subtitle, "Playing online: %.120s", s->net_line[0] ? s->net_line + 9 : "connected");
         else if (s->net_line[0]) snprintf(m->subtitle, sizeof m->subtitle, "Last time: %.120s", s->net_line + 9);
-        else snprintf(m->subtitle, sizeof m->subtitle, "Two players, each at their own machine");
+        else snprintf(m->subtitle, sizeof m->subtitle, "%s", game_pads(s) > 2 ? "Two to four machines, players at each" : "Two players, each at their own machine");
         SDL_UnlockMutex(s->lock);
         char port[8];
         snprintf(port, sizeof port, "%d", s->net_port);
@@ -1724,6 +1732,8 @@ static void build_page(sdl *s, int page, int select)
                 if (s->net_role != NET_JOIN)
                     mdrt_menu_add_number(m, I_NET_ALL, "Players in all", clamp(s->net_all, s->net_here + 1, most), 2, most, 1, NULL);
             }
+            if (s->o->net_save_ram && s->net_role != NET_JOIN)   /* (the host's: what every machine's game plays with) */
+                mdrt_menu_add_choice(m, I_NET_SAVE, "Save RAM", net_save_label, 2, s->net_fresh);
             mdrt_menu_add(m, I_NET_START, MDRT_ITEM_ACTION, s->net_role == NET_HOST ? "Start hosting" : "Connect and play");
         }
         char lan[64];
@@ -2040,6 +2050,10 @@ static void act(sdl *s, int id)
     case I_NET_DELAY:
         s->net_delay = it->value;
         mdrt_settings_set_int(s->set, "netplay.delay", s->net_delay);
+        return;
+    case I_NET_SAVE:
+        s->net_fresh = it->value;
+        mdrt_settings_set(s->set, "netplay.save_ram", net_save_name[s->net_fresh]);
         return;
     case I_NET_HERE:
         s->net_here = it->value;
@@ -2762,7 +2776,7 @@ static void net_begin(sdl *s)
     if (!stop_game(s)) { mdrt_udp_close(u); snprintf(s->menu.message, sizeof s->menu.message, "The game would not stop"); return; }
     if (s->o->net_settings) {                             /* (this player's, sent if it hosts: from the menu's values, its save RAM written back) */
         if (s->o->options_use && s->opt_values) s->o->options_use(s->opt_values, s->user);
-        c.settings = s->o->net_settings(&c.settings_size, s->user);
+        c.settings = s->o->net_settings(&c.settings_size, s->o->net_save_ram && s->net_role != NET_JOIN && s->net_fresh, s->user);
         if (!c.settings) c.settings_size = 0;
     }
     mdrt_net *n = mdrt_net_new(&c);

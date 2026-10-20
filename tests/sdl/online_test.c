@@ -17,7 +17,8 @@
  * once it is over, writes its save RAM (the session's) to no file.
  * Last the window hosts, on the port the other player hosted on: a player joins (a thread again),
  * the window leaves, and hosts on that port once more, a player joining again (the last session's
- * socket closed before the next is opened on its port). */
+ * socket closed before the next is opened on its port), the page's Save RAM "a new cartridge's"
+ * the second time (the game's settings told so; the first time its own). */
 #include <SDL2/SDL.h>
 #ifdef _WIN32
 #include <direct.h>
@@ -55,11 +56,13 @@ static int options_session(int *v, void *user)
     v[0] = 2;
     return 1;
 }
-static const void *window_settings(size_t *size, void *user)
+static SDL_atomic_t settings_fresh;
+static const void *window_settings(size_t *size, int fresh, void *user)
 {
     (void)user;
     static const char mine[] = "the window's rules (not sent: it joins)";
     SDL_AtomicAdd(&settings_asked, 1);
+    SDL_AtomicSet(&settings_fresh, fresh);
     *size = sizeof mine;
     return mine;
 }
@@ -276,8 +279,8 @@ static int player(void *user)
     (void)user;
     while (SDL_AtomicGet(&frames) < 60) SDL_Delay(10);
     CHECK_EQ(SDL_AtomicGet(&online), 0);
-    online_page();                                        /* (on Start hosting, below Your name, Play as, Port and Input delay: no Pads each, not offered) */
-    keys(SDL_SCANCODE_UP, 4);
+    online_page();                                        /* (on Start hosting, below Your name, Play as, Port, Input delay and Save RAM) */
+    keys(SDL_SCANCODE_UP, 5);
     press(SDL_SCANCODE_RETURN);                           /* the name */
     type("Tester");
     press(SDL_SCANCODE_RETURN);
@@ -348,18 +351,24 @@ static int player(void *user)
     /* the window hosts on the port the other hosted on, is joined, leaves, and hosts there again */
     online_page();                                        /* (on Connect and play: below Your name, Play as, Host's address, The host's port, Input delay) */
     keys(SDL_SCANCODE_UP, 4);
-    press(SDL_SCANCODE_LEFT);                             /* host: Your name, Play as, Port (7491), Input delay, Start hosting */
-    keys(SDL_SCANCODE_DOWN, 3);
+    press(SDL_SCANCODE_LEFT);                             /* host: Your name, Play as, Port (7491), Input delay, Save RAM, Start hosting */
+    keys(SDL_SCANCODE_DOWN, 4);
     for (int round = 1; round <= 2; round++) {
+        if (round == 2) {                                 /* (Save RAM, above Start hosting: a new cartridge's) */
+            press(SDL_SCANCODE_UP);
+            press(SDL_SCANCODE_RIGHT);
+            press(SDL_SCANCODE_DOWN);
+        }
         press(SDL_SCANCODE_RETURN);                       /* (Start hosting, and "Choose it again": a game is running) */
         press(SDL_SCANCODE_RETURN);
         SDL_AtomicSet(&joiner_done, 0);
         SDL_Thread *j = SDL_CreateThread(joiner, "joiner", NULL);
         int hosting = until(&online, 1, 15000);
         for (int t = 0; t < 5000 && SDL_AtomicGet(&joiner_played) < 60; t += 10) SDL_Delay(10);
-        printf("  hosting from the page, time %d: %s (the joiner played %d frames)\n", round, hosting ? "joined, playing" : "NOT joined",
-               SDL_AtomicGet(&joiner_played));
+        printf("  hosting from the page, time %d: %s (the joiner played %d frames), the game's settings asked with %s save RAM\n", round,
+               hosting ? "joined, playing" : "NOT joined", SDL_AtomicGet(&joiner_played), SDL_AtomicGet(&settings_fresh) ? "a new cartridge's" : "its own");
         CHECK(hosting);
+        CHECK_EQ(SDL_AtomicGet(&settings_fresh), round == 2);
         CHECK(SDL_AtomicGet(&joiner_played) >= 60);
         online_page();                                    /* (on Leave the session) */
         press(SDL_SCANCODE_RETURN);
@@ -402,7 +411,7 @@ int main(int argc, char **argv)
     mdrt_config c = { 0 };
     c.audio_rate = 48000;
     c.sram_size = 0x2000;
-    mdrt_sdl_options o = { .title = "online test", .app = "online-test", .net_identity = IDENTITY, .net_settings = window_settings, .sram_path = "online-test.srm",
+    mdrt_sdl_options o = { .title = "online test", .app = "online-test", .net_identity = IDENTITY, .net_settings = window_settings, .net_save_ram = 1, .sram_path = "online-test.srm",
                            .options_title = "Test rules", .options = &rule, .noptions = 1, .options_use = options_use,
                            .options_text = options_text, .options_session = options_session };
     SDL_Thread *h = SDL_CreateThread(host, "host", NULL), *p = SDL_CreateThread(player, "player", NULL);
@@ -411,7 +420,7 @@ int main(int argc, char **argv)
     SDL_WaitThread(h, NULL);
     const char *set = slurp("settings.ini");
     CHECK(set && strstr(set, "netplay.role = host") && strstr(set, "netplay.address = 127.0.0.1") && strstr(set, "netplay.port = 7491") &&
-          strstr(set, "netplay.name = Tester") && strstr(set, "test.rule = a"));
+          strstr(set, "netplay.name = Tester") && strstr(set, "netplay.save_ram = new") && strstr(set, "test.rule = a"));
     printf("  the settings kept: %s\n", set && strstr(set, "netplay.address = 127.0.0.1") ? "host, 127.0.0.1 kept, port 7491" : "NOT kept");
     FILE *f = fopen("online-test.srm", "rb");
     int first = f ? fgetc(f) : -1;

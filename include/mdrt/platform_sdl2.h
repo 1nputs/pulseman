@@ -173,8 +173,13 @@ typedef struct mdrt_sdl_options {
      * and save RAM), asked when the Online page's Start makes a session, after options_use with the
      * menu's values (and before sram_file is asked again): the bytes and *size, or NULL for none.
      * The session copies them. At power on the game finds the host's with mdrt_net_settings (the
-     * host's own on the host) and plays by them on both; NULL: no settings. */
-    const void *(*net_settings)(size_t *size, void *user);
+     * host's own on the host) and plays by them on both; NULL: no settings. fresh_save: the Online
+     * page's Save RAM is "a new cartridge's" (net_save_ram), so the game sends none of its own. */
+    const void *(*net_settings)(size_t *size, int fresh_save, void *user);
+    /* the game sends its save RAM in its settings: a host's Online page then has Save RAM, "yours"
+     * (the game's own, as its save file has it) or "a new cartridge's" (none: the game as new), kept
+     * in the settings file and given to net_settings */
+    int net_save_ram;
     /* the values the session's game plays by (the host's, which its settings gave the game), for
      * the client's pages while a session lasts, asked on the window's thread each time one is
      * shown: the client fills values (noptions of them, as options_use has them; they come
