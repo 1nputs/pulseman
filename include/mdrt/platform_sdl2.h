@@ -154,7 +154,8 @@ typedef struct mdrt_sdl_options {
      * its clock, never making up the time the game spent waiting on the other (in mdrt_idle: so a
      * frame given back to keep in step is given), and
      * stretches the sound a little to keep its queue; the menu does not stop the game; pause, the
-     * frame step, slow motion, fast-forward, rewind, the save slots, quick resume, reset, another
+     * frame step, slow motion, fast-forward, rewind, the save slots, quick resume, reset (but the
+     * host's, for a game that gives net_reset), another
      * ROM, the FM core and chip, the Players page's adaptor (the session's pads say) and pausing when the window loses
      * focus are not to be had; save RAM is not read from the player's file, nor ever written back to it
      * by that console (after the session too, while it plays on alone); the title shows the round trip, the
@@ -180,6 +181,11 @@ typedef struct mdrt_sdl_options {
      * (the game's own, as its save file has it) or "a new cartridge's" (none: the game as new), kept
      * in the settings file and given to net_settings */
     int net_save_ram;
+    /* the game starts again from its power on when its session says MDRT_NET_RESET: the menu's
+     * Reset of the host then resets the console for everyone at once (the bit with its buttons:
+     * every machine powered on again at the same frame, the session going on), a guest's saying
+     * only the host can; 0: no reset in a session */
+    int net_reset;
     /* the values the session's game plays by (the host's, which its settings gave the game), for
      * the client's pages while a session lasts, asked on the window's thread each time one is
      * shown: the client fills values (noptions of them, as options_use has them; they come

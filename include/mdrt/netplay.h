@@ -35,8 +35,9 @@
 #include <stdint.h>
 #include "mdrt/mdrt.h"
 
-#define MDRT_NET_PROTOCOL 4             /* the messages' version: peers must agree (2: the players' names; 3: the
-                                           settings' chunks acknowledged selectively; 4: up to four machines) */
+#define MDRT_NET_PROTOCOL 5             /* the messages' version: peers must agree (2: the players' names; 3: the
+                                           settings' chunks acknowledged selectively; 4: up to four machines;
+                                           5: the host's reset, MDRT_NET_RESET_BIT) */
 #define MDRT_NET_NAME 24                /* a player's name, at most (printable ASCII) */
 
 /* the other peers, as the platform reaches them (UDP natively: mdrt/net_udp.h). send: one datagram
@@ -64,7 +65,9 @@ typedef struct mdrt_net_config {
     const char *identity;       /* what must match (compared whole; up to 255 bytes) */
     const char *name;           /* the player's name, for the other to show (NULL or "": none) */
     mdrt_net_link link;
-    /* the local players' buttons now: buttons[0] the first pad this peer plays, [1] the second ... */
+    /* the local players' buttons now: buttons[0] the first pad this peer plays, [1] the second ...
+     * A host's with MDRT_NET_RESET_BIT on any of its pads resets the console for everyone, at the
+     * frame those buttons are for (a guest's is ignored) */
     void (*local_input)(void *user, uint16_t buttons[MDRT_PADS]);
     void *input_user;
     int players;                /* the pads this peer plays (0: 1), fewer than MDRT_PADS */
@@ -92,7 +95,10 @@ void mdrt_net_free(mdrt_net *n);
  * refuses a guest goes on waiting (mdrt_net_why says whom it refused, for the player); a guest
  * that leaves the waiting room, or is not heard from for 10 seconds, gives its place up. */
 enum { MDRT_NET_CONNECTING, MDRT_NET_READY, MDRT_NET_REFUSED, MDRT_NET_ENDED,
-       MDRT_NET_GO, MDRT_NET_WAIT, MDRT_NET_RESTART };
+       MDRT_NET_GO, MDRT_NET_WAIT, MDRT_NET_RESTART, MDRT_NET_RESET };
+/* a bit of no pad's in a host's buttons (local_input): reset the console. It goes with the host's
+ * buttons, so every machine resets at the same frame, and a guess never holds it */
+#define MDRT_NET_RESET_BIT 0x8000
 int mdrt_net_connect(mdrt_net *n);
 /* where the session is: MDRT_NET_CONNECTING, MDRT_NET_GO (connected: playing), MDRT_NET_REFUSED or
  * MDRT_NET_ENDED (mdrt_net_why) */
@@ -121,8 +127,11 @@ void mdrt_net_start(mdrt_net *n, mdrt *m);
  * go on from here after a state is loaded. MDRT_NET_GO: play the next frame. MDRT_NET_WAIT: not
  * yet (the other's buttons are too far behind, or this peer is ahead and gives a frame back):
  * call again soon (a millisecond or so later), without playing on. MDRT_NET_RESTART: a state was
- * loaded (a rollback): restart at the resumable point and play on. MDRT_NET_ENDED: the session is
- * over (mdrt_net_why); the console is as it was and can play on alone. */
+ * loaded (a rollback): restart at the resumable point and play on. MDRT_NET_RESET: the host reset
+ * the console at this frame: it has been powered on again (mdrt_power_on, its save RAM kept): start
+ * the client's code again from its power on, and play on in the session (a rollback across it
+ * powers it on again as it plays the frame again). MDRT_NET_ENDED: the session is over
+ * (mdrt_net_why); the console is as it was and can play on alone. */
 int mdrt_net_frame(mdrt_net *n, int resumable);
 /* say goodbye (the others' sessions end at once rather than when they stop hearing from this one).
  * Neither this nor mdrt_net_free touches the console, which may be gone by then: a client that
@@ -144,6 +153,7 @@ typedef struct mdrt_net_stats {
     long waits;                     /* calls that returned MDRT_NET_WAIT */
     long gave_back;                 /* frames given back to keep in step with the others */
     long checks;                    /* desync checks that agreed (a host: one for each guest) */
+    long resets;                    /* the host's resets, as they were played (again, after a rollback across one) */
     int lost;                       /* nothing heard for 3 seconds (the session ends after 10) */
 } mdrt_net_stats;
 void mdrt_net_stats_get(const mdrt_net *n, mdrt_net_stats *s);

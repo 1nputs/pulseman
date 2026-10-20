@@ -18,7 +18,10 @@
  * Last, more machines (a host and up to three guests, the host passing each guest's buttons on to
  * the others): four with a player each, three with two and one and one, two with one and three
  * and with three and one, every frame of each as a lone console's; four, one leaving: every one's
- * session over, each told who left; a game for two that a third would join: refused. */
+ * session over, each told who left; a game for two that a third would join: refused. And the host
+ * resetting the console mid-game (MDRT_NET_RESET_BIT in its buttons), a guest's reset bit too: every
+ * frame of both as a lone console's that powers on again at the host's frame and not the guest's,
+ * a rollback across the reset playing it again. */
 #include <stdlib.h>
 #include <string.h>
 #include "check.h"
@@ -57,6 +60,7 @@ struct peer {
     uint64_t period, next_at;
     int need_frame, state, ready;
     uint32_t perturb_at;                /* its game made to differ here (0: never) */
+    int resets;                         /* the console powered on again (MDRT_NET_RESET) */
     uint64_t hash[MAXF];
     /* the game, a part of every state */
     struct game { uint32_t f, chance, hints, pads, n; uint64_t next, base; } g;
@@ -188,10 +192,13 @@ static uint16_t script(uint32_t seed, uint32_t f)
     return b;
 }
 
+static uint32_t host_reset, guest_reset;  /* the frame whose buttons are sampled with the reset bit (0: none) */
 static void local_input(void *user, uint16_t b[MDRT_PADS])
 {
     peer *p = user;
-    for (int k = 0; k < (p->players ? p->players : 1); k++) b[k] = script(p->seed + (uint32_t)k, (uint32_t)mdrt_frame_count(p->m));
+    uint32_t f = (uint32_t)mdrt_frame_count(p->m);
+    for (int k = 0; k < (p->players ? p->players : 1); k++) b[k] = script(p->seed + (uint32_t)k, f);
+    if (f && f == (p->cfg.role == MDRT_NET_HOST ? host_reset : guest_reset)) b[0] |= MDRT_NET_RESET_BIT;
 }
 
 /* a resumable point at the top of most frames; none from 40 to 59 of each hundred, nor from 500 to 569 */
@@ -225,6 +232,7 @@ static void ref_pads(void *user, uint16_t b[MDRT_PADS])
 }
 
 static uint64_t ref_hash[MAXF];
+static uint32_t ref_reset;              /* the frame the lone console powers on again at (0: none) */
 static void play_alone(void)
 {
     static peer r;
@@ -233,6 +241,7 @@ static void play_alone(void)
     mdrt_set_pad_source(r.m, ref_pads, r.m);
     while (mdrt_frame_count(r.m) < MAXF - 1) {
         game_frame(&r);
+        if (ref_reset && mdrt_frame_count(r.m) == ref_reset) { mdrt_power_on(r.m); memset(&r.g, 0, sizeof r.g); }   /* (the game from its power on) */
         ref_hash[mdrt_frame_count(r.m)] = mdrt_sim_hash(r.m);
     }
     mdrt_free(r.m);
@@ -289,6 +298,7 @@ static void turn(peer *p, uint32_t until)
         }
         uint32_t f = (uint32_t)mdrt_frame_count(p->m);
         int r = mdrt_net_frame(p->net, p->by_state ? state_resumable(p) : resumable(f));
+        if (r == MDRT_NET_RESET) { memset(&p->g, 0, sizeof p->g); r = MDRT_NET_GO; p->resets++; }   /* (powered on again: the game from its power on) */
         if (f < MAXF) p->hash[f] = mdrt_sim_hash(p->m);
         p->state = r;
         if (r == MDRT_NET_WAIT || (idle && r == MDRT_NET_GO)) { p->next_at = clock_us + 1000; return; }
@@ -398,6 +408,41 @@ static void session(void)
     CHECK_EQ(mdrt_net_pads(A.net), 1); CHECK_EQ(mdrt_net_pads(B.net), 2);
     printf("    names: the host sees \"%s\", the guest \"%s\"\n", mdrt_net_peer_name(A.net), mdrt_net_peer_name(B.net));
     CHECK(!strcmp(mdrt_net_peer_name(A.net), "guest") && !strcmp(mdrt_net_peer_name(B.net), "host"));
+    finish(&A, &B);
+}
+
+/* the host resets the console at its buttons sampled at frame 400 (so frame 400 + 1 + DELAY), a
+ * guest's reset bit at 250 is not one; with the other's buttons 35-47 ms late a peer rolls back
+ * across the reset frame, the console powered on again as it plays that frame again */
+static void resetting(void)
+{
+    ref_reset = 400 + 1 + DELAY;
+    reference(101, 202);
+    ref_reset = 0;
+    host_reset = 400;
+    guest_reset = 250;
+    cond = (net_cond){ .latency = 35000, .jitter = 12000, .loss = 50, .dup = 10 };
+    setup(&A, &B, "host", MDRT_NET_HOST, 101, 16684);
+    setup(&B, &A, "guest", MDRT_NET_JOIN, 202, 16850);
+    CHECK(join_up(&A, &B, 5000000));
+    play(&A, &B, FRAMES, 120000000);
+    int same[2] = { 0, 0 };
+    peer *ps[2] = { &A, &B };
+    for (int i = 0; i < 2; i++)
+        for (uint32_t f = 1; f <= FRAMES; f++) same[i] += ps[i]->hash[f] == ref_hash[f];
+    mdrt_net_stats sa, sb;
+    mdrt_net_stats_get(A.net, &sa);
+    mdrt_net_stats_get(B.net, &sb);
+    printf("  the host resetting the console at frame %d (a guest's reset bit ignored):\n", 400 + 1 + DELAY);
+    show(&A); show(&B);
+    printf("    powered on again: host %d time(s), guest %d (the session's count %ld and %ld); every frame as the lone console's that\n"
+           "    powered on there: host %d, guest %d of %d\n", A.resets, B.resets, sa.resets, sb.resets, same[0], same[1], FRAMES);
+    CHECK_EQ(same[0], FRAMES);
+    CHECK_EQ(same[1], FRAMES);
+    CHECK(A.resets >= 1 && B.resets >= 1);
+    CHECK_EQ(sa.resets, A.resets);
+    CHECK(A.resets + B.resets >= 3);                      /* (one powered on again as it played the reset frame again) */
+    host_reset = guest_reset = 0;
     finish(&A, &B);
 }
 
@@ -657,6 +702,7 @@ int main(void)
     for (int i = 0; mdrt_fm_cores(i); i++)
         if (!strcmp(mdrt_fm_cores(i), "ymfm")) core = "ymfm";
     session();
+    resetting();
     desync();
     protocol();
     two_each();

@@ -77,6 +77,13 @@ typedef struct mdrt_config {
 /* NULL when out of memory or the build has not the FM core asked for */
 mdrt *mdrt_new(const mdrt_config *c);
 void mdrt_free(mdrt *m);
+/* the console powered on again in place, between frames: its VDP, sound chips, the pads' registers
+ * and the clock within the frame as mdrt_new has them, and the client's code to start again from
+ * its power on. Kept: the save RAM (the cartridge's battery), the devices in the ports (the pads'
+ * types, the adaptor), the frame count (mdrt_frame_count goes on: netplay's frames are the
+ * console's), and all the client attached (state parts, bus maps, hooks, sources, the session,
+ * the traces). Netplay does it when the host resets the console (MDRT_NET_RESET). */
+void mdrt_power_on(mdrt *m);
 mdrt_vdp *mdrt_get_vdp(mdrt *m);
 mdrt_pads *mdrt_get_pads(mdrt *m);
 mdrt_sram *mdrt_get_sram(mdrt *m);

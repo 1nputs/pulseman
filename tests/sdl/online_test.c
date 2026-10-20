@@ -18,7 +18,9 @@
  * Last the window hosts, on the port the other player hosted on: a player joins (a thread again),
  * the window leaves, and hosts on that port once more, a player joining again (the last session's
  * socket closed before the next is opened on its port), the page's Save RAM "a new cartridge's"
- * the second time (the game's settings told so; the first time its own). */
+ * the second time (the game's settings told so; the first time its own); then the host's Reset,
+ * chosen in the menu during the session, powers both consoles on again, the session going on in
+ * step. */
 #include <SDL2/SDL.h>
 #ifdef _WIN32
 #include <direct.h>
@@ -68,7 +70,7 @@ static const void *window_settings(size_t *size, int fresh, void *user)
 }
 
 static SDL_atomic_t frames, online, starts, window_checks, window_rollbacks, host_done, host_checks, host_rollbacks;
-static SDL_atomic_t joiner_done, joiner_played;
+static SDL_atomic_t joiner_done, joiner_played, joiner_resets, window_resets;
 static char host_why[200], host_heard[64], joiner_why[200];
 
 /* ---- the game, the same on both: the pads read through the I/O chip, into its sum ------------- */
@@ -129,6 +131,7 @@ static void window_game(mdrt *m, void *user)
         int r;
         while ((r = mdrt_net_frame(n, 1)) == MDRT_NET_WAIT)
             if (mdrt_idle(m)) { mdrt_net_quit(n); return; }
+        if (r == MDRT_NET_RESET) { memset(&g, 0, sizeof g); SDL_AtomicAdd(&window_resets, 1); }   /* (the host's reset: from power on) */
         mdrt_net_stats st;                                /* (a RESTART: the state is loaded, and the loop plays on from it) */
         mdrt_net_stats_get(n, &st);
         SDL_AtomicSet(&window_checks, (int)st.checks);
@@ -224,6 +227,7 @@ static int joiner(void *user)
             mdrt_wait_vblank(m);
             while ((r = mdrt_net_frame(n, 1)) == MDRT_NET_WAIT && SDL_GetTicks() - t0 < 20000) mdrt_udp_wait(u, 1);
             if (r == MDRT_NET_ENDED || r == MDRT_NET_REFUSED) break;
+            if (r == MDRT_NET_RESET) { memset(&g, 0, sizeof g); SDL_AtomicAdd(&joiner_resets, 1); }   /* (the host's reset: from power on) */
             if (r == MDRT_NET_RESTART || mdrt_quiet(m)) continue;
             SDL_AtomicAdd(&joiner_played, 1);
             next += freq / 60;
@@ -370,6 +374,22 @@ static int player(void *user)
         CHECK(hosting);
         CHECK_EQ(SDL_AtomicGet(&settings_fresh), round == 2);
         CHECK(SDL_AtomicGet(&joiner_played) >= 60);
+        if (round == 2) {                                 /* the host's Reset (below Resume: no Game ROM here), chosen again: the console reset for all */
+            int checks0 = SDL_AtomicGet(&window_checks), played0 = SDL_AtomicGet(&joiner_played);
+            press(SDL_SCANCODE_ESCAPE);
+            press(SDL_SCANCODE_DOWN);
+            press(SDL_SCANCODE_RETURN);
+            press(SDL_SCANCODE_RETURN);
+            int reset = until(&joiner_resets, 1, 5000) && until(&window_resets, 1, 5000);
+            for (int t = 0; t < 8000 && (SDL_AtomicGet(&window_checks) < checks0 + 2 || SDL_AtomicGet(&joiner_played) < played0 + 120); t += 10)
+                SDL_Delay(10);
+            printf("  the host's Reset in the session: the window's console powered on again %d time(s), the joiner's %d; then %d desync checks more\n"
+                   "  agreeing, the joiner %d frames on\n", SDL_AtomicGet(&window_resets), SDL_AtomicGet(&joiner_resets),
+                   SDL_AtomicGet(&window_checks) - checks0, SDL_AtomicGet(&joiner_played) - played0);
+            CHECK(reset);
+            CHECK(SDL_AtomicGet(&window_checks) >= checks0 + 2);
+            CHECK(SDL_AtomicGet(&online) == 1);
+        }
         online_page();                                    /* (on Leave the session) */
         press(SDL_SCANCODE_RETURN);
         CHECK(until(&joiner_done, 1, 5000));
@@ -411,7 +431,7 @@ int main(int argc, char **argv)
     mdrt_config c = { 0 };
     c.audio_rate = 48000;
     c.sram_size = 0x2000;
-    mdrt_sdl_options o = { .title = "online test", .app = "online-test", .net_identity = IDENTITY, .net_settings = window_settings, .net_save_ram = 1, .sram_path = "online-test.srm",
+    mdrt_sdl_options o = { .title = "online test", .app = "online-test", .net_identity = IDENTITY, .net_settings = window_settings, .net_save_ram = 1, .net_reset = 1, .sram_path = "online-test.srm",
                            .options_title = "Test rules", .options = &rule, .noptions = 1, .options_use = options_use,
                            .options_text = options_text, .options_session = options_session };
     SDL_Thread *h = SDL_CreateThread(host, "host", NULL), *p = SDL_CreateThread(player, "player", NULL);

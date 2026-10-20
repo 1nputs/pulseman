@@ -228,9 +228,49 @@ static void run(void)
     mdrt_free(m); mdrt_free(m2); mdrt_free(m3); mdrt_free(m4);
 }
 
+/* a console powered on again in place (mdrt_power_on) after 90 frames of the client's work is a new
+ * console: its state a fresh one's section by section, but for the frame count, which goes on (the
+ * save RAM, the client's part and the ports' devices made the same on the fresh one) */
+static void power_on(void)
+{
+    static seen s;
+    static game g, h;
+    mdrt *m = console(&s, &g, 48000, 0);
+    mdrt_pads_set_adaptor(mdrt_get_pads(m), MDRT_ADAPTOR_EA4WAY);
+    mdrt_pad_set_type(mdrt_get_pads(m), 0, MDRT_PAD_6BUTTON);
+    run_to(&s, &g, 90);
+    mdrt_power_on(m);
+    mdrt *n = console(&s, &h, 48000, 0);
+    mdrt_pads_set_adaptor(mdrt_get_pads(n), MDRT_ADAPTOR_EA4WAY);
+    mdrt_pad_set_type(mdrt_get_pads(n), 0, MDRT_PAD_6BUTTON);
+    memcpy(mdrt_get_sram(n)->bytes, mdrt_get_sram(m)->bytes, mdrt_get_sram(m)->size);
+    h.f = g.f; h.next = g.next; h.base = g.base; h.n = g.n;
+    CHECK_EQ(mdrt_frame_count(m), 90);
+    size_t an, bn;
+    uint8_t *a = take(m, &an), *b = take(n, &bn);
+    uint8_t *ca = find(a, an, "CONS"), *cb = find(b, bn, "CONS");
+    CHECK(ca && cb);
+    if (ca && cb) memcpy(cb + 8 + 5, ca + 8 + 5, 8);      /* (CONS: pal u8, frame u32, then the frame count) */
+    int same = an == bn, sections = 0;
+    for (size_t at = 8; same && at + 8 <= an; sections++) {    /* (MDRS, its version, then tag, length, bytes) */
+        uint32_t len = (uint32_t)(a[at + 4] | a[at + 5] << 8 | a[at + 6] << 16 | (uint32_t)a[at + 7] << 24);
+        if (at + 8 + len > an || memcmp(a + at, b + at, 8 + len)) {
+            printf("  powered on in place: section %.4s differs from a new console's\n", (const char *)a + at);
+            same = 0;
+        }
+        at += 8 + len;
+    }
+    printf("  powered on in place after 90 frames: %s (%d sections), the frame count going on at %llu\n",
+           same ? "a new console's state" : "NOT a new console's", sections, (unsigned long long)mdrt_frame_count(m));
+    CHECK(same);
+    free(a); free(b);
+    mdrt_free(m); mdrt_free(n);
+}
+
 int main(void)
 {
     for (int i = 0; (core = mdrt_fm_cores(i)); i++) run();
+    for (int i = 0; (core = mdrt_fm_cores(i)); i++) power_on();
     /* a state from one core does not load into a console with another */
     if (mdrt_fm_cores(1)) {
         mdrt_config c = { 0 };

@@ -134,6 +134,35 @@ void mdrt_free(mdrt *m)
     free(m);
 }
 
+void mdrt_power_on(mdrt *m)
+{
+    mdrt_hv_fn hv = m->vdp.hv;                            /* (the client's HV source, or the beam's) */
+    void *hv_user = m->vdp.hv_user;
+    mdrt_vdp_init(&m->vdp, m->cfg.pal);
+    mdrt_vdp_set_memory(&m->vdp, dma_read, m);
+    mdrt_vdp_set_hv_source(&m->vdp, hv, hv_user);
+    mdrt_psg_init(&m->psg);
+    mdrt_fm *fresh = mdrt_fm_new_core(mdrt_fm_core_of(m->fm), mdrt_fm_model(m->fm));   /* (a new chip: its reset line leaves its clocks) */
+    if (fresh) { mdrt_fm_free(m->fm); m->fm = fresh; }
+    else mdrt_fm_reset(m->fm);
+    mdrt_mix_init(&m->mix, m->cfg.audio_rate);
+    mdrt_mix_set_clock(&m->mix, master_clock(m));
+    mdrt_mix_set_gains(&m->mix, m->cfg.fm_gain ? m->cfg.fm_gain : MDRT_MIX_FM_GAIN, m->cfg.psg_gain ? m->cfg.psg_gain : MDRT_MIX_PSG_GAIN);
+    mdrt_pads kept = m->pads;                             /* (the ports' devices stay plugged in) */
+    mdrt_pads_init(&m->pads, !m->cfg.domestic, m->cfg.pal);
+    memcpy(m->pads.type, kept.type, sizeof kept.type);
+    m->pads.adaptor = kept.adaptor;
+    m->pads.observe = kept.observe;
+    m->pads.observe_user = kept.observe_user;
+    m->nev = m->next = 0;
+    m->nudge = m->now = 0;
+    m->reloaded = m->hcount = m->in_hint = 0;
+    m->ndma = 0;
+    memset(m->picture, 0, 320 * 240 * sizeof *m->picture);
+    mdrt_vdp_beam_start(&m->lines, &m->vdp, m->picture, 320);
+    m->lines.quiet = m->quiet > 0;                        /* (a frame played again: drawn again too) */
+}
+
 mdrt_vdp *mdrt_get_vdp(mdrt *m) { return &m->vdp; }
 mdrt_pads *mdrt_get_pads(mdrt *m) { return &m->pads; }
 mdrt_sram *mdrt_get_sram(mdrt *m) { return &m->sram; }

@@ -264,14 +264,18 @@ session:
    every player is in; each guest's client then applies `mdrt_net_settings(n, &size)` and powers
    on. `mdrt_net_peers`, `mdrt_net_me`, `mdrt_net_name_of`, `mdrt_net_players_of` and
    `mdrt_net_pads_of` say who is in (a host's waiting room as it fills); `mdrt_net_all_pads`, the
-   pads played (pads 3 or 4: the ports need EA's 4 Way Play). Protocol 4.
+   pads played (pads 3 or 4: the ports need EA's 4 Way Play). Protocol 5.
 3. `mdrt_net_start(n, m)` on the console just powered on: the module becomes its pad source.
 4. At every wait after its vertical blank code the client calls `mdrt_net_frame(n, resumable)`,
    `resumable` saying whether it could go on from here after a state is loaded (its game loop's
    wait). `MDRT_NET_GO`: play the next frame. `MDRT_NET_WAIT`: call again a little later without
    playing on (the other's buttons are too far behind, or this peer gives a frame back to stay in
    step). `MDRT_NET_RESTART`: a state was loaded; restart at the resumable point and play on
-   (the frames played again are quiet: `mdrt_quiet`). `MDRT_NET_ENDED`: the session is over
+   (the frames played again are quiet: `mdrt_quiet`). `MDRT_NET_RESET`: the host reset the
+   console at this frame (`MDRT_NET_RESET_BIT` in its buttons), so the module has powered it on
+   again (`mdrt_power_on`: a new console's state, the save RAM kept, the frame count going on):
+   start the game's code again from its power on and play on in the session. Every machine does it
+   at the same frame, and a rollback across it does it again. `MDRT_NET_ENDED`: the session is over
    for every machine (a desync, a player who left, a connection lost: `mdrt_net_why`, the same
    words on each), and the console plays on alone.
 5. `mdrt_net_quit(n)` says goodbye; `mdrt_net_free(n)`.
@@ -303,7 +307,8 @@ game plays by that is sent rather than compared (its options, its data, save RAM
 `mdrt_sdl_options.net_settings`, asked when Start makes the session, once the game has stopped and
 `options_use` has had the menu's values: the bytes this player sends if it hosts (the session
 copies them). At power on the game reads the host's with `mdrt_net_settings` (the host its own) and
-plays by them on both. A client
+plays by them on both. A game that sends its own save RAM there sets `net_save_ram`: a host's
+Online page then has Save RAM, its own or a new cartridge's, which `net_settings` is told. A client
 can also make a session from its command line and put it in `mdrt_sdl_options.net` (its UDP link
 in `net_udp`). Either way the window connects before the game starts (a page that says so, a
 host's with who has joined so far, Esc giving up), then powers on a new console with the session started on it: the game's function
@@ -316,7 +321,9 @@ game spent waiting on the other player in `mdrt_idle` (a frame given back to kee
 given; other lateness is caught up as ever), stretches the sound by up to half a per cent to
 keep its queue, and keeps the session's rules: the menu does not stop the game, and pause, the
 frame step, slow motion, fast-forward, rewind, the save slots, quick resume, reset, another ROM,
-the FM core and chip and the Players page's adaptor (the session's pads say) are not to be had; save RAM is not read from the player's file, nor written back to it by that
+the FM core and chip and the Players page's adaptor (the session's pads say) are not to be had,
+but for the host's Reset in a game that gives `mdrt_sdl_options.net_reset` (it starts again on
+`MDRT_NET_RESET`): that resets the console for everyone, the session going on; save RAM is not read from the player's file, nor written back to it by that
 console ever (after the session too, while the game plays on alone: its save RAM is the session's).
 `mdrt_net_state(n)` says where a session is. Every client reads the same options: `mdrt_net_parse` takes `--host [PORT]`,
 `--join ADDR[:PORT]`, `--peer ADDR[:PORT]`, `--port`, `--delay`, `--name`, `--here N` (the players

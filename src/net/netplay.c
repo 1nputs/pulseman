@@ -98,6 +98,7 @@ struct mdrt_net {
     uint16_t btn[RING][MDRT_PADS];      /* buttons by frame: this peer's own, the others' as known, */
     uint16_t used[RING][MDRT_PADS];     /* and what the console was given */
     uint32_t latched, wrong;
+    uint32_t reset_done;                /* the frame the console last powered on again at (the host's reset) */
     snap *snaps;
     int nsnaps;
     uint64_t hold_until;
@@ -572,9 +573,30 @@ static void pad_source(void *user, uint16_t b[MDRT_PADS])
         if (q == n->me) { if (f <= n->p[q].newest) b[p] = n->btn[slot(f)][p]; continue; }
         uint32_t known = f <= n->p[q].newest ? f : n->p[q].newest;
         if (n->p[q].frame_of[slot(known)] == known) b[p] = n->btn[slot(known)][p];
+        if (known < f) b[p] &= (uint16_t)~MDRT_NET_RESET_BIT;   /* (a guess holds the buttons, never a reset) */
     }
     memcpy(n->used[slot(f)], b, sizeof n->used[0]);
+    for (int p = 0; p < MDRT_PADS; p++) b[p] &= (uint16_t)~MDRT_NET_RESET_BIT;   /* (no pad's button) */
     n->latched = f;
+}
+
+/* frame f's buttons, as the console was given them, hold the host's reset */
+static int reset_at(const mdrt_net *n, uint32_t f)
+{
+    if (n->latched != f) return 0;
+    for (int p = 0; p < MDRT_PADS; p++)
+        if (n->owner[p] == 0 && (n->used[slot(f)][p] & MDRT_NET_RESET_BIT)) return 1;
+    return 0;
+}
+
+/* frame f goes on: powered on again first if the host reset the console there (once a pass) */
+static int go(mdrt_net *n, uint32_t f)
+{
+    if (n->reset_done == f || !reset_at(n, f)) return MDRT_NET_GO;
+    n->reset_done = f;
+    mdrt_power_on(n->m);
+    n->st.resets++;
+    return MDRT_NET_RESET;
 }
 
 void mdrt_net_start(mdrt_net *n, mdrt *m)
@@ -941,7 +963,7 @@ int mdrt_net_frame(mdrt_net *n, int resumable)
         n->arrived = 1;
         n->frame = f;
         if (n->replay_to && f >= n->replay_to) n->replay_to = 0;
-        if (resumable) take_snapshot(n, f);
+        if (resumable && !reset_at(n, f)) take_snapshot(n, f);   /* (a state about to be powered off: none) */
         while (me->newest < f + 1 + (uint32_t)n->delay) { /* this peer's buttons, for frame f + 1 + delay */
             uint32_t g = ++me->newest;
             uint16_t held[MDRT_PADS] = { 0 };
@@ -990,6 +1012,7 @@ int mdrt_net_frame(mdrt_net *n, int resumable)
         n->latched = s->frame;
         n->frame = s->frame;
         n->wrong = 0;
+        n->reset_done = 0;                                /* (a reset after it: played again too) */
         for (int i = 0; i < n->nsnaps; i++)               /* (the states after it were the guesses': gone, even where the */
             if (n->snaps[i].valid && n->snaps[i].frame > s->frame) n->snaps[i].valid = 0;   /* frames played again have no resumable point) */
         for (int c = 0; c < CHECKS; c++)
@@ -1002,7 +1025,7 @@ int mdrt_net_frame(mdrt_net *n, int resumable)
     }
     check_desync(n);
     if (n->phase == P_DONE) return n->result;
-    if (n->replay_to) return MDRT_NET_GO;                 /* (playing frames again: no waiting) */
+    if (n->replay_to) return go(n, f);                    /* (playing frames again: no waiting) */
 
     /* frame f + 1 may go: every other peer's buttons known, or guessed within the window and a state to roll back to */
     uint32_t next = f + 1, known = known_others(n);
@@ -1045,7 +1068,7 @@ int mdrt_net_frame(mdrt_net *n, int resumable)
         }
         return MDRT_NET_WAIT;
     }
-    return MDRT_NET_GO;
+    return go(n, f);
 }
 
 void mdrt_net_quit(mdrt_net *n)

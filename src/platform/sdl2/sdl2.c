@@ -166,7 +166,7 @@ typedef struct sdl {
     int16_t *loud;              /* the frame's sound at the volume */
     /* netplay (o->net): a session going on (until it ends, the window's thread clears it), the game
      * thread's word that it ended, and its line for the title (s->lock); the sound stretched */
-    SDL_atomic_t session, net_over, net_leave;
+    SDL_atomic_t session, net_over, net_leave, net_reset;
     char net_line[200];
     mdrt_net *net;              /* the session (the client's from its command line, or the menu's: owned) */
     mdrt_udp *net_udp;
@@ -441,10 +441,18 @@ static int frame_wait(void *user)
     return ending(s);
 }
 
+/* the host's Reset in a session, once, with its first pad's buttons (MDRT_NET_RESET_BIT): every
+ * machine's console powered on again at the frame they are for */
+static void take_reset(sdl *s, uint16_t buttons[MDRT_PADS])
+{
+    if (SDL_AtomicSet(&s->net_reset, 0)) buttons[0] |= MDRT_NET_RESET_BIT;
+}
+
 static void input(void *user, uint16_t buttons[MDRT_PADS])
 {
     sdl *s = user;
     for (int p = 0; p < MDRT_PADS; p++) buttons[p] = (uint16_t)SDL_AtomicGet(&s->buttons[p]);
+    take_reset(s, buttons);                               /* (a session the client made: its local input reads these) */
 }
 
 static unsigned requests(void *user)
@@ -485,6 +493,7 @@ static void net_input(void *user, uint16_t b[MDRT_PADS])
 {
     sdl *s = user;
     for (int p = 0; p < MDRT_PADS; p++) b[p] = (uint16_t)SDL_AtomicGet(&s->buttons[p]);
+    take_reset(s, b);
 }
 
 static int game_thread(void *user)
@@ -1986,6 +1995,14 @@ static void act(sdl *s, int id)
 {
     mdrt_menu_item *it = mdrt_menu_find(&s->menu, id);
     int running = s->thread != NULL;
+    if (SDL_AtomicGet(&s->session) && id == I_RESET && s->o->net_reset) {   /* (the host's: the console reset for everyone) */
+        if (!s->net || !mdrt_net_is_host(s->net)) { snprintf(s->menu.message, sizeof s->menu.message, "Only the host can reset"); return; }
+        if (!confirmed(s, id, "reset the console for everyone")) return;
+        SDL_AtomicSet(&s->net_reset, 1);
+        close_menu(s);
+        notice(s, "netplay: the console reset for everyone");
+        return;
+    }
     if (SDL_AtomicGet(&s->session) && (id == I_ROM || id == I_RESET || id == I_SAVE || id == I_LOAD || id == I_FM_CORE ||
                                        id == I_FM_CHIP || id == I_ADAPTOR)) {
         if (id == I_FM_CORE || id == I_FM_CHIP || id == I_ADAPTOR) build_page(s, s->page, id);   /* (the choice as it was) */
