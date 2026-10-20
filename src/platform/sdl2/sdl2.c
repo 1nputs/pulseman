@@ -97,7 +97,6 @@ static const char *const fast_label[6] = { "2x", "3x", "4x", "6x", "8x", "as fas
 enum { NET_HOST, NET_JOIN, NET_BOTH };
 static const char *const net_role_name[3] = { "host", "join", "both" };
 static const char *const net_role_label[3] = { "host (player 1)", "join a host", "both connect" };
-static const char *const net_pads_label[2] = { "one", "two (4 Way Play)" };
 
 #define VOLUME_STEP 10
 #define ROM_MAX (16u << 20)                               /* (no cartridge is larger) */
@@ -114,7 +113,7 @@ enum { I_RESUME = 1, I_ROM, I_RESET, I_SAVE, I_LOAD, I_VIDEO, I_SOUND, I_OPTIONS
        I_UPSCALE, I_SCALE, I_ASPECT, I_FULL, I_VSYNC, I_COLOURS, I_BLEND, I_SCANLINES, I_MASK, I_VOLUME, I_MUTE, I_FM_CORE, I_FM_CHIP, I_FOCUS, I_FAST, I_UP,
        I_PLAYERS, I_ADAPTOR, I_TURBO, I_DEADZONE, I_CBUTTONS, I_RESUME_OPT,
        I_CAPTURE, I_CAP_REPLAY, I_CAP_RECORD, I_CAP_SECONDS, I_CAP_GIFSCALE, I_USE, I_FPS, I_CSECTION,
-       I_NET, I_NET_ROLE, I_NET_ADDR, I_NET_PORT, I_NET_DELAY, I_NET_START, I_NET_LEAVE, I_NET_NAME, I_NET_PADS,
+       I_NET, I_NET_ROLE, I_NET_ADDR, I_NET_PORT, I_NET_DELAY, I_NET_START, I_NET_LEAVE, I_NET_NAME, I_NET_HERE, I_NET_ALL,
        I_SLOT = 800,             /* + slot (1-8) */
        I_PLAYER = 900,           /* + player (0-3) */
        I_PAD = 1000,             /* + pad * BUTTONS + button */
@@ -170,7 +169,7 @@ typedef struct sdl {
     mdrt_udp *net_udp;
     int net_owned;
     int net_role, net_port, net_delay;   /* the Online page's, kept in the settings */
-    int net_pads;               /* the pads each plays: 1, or 2 (EA's 4 Way Play; the host's choice) */
+    int net_here, net_all;      /* the Online page's players at this machine, and in all (a host's) */
     uint64_t net_idle;          /* the game thread's time in mdrt_idle since its last frame (performance counts) */
     char net_addr[96];
     char net_name[MDRT_NET_NAME + 1];   /* the player's, for the other to see */
@@ -500,11 +499,8 @@ static int start_game(sdl *s)
 {
     s->m = mdrt_new(s->cfg);
     if (!s->m) return 0;
-    int adaptor = s->adaptor;                             /* (in the ports at power on; in a session, two pads each: 4 Way Play) */
-    if (SDL_AtomicGet(&s->session) && s->net) {
-        uint8_t mine = mdrt_net_pads(s->net);
-        adaptor = (mine & (mine - 1)) ? MDRT_ADAPTOR_EA4WAY : MDRT_ADAPTOR_NONE;
-    }
+    int adaptor = s->adaptor;                             /* (in the ports at power on; in a session, pads 3 or 4 played: 4 Way Play) */
+    if (SDL_AtomicGet(&s->session) && s->net) adaptor = (mdrt_net_all_pads(s->net) & 0xC) ? MDRT_ADAPTOR_EA4WAY : MDRT_ADAPTOR_NONE;
     mdrt_pads_set_adaptor(mdrt_get_pads(s->m), adaptor);
     if (SDL_AtomicGet(&s->session) && s->net) {           /* (netplay: from this power on) */
         mdrt_set_net(s->m, s->net);
@@ -747,6 +743,9 @@ static void options_from_settings(sdl *s)
 /* the pages of the client's options: its own, or the one of them all */
 static int client_pages(const sdl *s) { return s->o->npages > 0 ? s->o->npages : 1; }
 
+/* the most pads the client's game plays online (mdrt_sdl_options.net_pads: two unless it says more) */
+static int game_pads(const sdl *s) { int k = s->o->net_pads; return k <= 2 ? 2 : k > MDRT_PADS ? MDRT_PADS : k; }
+
 static mdrt_sdl_page client_page(const sdl *s, int p)
 {
     if (s->o->npages <= 0) return (mdrt_sdl_page){ s->o->options_title, s->o->options_note, 0, s->o->noptions };
@@ -906,13 +905,15 @@ static void settings_load(sdl *s)
         mdrt_settings_default(s->set, "netplay.port", "7000");
         mdrt_settings_default(s->set, "netplay.delay", "2");
         mdrt_settings_default(s->set, "netplay.name", "");
-        mdrt_settings_default(s->set, "netplay.pads", "1");
+        mdrt_settings_default(s->set, "netplay.here", "1");
+        mdrt_settings_default(s->set, "netplay.players", "2");
         snprintf(s->net_name, sizeof s->net_name, "%s", mdrt_settings_get(s->set, "netplay.name") ? mdrt_settings_get(s->set, "netplay.name") : "");
         s->net_role = named(mdrt_settings_get(s->set, "netplay.role"), net_role_name, 3, NET_HOST);
         snprintf(s->net_addr, sizeof s->net_addr, "%s", mdrt_settings_get(s->set, "netplay.address") ? mdrt_settings_get(s->set, "netplay.address") : "");
         s->net_port = clamp(mdrt_settings_get_int(s->set, "netplay.port", MDRT_UDP_PORT), 1, 65535);
         s->net_delay = clamp(mdrt_settings_get_int(s->set, "netplay.delay", 2), 0, MDRT_NET_MAX_DELAY);
-        s->net_pads = clamp(mdrt_settings_get_int(s->set, "netplay.pads", 1), 1, 2);
+        s->net_here = clamp(mdrt_settings_get_int(s->set, "netplay.here", 1), 1, MDRT_PADS - 1);
+        s->net_all = clamp(mdrt_settings_get_int(s->set, "netplay.players", 2), 2, MDRT_PADS);
     }
     for (int p = 0; p < MDRT_PADS; p++) {
         char k[48];
@@ -1715,8 +1716,12 @@ static void build_page(sdl *s, int page, int select)
                                     "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.:-[]");
             mdrt_menu_add_field(m, I_NET_PORT, s->net_role == NET_JOIN ? "The host's port" : "Port", port, 5, "0123456789");
             mdrt_menu_add_number(m, I_NET_DELAY, "Input delay", s->net_delay, 0, MDRT_NET_MAX_DELAY, 1, " frames");
-            if (s->net_role != NET_JOIN && s->o->net_pads >= 2)   /* (the host's choice, for a game that can play with 4 Way Play) */
-                mdrt_menu_add_choice(m, I_NET_PADS, "Pads each", net_pads_label, 2, s->net_pads - 1);
+            int most = game_pads(s);
+            if (most > 2) {                               /* (a game for more than two: players here, and the host's in all) */
+                mdrt_menu_add_number(m, I_NET_HERE, "Players here", clamp(s->net_here, 1, most - 1), 1, most - 1, 1, NULL);
+                if (s->net_role != NET_JOIN)
+                    mdrt_menu_add_number(m, I_NET_ALL, "Players in all", clamp(s->net_all, s->net_here + 1, most), 2, most, 1, NULL);
+            }
             mdrt_menu_add(m, I_NET_START, MDRT_ITEM_ACTION, s->net_role == NET_HOST ? "Start hosting" : "Connect and play");
         }
         char lan[64];
@@ -1724,12 +1729,12 @@ static void build_page(sdl *s, int page, int select)
             snprintf(it->detail, sizeof it->detail, "%s, port %d", mdrt_udp_lan_address(lan, sizeof lan)[0] ? lan : "none found", s->net_port);
         mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "");
         static const char *const help[3][3] = {
-            { "Tell the other player your public address.", "Your router must let this UDP port in to you,", "or play on one LAN, or a VPN such as Tailscale." },
-            { "The host's public address (or LAN or VPN one).", "Add :port to it if the host's port is another.", "The host is player 1, you player 2." },
-            { "Each of you types the other's public address", "and starts: most routers need no setup then.", "The two games decide who is player 1." },
+            { "Tell the others your public address.", "Your router must let this UDP port in to you,", "or play on one LAN, or a VPN such as Tailscale." },
+            { "The host's public address (or LAN or VPN one).", "Add :port to it if the host's port is another.", "The host is player 1; the others as they join." },
+            { "Two machines: each types the other's public", "address and starts: most routers need no setup.", "The two games decide who is player 1." },
         };
         for (int i = 0; i < 3; i++) mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, help[s->net_role][i]);
-        mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "Both need this build. While you play together,");
+        mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "All need this build. While you play together,");
         mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "pause, rewind and the save slots are off.");
         break;
     }
@@ -2034,9 +2039,17 @@ static void act(sdl *s, int id)
         s->net_delay = it->value;
         mdrt_settings_set_int(s->set, "netplay.delay", s->net_delay);
         return;
-    case I_NET_PADS:
-        s->net_pads = it->value + 1;
-        mdrt_settings_set_int(s->set, "netplay.pads", s->net_pads);
+    case I_NET_HERE:
+        s->net_here = it->value;
+        mdrt_settings_set_int(s->set, "netplay.here", s->net_here);
+        if (s->net_all <= s->net_here) { s->net_all = s->net_here + 1; mdrt_settings_set_int(s->set, "netplay.players", s->net_all); }
+        build_page(s, PAGE_NET, I_NET_HERE);
+        return;
+    case I_NET_ALL:
+        s->net_all = it->value;
+        mdrt_settings_set_int(s->set, "netplay.players", s->net_all);
+        if (s->net_here >= s->net_all) { s->net_here = s->net_all - 1; mdrt_settings_set_int(s->set, "netplay.here", s->net_here); }
+        build_page(s, PAGE_NET, I_NET_ALL);
         return;
     case I_NET_START: net_begin(s); return;
     case I_NET_LEAVE:
@@ -2609,14 +2622,25 @@ static void net_page(sdl *s, const char *const *lines, int n)
     draw(s);
 }
 
+/* the pads a peer plays, for the player: "pad 2", "pads 1 and 2", "pads 2, 3 and 4" */
+static void pads_text(uint8_t pads, char *buf, size_t size)
+{
+    int n = 0, k = 0;
+    for (int p = 0; p < MDRT_PADS; p++) n += pads >> p & 1;
+    size_t at = (size_t)snprintf(buf, size, n == 1 ? "pad" : "pads");
+    for (int p = 0; p < MDRT_PADS && at < size; p++)
+        if (pads >> p & 1) at += (size_t)snprintf(buf + at, size - at, "%s%d", !k++ ? " " : k == n ? " and " : ", ", p + 1);
+}
+
 static int connect_session(sdl *s)
 {
     mdrt_net *n = s->net;
-    char where[160], peer[96], why[200];
+    char where[160], peer[96], why[256];
+    unsigned said = 0;                                    /* (a host's guests said to have joined, by place) */
     if (s->net_udp) snprintf(where, sizeof where, mdrt_net_is_host(n) ? "Hosting on port %u" : "On port %u, reaching %s",
                              (unsigned)mdrt_udp_port(s->net_udp), mdrt_udp_peer(s->net_udp, peer, sizeof peer));
     else snprintf(where, sizeof where, "Connecting");
-    notice(s, "netplay: waiting for the other player");
+    notice(s, "netplay: waiting for the other players");
     for (uint32_t t0 = SDL_GetTicks();;) {
         SDL_Event e;
         while (SDL_PollEvent(&e)) {
@@ -2625,15 +2649,36 @@ static int connect_session(sdl *s)
             if (e.type == SDL_WINDOWEVENT || e.type == SDL_RENDER_TARGETS_RESET) s->redraw = 1;
         }
         int r = mdrt_net_connect(n);
+        for (int k = 1; k < MDRT_PADS && mdrt_net_is_host(n); k++) {   /* (a host: each guest as it comes, and goes) */
+            const char *name = mdrt_net_name_of(n, k);
+            int here = mdrt_net_players_of(n, k) > 0;
+            if (here && !(said >> k & 1)) {
+                say(s, 5000, "%s has joined", name[0] ? name : "A player");
+                printf("netplay: %s has joined\n", name[0] ? name : "a player");
+                fflush(stdout);
+                said |= 1u << k;
+            } else if (!here) said &= ~(1u << k);
+        }
         if (r == MDRT_NET_READY) {
+            char mine[32], others[160] = "";
             if (s->net_udp) mdrt_udp_lock(s->net_udp);
-            snprintf(why, sizeof why, "netplay: playing with %s, %s", s->net_udp ? mdrt_udp_peer(s->net_udp, peer, sizeof peer) : "the other player",
-                     mdrt_net_is_host(n) ? "you are player 1" : "you are player 2");
+            pads_text(mdrt_net_pads(n), mine, sizeof mine);
+            int peers = mdrt_net_peers(n);
+            for (int k = 0, j = 0; k < peers; k++) {
+                if (k == mdrt_net_me(n)) continue;
+                const char *name = mdrt_net_name_of(n, k);
+                size_t at = strlen(others);
+                snprintf(others + at, sizeof others - at, "%s%s", j ? (j == peers - 2 ? " and " : ", ") : "", name[0] ? name : "a player");
+                j++;
+            }
+            snprintf(why, sizeof why, "netplay: playing with %.100s (%.48s), you play %.24s", others,
+                     s->net_udp && !mdrt_net_is_host(n) ? mdrt_udp_peer(s->net_udp, peer, sizeof peer) : mdrt_net_is_host(n) ? "hosting" : "joined", mine);
             notice(s, why);
-            const char *who = mdrt_net_peer_name(n);
-            say(s, 5000, "%s has joined", who[0] ? who : mdrt_net_is_host(n) ? "Player 2" : "Player 1");
-            printf("netplay: %s has joined\n", who[0] ? who : mdrt_net_is_host(n) ? "player 2" : "player 1");
-            fflush(stdout);
+            if (!mdrt_net_is_host(n)) {                   /* (a guest: who is playing, the host first) */
+                say(s, 5000, "Playing with %s", others);
+                printf("netplay: playing with %s\n", others);
+                fflush(stdout);
+            }
             return 1;
         }
         if (r != MDRT_NET_CONNECTING) {                   /* (refused: said until a key or the window closes) */
@@ -2648,11 +2693,23 @@ static int connect_session(sdl *s)
                 if (e.type == SDL_WINDOWEVENT) { s->redraw = 1; net_page(s, lines, 4); }
             }
         }
-        char since[64];
+        char since[64], title[64], joined[200] = "";
         snprintf(since, sizeof since, "Waiting %u s", (unsigned)((SDL_GetTicks() - t0) / 1000));
+        if (mdrt_net_is_host(n)) {                        /* (a host: who is in so far) */
+            int players = 0, total = s->net_all;
+            for (int k = 0; k < MDRT_PADS; k++) players += mdrt_net_players_of(n, k);
+            if (game_pads(s) <= 2) total = 2;
+            snprintf(title, sizeof title, "Netplay: %d of %d players in", players, total);
+            for (int k = 1; k < MDRT_PADS; k++) {
+                if (!mdrt_net_players_of(n, k)) continue;
+                const char *name = mdrt_net_name_of(n, k);
+                size_t at = strlen(joined);
+                snprintf(joined + at, sizeof joined - at, "%s%s (%d)", at ? ", " : "Joined: ", name[0] ? name : "a player", mdrt_net_players_of(n, k));
+            }
+        } else snprintf(title, sizeof title, "Netplay: waiting for the host");
         const char *refused = mdrt_net_why(n);
-        const char *lines[] = { "Netplay: waiting for the other player", where, since, refused[0] ? refused : "", "", "Esc gives up" };
-        net_page(s, lines, 6);
+        const char *lines[] = { title, where, since, joined, refused[0] ? refused : "", "", "Esc gives up" };
+        net_page(s, lines, 7);
         if (s->net_udp) mdrt_udp_wait(s->net_udp, 15);
         else SDL_Delay(15);
     }
@@ -2684,12 +2741,12 @@ static void net_begin(sdl *s)
         else snprintf(addr, sizeof addr, strchr(s->net_addr, ':') ? "[%s]:%d" : "%s:%d", s->net_addr, s->net_port);
     }
     mdrt_udp *u = mdrt_udp_open(s->net_role == NET_JOIN ? 0 : (uint16_t)s->net_port, s->net_role == NET_HOST ? NULL : addr, err, sizeof err);
-    int two = s->o->net_pads >= 2 && s->net_pads == 2;    /* (two pads each: the client offers it, the player chose it) */
     if (!u) { snprintf(s->menu.message, sizeof s->menu.message, "%.120s", err); return; }
+    int most = game_pads(s), here = most > 2 ? clamp(s->net_here, 1, most - 1) : 1;   /* (the client's game takes more than two: the page's) */
     mdrt_net_config c = { .role = s->net_role == NET_HOST ? MDRT_NET_HOST : s->net_role == NET_JOIN ? MDRT_NET_JOIN : MDRT_NET_EITHER,
                           .identity = s->o->net_identity, .name = s->net_name, .local_input = net_input, .input_user = s, .delay = s->net_delay,
                           .window = 8, .rollback = 30, .check_every = 60,
-                          .host_pads = two ? 0x3 : 0, .guest_pads = two ? 0xC : 0 };
+                          .players = here, .players_total = most > 2 ? clamp(s->net_all, here + 1, most) : 2 };
     c.link = mdrt_udp_link(u);
     int playing = s->thread != NULL;
     if (!stop_game(s)) { mdrt_udp_close(u); snprintf(s->menu.message, sizeof s->menu.message, "The game would not stop"); return; }

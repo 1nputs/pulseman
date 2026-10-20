@@ -2,7 +2,8 @@
  * datagram and, once locked, hears no one else; IPv6 too where there is one; the simulated network
  * loses and delays what it is told to; the command line's options. Then two netplay sessions in
  * one process over real sockets, a host and a joiner and two that both connect, each through a
- * simulated network with loss: both consoles reach the same simulation at the last frame. */
+ * simulated network with loss, and three machines (a host with two players, two joiners): every
+ * console reaches the same simulation at the last frame. */
 #include <stdlib.h>
 #include <string.h>
 #include "check.h"
@@ -89,7 +90,7 @@ static void options(void)
     mdrt_net_options o;
     mdrt_net_options_init(&o);
     char *argv[] = { "game", "--join", "10.0.0.5:7100", "--delay", "3", "--net-sim", "40,10,5,1", "--rom", "x", "--host", "--port", "7200",
-                     "--name", "Sam" };
+                     "--name", "Sam", "--here", "2", "--players", "4" };
     int argc = (int)(sizeof argv / sizeof *argv), taken = 0, i;
     for (i = 1; i < argc; i++) {
         int r = mdrt_net_parse(&o, argc, argv, &i, err, sizeof err);
@@ -97,8 +98,9 @@ static void options(void)
         if (r > 0) taken++;
         else i++;                                         /* (--rom x is the client's) */
     }
-    CHECK_EQ(taken, 6);
+    CHECK_EQ(taken, 8);
     CHECK(o.on && o.role == MDRT_NET_HOST && o.port == 7200 && o.delay == 3 && !strcmp(o.peer, "10.0.0.5:7100") && !strcmp(o.name, "Sam"));
+    CHECK(o.here == 2 && o.players == 4);
     char lan[64];
     mdrt_udp_lan_address(lan, sizeof lan);
     printf("  this machine on its network: %s\n", lan[0] ? lan : "(none)");
@@ -110,30 +112,36 @@ static void options(void)
     char *bad2[] = { "game", "--join" };
     i = 1;
     CHECK_EQ(mdrt_net_parse(&o, 2, bad2, &i, err, sizeof err), -1);
+    char *bad3[] = { "game", "--here", "4" }, *bad4[] = { "game", "--players", "5" };   /* (a pad for another at least; four pads) */
+    i = 1;
+    CHECK_EQ(mdrt_net_parse(&o, 3, bad3, &i, err, sizeof err), -1);
+    i = 1;
+    CHECK_EQ(mdrt_net_parse(&o, 3, bad4, &i, err, sizeof err), -1);
 }
 
 /* ---- a session over the sockets ------------------------------------------------------------------- */
 
 #define FRAMES 240
-typedef struct side { mdrt_udp *u; mdrt_net *n; mdrt *m; int state, ready; uint32_t seed; } side;
+typedef struct side { mdrt_udp *u; mdrt_net *n; mdrt *m; int state, ready; uint32_t seed; int players, total; } side;
 
 static void buttons(void *user, uint16_t b[MDRT_PADS])
 {
     side *s = user;
     uint32_t f = (uint32_t)mdrt_frame_count(s->m);
-    b[0] = (uint16_t)(((s->seed ^ (f / 4)) * 2654435761u) >> 20 & 0xFF);
+    for (int k = 0; k < (s->players ? s->players : 1); k++) b[k] = (uint16_t)((((s->seed + (uint32_t)k) ^ (f / 4)) * 2654435761u) >> 20 & 0xFF);
 }
 
-static void sides(side *a, side *b)
+static void sides_n(side **ss, int nsides)
 {
-    side *ss[2] = { a, b };
-    for (int i = 0; i < 2; i++) {
+    for (int i = 0; i < nsides; i++) {
         mdrt_net_config c = { .role = 0, .identity = "udp_test", .delay = 1, .window = 8, .rollback = 30 };
         c.role = ss[i]->state;
         c.link = mdrt_udp_link(ss[i]->u);
         c.local_input = buttons;
         c.input_user = ss[i];
         c.seed = ss[i]->seed;
+        c.players = ss[i]->players;
+        c.players_total = ss[i]->total;
         ss[i]->n = mdrt_net_new(&c);
         ss[i]->state = MDRT_NET_CONNECTING;
         ss[i]->m = NULL;
@@ -142,7 +150,7 @@ static void sides(side *a, side *b)
     }
     for (int k = 0; k < 20000; k++) {
         int going = 0;
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < nsides; i++) {
             side *s = ss[i];
             if (s->state == MDRT_NET_CONNECTING) {
                 s->state = mdrt_net_connect(s->n);
@@ -170,9 +178,10 @@ static void sides(side *a, side *b)
             if (s->state == MDRT_NET_GO && mdrt_frame_count(s->m) >= FRAMES && !mdrt_quiet(s->m)) s->state = MDRT_NET_WAIT;
         }
         if (!going) break;
-        mdrt_udp_wait(a->u, 1);
+        mdrt_udp_wait(ss[0]->u, 1);
     }
 }
+static void sides(side *a, side *b) { side *ss[2] = { a, b }; sides_n(ss, 2); }
 
 static void session(int either)
 {
@@ -216,11 +225,44 @@ static void session(int either)
     }
 }
 
+/* a host with two players and two joiners with one each, over the sockets: the pads given out (the
+ * host's 1 and 2), every console at the same simulation at the last frame */
+static void three(void)
+{
+    side a = { .seed = 31, .players = 2, .total = 4 }, b = { .seed = 41 }, c = { .seed = 51 };
+    side *ss[3] = { &a, &b, &c };
+    char addr[64];
+    a.u = mdrt_udp_open(0, NULL, err, sizeof err);
+    CHECK(a.u != NULL);
+    if (!a.u) return;
+    snprintf(addr, sizeof addr, "127.0.0.1:%u", (unsigned)mdrt_udp_port(a.u));
+    b.u = mdrt_udp_open(0, addr, err, sizeof err);
+    c.u = mdrt_udp_open(0, addr, err, sizeof err);
+    CHECK(b.u && c.u);
+    if (!b.u || !c.u) return;
+    a.state = MDRT_NET_HOST;
+    b.state = c.state = MDRT_NET_JOIN;
+    sides_n(ss, 3);
+    CHECK(a.m && b.m && c.m);
+    if (a.m && b.m && c.m) {
+        uint64_t ha = mdrt_sim_hash(a.m), hb = mdrt_sim_hash(b.m), hc = mdrt_sim_hash(c.m);
+        uint8_t pa = mdrt_net_pads(a.n), pb = mdrt_net_pads(b.n), pc = mdrt_net_pads(c.n);
+        printf("  three machines over UDP (the host's two players, one each): pads %X %X %X, frames %u %u %u; the same at the last frame: %s\n",
+               pa, pb, pc, (unsigned)mdrt_frame_count(a.m), (unsigned)mdrt_frame_count(b.m), (unsigned)mdrt_frame_count(c.m),
+               ha == hb && hb == hc ? "yes" : "NO");
+        CHECK(pa == 0x3 && (pb | pc) == 0xC && pb != pc);
+        CHECK_EQ(mdrt_frame_count(a.m), FRAMES); CHECK_EQ(mdrt_frame_count(b.m), FRAMES); CHECK_EQ(mdrt_frame_count(c.m), FRAMES);
+        CHECK(ha == hb && hb == hc);
+    }
+    for (int i = 0; i < 3; i++) { mdrt_net_free(ss[i]->n); mdrt_free(ss[i]->m); mdrt_udp_close(ss[i]->u); }
+}
+
 int main(void)
 {
     sockets();
     options();
     session(0);
     session(1);
+    three();
     return check_done("udp_test");
 }

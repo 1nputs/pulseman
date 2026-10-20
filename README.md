@@ -30,10 +30,12 @@ The console, in `libmdrt` (no SDL):
 - **The console as a value**: `mdrt_get_state` / `mdrt_set_state` (every module, and parts the
   client adds), all or nothing; NTSC and PAL clocks; a Japanese console.
 - **Recording**: `mdrt_record` writes the console's own `.vdptrace`, `.padtrace` and `.sndtrace`.
-- **Rollback netplay**: `mdrt/netplay.h`, two consoles on two machines playing one game (each
-  player's buttons at once, the other's guessed, frames played again quietly when a guess was
-  wrong, desync checks, the players' names), knowing no game and never blocking; `mdrt/net_udp.h` its UDP link (IPv4
-  and IPv6, host and join or both connecting at once) and the options every client reads; quiet
+- **Rollback netplay**: `mdrt/netplay.h`, consoles on two to four machines playing one game (a
+  host and its guests, each machine's players on the pads in turn; each player's buttons at once,
+  the others' guessed, frames played again quietly when a guess was wrong, desync checks, the
+  players' names, the host's settings sent to every guest), knowing no game and never blocking;
+  `mdrt/net_udp.h` its UDP link (IPv4 and IPv6, host and join or both connecting at once) and the
+  options every client reads; quiet
   frames (`mdrt_set_quiet`) and the simulation's hash (`mdrt_sim_hash`) beneath them.
 - **Libraries a platform uses**: `mdrt/png.h` (screenshots, indexed pictures, any PNG read back,
   deflate both ways, no zlib), `mdrt/zip.h` (zip archives read and checked, and written the same
@@ -50,11 +52,13 @@ motion and frame step, full screen and hi-DPI, vsync (no tearing; the game keeps
 scaling (sharp, integer, fit; square or 4:3) with the upscalers and looks above, screenshots,
 replays and recordings as GIFs, save slots with a picture each, quick resume, and a menu (Esc) with
 the ROM browser, reset, states, video, capture, sound (the FM core and chip changed live), players,
-keys, and pages of the client's own options handed to it before every power on. And netplay: an
-Online play page (your name; host, join, or both connecting; the address and port typed in; this
-machine's LAN address; the input delay; one pad each or two, EA's 4 Way Play), who joined and who left said over the game's bottom row,
-the window connecting before the game starts, then pacing by the clock and keeping the session's
-rules (no pause, rewind or states while two play).
+keys, and pages of the client's own options handed to it before every power on. And netplay, two
+to four machines (a host and its guests, any players at each up to four pads, EA's 4 Way Play
+when pads 3 and 4 are played): an Online play page (your name; host, join, or both connecting;
+the address and port typed in; this machine's LAN address; the input delay; the players here and
+in all), who joined and who left said over the game's bottom row, the window connecting before
+the game starts, then pacing by the clock and keeping the session's rules (no pause, rewind or
+states while you play together).
 
 ## Building and checking
 
