@@ -33,7 +33,9 @@ The console, in `libmdrt` (no SDL):
 - **Rollback netplay**: `mdrt/netplay.h`, consoles on two to four machines playing one game (a
   host and its guests, each machine's players on the pads in turn; each player's buttons at once,
   the others' guessed, frames played again quietly when a guess was wrong, desync checks, the
-  players' names, the host's settings sent to every guest), knowing no game and never blocking;
+  players' names, the host's settings sent to every guest, the host's reset and its states
+  loaded for everyone at the same frame, states saved that every machine played), knowing no game
+  and never blocking;
   `mdrt/net_udp.h` its UDP link (IPv4 and IPv6, host and join or both connecting at once) and the
   options every client reads; quiet
   frames (`mdrt_set_quiet`) and the simulation's hash (`mdrt_sim_hash`) beneath them.
@@ -57,8 +59,9 @@ to four machines (a host and its guests, any players at each up to four pads, EA
 when pads 3 and 4 are played): an Online play page (your name; host, join, or both connecting;
 the address and port typed in; this machine's LAN address; the input delay; the players here and
 in all), who joined and who left said over the game's bottom row, the window connecting before
-the game starts, then pacing by the clock and keeping the session's rules (no pause, rewind or
-states while you play together).
+the game starts, then pacing by the clock and keeping the session's rules (no pause or rewind
+while you play together; for a game that allows them, anyone saves a state and the host loads one
+for everyone; every session from a new cartridge).
 
 ## Building and checking
 

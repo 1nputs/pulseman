@@ -44,5 +44,7 @@ const char *mdrt_fm_cores(int i);
  * loads only into a chip with the same one. */
 size_t mdrt_fm_save(const mdrt_fm *f, uint8_t *out);
 int mdrt_fm_load(mdrt_fm *f, const uint8_t *in, size_t size);
+/* whether a state of mdrt_fm_save's would load: this chip's core, and at least its size */
+int mdrt_fm_fits(const mdrt_fm *f, const uint8_t *in, size_t size);
 
 #endif

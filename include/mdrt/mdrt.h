@@ -204,6 +204,16 @@ const char *mdrt_request_path(const mdrt *m);
  * with the mixer started afresh (it is presentation only). */
 size_t mdrt_get_state(mdrt *m, void *buf, size_t size);
 int mdrt_set_state(mdrt *m, const void *buf, size_t size);
+/* whether a state is this console's to load, by its form (the sections and the client's parts by
+ * their tags, the model, the FM core) without loading it: what a client's parts say of their own
+ * bytes is known only at the load. 1 or 0 */
+int mdrt_state_fits(const mdrt *m, const void *buf, size_t size);
+/* a state's section by its tag of four characters (a client's part, or the console's own: "SRAM"
+ * ...), read from its bytes alone (no console): its bytes and *len, or NULL when it has none */
+const void *mdrt_state_part(const void *buf, size_t size, const char *tag, size_t *len);
+/* the frame count as a state loaded for netplay goes on from (a state carries the count it was
+ * taken at: the session's must go on) */
+void mdrt_set_frame_count(mdrt *m, uint64_t frames);
 /* a part of the client's in every state, under a tag of four characters: save writes it and
  * returns its size (out NULL: only the size, which may differ from one state to the next); load
  * reads it back and returns 0, or -1 when it cannot, and then the whole state is refused and

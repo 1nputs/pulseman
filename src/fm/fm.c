@@ -153,6 +153,15 @@ size_t mdrt_fm_save(const mdrt_fm *f, uint8_t *out)
     return o.n + f->ops->save(f->core, out ? out + o.n : NULL);
 }
 
+int mdrt_fm_fits(const mdrt_fm *f, const uint8_t *in, size_t size)
+{
+    st_out o = { NULL, 0 };
+    save_wrapper(f, &o);
+    char name[8] = { 0 };
+    strncpy(name, f->ops->name, sizeof name - 1);
+    return size >= o.n && !memcmp(in + o.n - 8, name, 8);
+}
+
 int mdrt_fm_load(mdrt_fm *f, const uint8_t *in, size_t size)
 {
     st_out o = { NULL, 0 };

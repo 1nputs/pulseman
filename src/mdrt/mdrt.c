@@ -751,6 +751,36 @@ int mdrt_set_state(mdrt *m, const void *buf, size_t size)
     return bad ? -1 : 0;
 }
 
+int mdrt_state_fits(const mdrt *m, const void *buf, size_t size)
+{
+    const uint8_t *data[SECTIONS];
+    size_t len[SECTIONS];
+    if (!buf || sections(m, buf, size, data, len)) return 0;
+    st_in c = { data[0], 0, len[0], 0 };
+    int pal = st_g8(&c);
+    uint32_t frame = st_g32(&c);
+    return !c.bad && pal == (m->cfg.pal ? 1 : 0) && frame == m->frame && mdrt_fm_fits(m->fm, data[3], len[3]);
+}
+
+void mdrt_set_frame_count(mdrt *m, uint64_t frames) { m->frames = frames; }
+
+const void *mdrt_state_part(const void *buf, size_t size, const char *tag, size_t *len)
+{
+    st_in in = { buf, 0, buf ? size : 0, 0 };
+    char magic[4];
+    st_get(&in, magic, 4);
+    if (in.bad || memcmp(magic, "MDRS", 4) || st_g32(&in) != 2) return NULL;
+    while (!in.bad && in.n < in.size) {
+        char t[4];
+        st_get(&in, t, 4);
+        uint32_t k = st_g32(&in);
+        if (in.bad || !st_have(&in, k)) return NULL;
+        if (!memcmp(t, tag, 4)) { *len = k; return (const uint8_t *)buf + in.n; }
+        in.n += k;
+    }
+    return NULL;
+}
+
 /* ---- the recorder ------------------------------------------------------------------------------ */
 
 static void put(mdrt *m, int trace, const void *b, size_t n) { m->rec[trace].sink(m->rec[trace].user, b, n); }

@@ -24,7 +24,9 @@
  * two and one and one ...). The host's settings (a blob its client gives: game rules, save RAM)
  * go to every guest's client before its power on. The identity (a string the client makes from
  * everything the simulation depends on: its build, the ROM, settings that are compared rather
- * than sent) must be the same on all, or a guest is refused. Every check_every frames each sends
+ * than sent) must be the same on all, or a guest is refused. In the game the host may load a
+ * state for everyone (mdrt_net_load: it goes to every machine, then each loads it at the same
+ * frame), and any peer may save one all of them played (mdrt_net_confirmed_state). Every check_every frames each sends
  * the simulation's hash (mdrt_sim_hash) of a frame all have played with every button known, and
  * the host compares each guest's with its own; a difference is a desync. A player who leaves (or
  * a desync, or a machine not heard for 10 seconds) ends the session for every machine, each told
@@ -35,9 +37,10 @@
 #include <stdint.h>
 #include "mdrt/mdrt.h"
 
-#define MDRT_NET_PROTOCOL 5             /* the messages' version: peers must agree (2: the players' names; 3: the
+#define MDRT_NET_PROTOCOL 6             /* the messages' version: peers must agree (2: the players' names; 3: the
                                            settings' chunks acknowledged selectively; 4: up to four machines;
-                                           5: the host's reset, MDRT_NET_RESET_BIT) */
+                                           5: the host's reset, MDRT_NET_RESET_BIT; 6: the host's state loaded
+                                           for everyone, mdrt_net_load) */
 #define MDRT_NET_NAME 24                /* a player's name, at most (printable ASCII) */
 
 /* the other peers, as the platform reaches them (UDP natively: mdrt/net_udp.h). send: one datagram
@@ -67,7 +70,8 @@ typedef struct mdrt_net_config {
     mdrt_net_link link;
     /* the local players' buttons now: buttons[0] the first pad this peer plays, [1] the second ...
      * A host's with MDRT_NET_RESET_BIT on any of its pads resets the console for everyone, at the
-     * frame those buttons are for (a guest's is ignored) */
+     * frame those buttons are for (a guest's is ignored); MDRT_NET_LOAD_BIT is netplay's own (it is
+     * cleared here) */
     void (*local_input)(void *user, uint16_t buttons[MDRT_PADS]);
     void *input_user;
     int players;                /* the pads this peer plays (0: 1), fewer than MDRT_PADS */
@@ -83,6 +87,7 @@ typedef struct mdrt_net_config {
 } mdrt_net_config;
 #define MDRT_NET_MAX_DELAY 10
 #define MDRT_NET_MAX_SETTINGS (16u << 20)    /* (a guest takes no more: 16 MB, a game's rosters with their art) */
+#define MDRT_NET_MAX_STATE (16u << 20)       /* (a state for everyone: mdrt_net_load) */
 
 typedef struct mdrt_net mdrt_net;
 mdrt_net *mdrt_net_new(const mdrt_net_config *c);        /* NULL: out of memory, or a bad configuration */
@@ -96,9 +101,11 @@ void mdrt_net_free(mdrt_net *n);
  * that leaves the waiting room, or is not heard from for 10 seconds, gives its place up. */
 enum { MDRT_NET_CONNECTING, MDRT_NET_READY, MDRT_NET_REFUSED, MDRT_NET_ENDED,
        MDRT_NET_GO, MDRT_NET_WAIT, MDRT_NET_RESTART, MDRT_NET_RESET };
-/* a bit of no pad's in a host's buttons (local_input): reset the console. It goes with the host's
- * buttons, so every machine resets at the same frame, and a guess never holds it */
+/* bits of no pad's in a host's buttons: reset the console (local_input's), load the host's state
+ * (netplay's: mdrt_net_load). They go with the host's buttons, so every machine resets or loads at
+ * the same frame, and a guess never holds them. The log shows them (on the host's first pad) */
 #define MDRT_NET_RESET_BIT 0x8000
+#define MDRT_NET_LOAD_BIT 0x4000
 int mdrt_net_connect(mdrt_net *n);
 /* where the session is: MDRT_NET_CONNECTING, MDRT_NET_GO (connected: playing), MDRT_NET_REFUSED or
  * MDRT_NET_ENDED (mdrt_net_why) */
@@ -127,7 +134,8 @@ void mdrt_net_start(mdrt_net *n, mdrt *m);
  * go on from here after a state is loaded. MDRT_NET_GO: play the next frame. MDRT_NET_WAIT: not
  * yet (the other's buttons are too far behind, or this peer is ahead and gives a frame back):
  * call again soon (a millisecond or so later), without playing on. MDRT_NET_RESTART: a state was
- * loaded (a rollback): restart at the resumable point and play on. MDRT_NET_RESET: the host reset
+ * loaded (a rollback, or the host's state for everyone at this frame: mdrt_net_load): restart at
+ * the resumable point and play on. MDRT_NET_RESET: the host reset
  * the console at this frame: it has been powered on again (mdrt_power_on, its save RAM kept): start
  * the client's code again from its power on, and play on in the session (a rollback across it
  * powers it on again as it plays the frame again). MDRT_NET_ENDED: the session is over
@@ -139,6 +147,19 @@ int mdrt_net_frame(mdrt_net *n, int resumable);
  * leaves the console as it was, its pad source the platform's.) */
 void mdrt_net_quit(mdrt_net *n);
 const char *mdrt_net_why(const mdrt_net *n);
+
+/* (the host, in the game; on the game's thread, between frames) a state for everyone (the module
+ * copies it): sent to every guest, then loaded on every machine at the same frame (that of the
+ * host's next buttons once every guest has it whole, and at least 256 frames after the last load),
+ * where mdrt_net_frame says MDRT_NET_RESTART, the frame count going on (mdrt_set_frame_count). A
+ * state of another console, or one the client's parts refuse, ends the session there: check it
+ * first (mdrt_state_fits, and the client's own). One sent while another waits takes its place.
+ * 0, or -1: not the host, not in the game, or too large (MDRT_NET_MAX_STATE). */
+int mdrt_net_load(mdrt_net *n, const void *state, size_t size);
+/* the newest state this peer took (at a resumable point) of a frame every machine has played or
+ * will play the same (every button up to it known): to save in the session. NULL when it has none;
+ * else its size and frame. The bytes last until the next mdrt_net_frame. */
+const void *mdrt_net_confirmed_state(const mdrt_net *n, size_t *size, uint32_t *frame);
 
 typedef struct mdrt_net_stats {
     uint32_t frame, remote_frame;   /* the last frame played here; the newest every peer this one talks to is
@@ -154,6 +175,10 @@ typedef struct mdrt_net_stats {
     long gave_back;                 /* frames given back to keep in step with the others */
     long checks;                    /* desync checks that agreed (a host: one for each guest) */
     long resets;                    /* the host's resets, as they were played (again, after a rollback across one) */
+    long loads;                     /* the host's states loaded, the same */
+    uint32_t loaded_at;             /* the frame the last was loaded at */
+    int load_waiting;               /* (a host) a state of mdrt_net_load not loaded yet: going to the guests, or
+                                       waiting for its frame */
     int lost;                       /* nothing heard for 3 seconds (the session ends after 10) */
 } mdrt_net_stats;
 void mdrt_net_stats_get(const mdrt_net *n, mdrt_net_stats *s);

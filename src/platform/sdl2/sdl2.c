@@ -97,9 +97,6 @@ static const char *const fast_label[6] = { "2x", "3x", "4x", "6x", "8x", "max" }
 enum { NET_HOST, NET_JOIN, NET_BOTH };
 static const char *const net_role_name[3] = { "host", "join", "both" };
 static const char *const net_role_label[3] = { "host", "join", "both connect" };
-/* the Online page's Save RAM (a host's, for a game that sends its own: net_save_ram) */
-static const char *const net_save_name[2] = { "yours", "new" };
-static const char *const net_save_label[2] = { "yours", "new cartridge" };
 
 #define VOLUME_STEP 10
 #define ROM_MAX (16u << 20)                               /* (no cartridge is larger) */
@@ -116,7 +113,7 @@ enum { I_RESUME = 1, I_ROM, I_RESET, I_SAVE, I_LOAD, I_VIDEO, I_SOUND, I_OPTIONS
        I_UPSCALE, I_SCALE, I_ASPECT, I_FULL, I_VSYNC, I_COLOURS, I_BLEND, I_SCANLINES, I_MASK, I_VOLUME, I_MUTE, I_FM_CORE, I_FM_CHIP, I_FAST, I_UP,
        I_PLAYERS, I_ADAPTOR, I_TURBO, I_DEADZONE, I_CBUTTONS,
        I_CAPTURE, I_CAP_REPLAY, I_CAP_RECORD, I_CAP_SECONDS, I_CAP_GIFSCALE, I_USE, I_FPS, I_CSECTION,
-       I_NET, I_NET_ROLE, I_NET_ADDR, I_NET_PORT, I_NET_DELAY, I_NET_START, I_NET_LEAVE, I_NET_NAME, I_NET_HERE, I_NET_ALL, I_NET_SAVE,
+       I_NET, I_NET_ROLE, I_NET_ADDR, I_NET_PORT, I_NET_DELAY, I_NET_START, I_NET_LEAVE, I_NET_NAME, I_NET_HERE, I_NET_ALL,
        I_SLOT = 800,             /* + slot (0 the Autosave, 1-8) */
        I_PLAYER = 900,           /* + player (0-3) */
        I_PAD = 1000,             /* + pad * BUTTONS + button */
@@ -168,13 +165,14 @@ typedef struct sdl {
      * thread's word that it ended, and its line for the title (s->lock); the sound stretched */
     SDL_atomic_t session, net_over, net_leave, net_reset;
     char net_line[200];
+    char net_note[96];          /* the game thread's word on a session's state (saved, loaded, refused), for the window to say */
+    uint32_t net_loaded;        /* (the game thread's) the frame the session last loaded a state at */
     mdrt_net *net;              /* the session (the client's from its command line, or the menu's: owned) */
     mdrt_udp *net_udp;
     int net_owned;
     int net_sram;               /* this console powered on in a session: its save RAM the session's, never written to the file */
     int net_role, net_port, net_delay;   /* the Online page's, kept in the settings */
     int net_here, net_all;      /* the Online page's players at this machine, and in all (a host's) */
-    int net_fresh;              /* its Save RAM: a new cartridge's (a host's, net_save_ram) */
     uint64_t net_idle;          /* the game thread's time in mdrt_idle since its last frame (performance counts) */
     char net_addr[96];
     char net_name[MDRT_NET_NAME + 1];   /* the player's, for the other to see */
@@ -373,6 +371,14 @@ static void audio(void *user, const int16_t *samples, int frames)
 
 static int ending(sdl *s) { return SDL_AtomicGet(&s->quit) || SDL_AtomicGet(&s->stop); }
 
+/* the game thread's word for the player, said by the window's (show_note) */
+static void net_note(sdl *s, const char *msg)
+{
+    SDL_LockMutex(s->lock);
+    snprintf(s->net_note, sizeof s->net_note, "%s", msg);
+    SDL_UnlockMutex(s->lock);
+}
+
 /* netplay's line for the title, and its end, from the game thread (twice a second) */
 static void net_status(sdl *s)
 {
@@ -391,6 +397,10 @@ static void net_status(sdl *s)
                   st.last_replayed, st.most_replayed, st.lost ? ", connection lost" : "");
     SDL_UnlockMutex(s->lock);
     if (state == MDRT_NET_ENDED || state == MDRT_NET_REFUSED) SDL_AtomicSet(&s->net_over, 1);
+    if (st.loaded_at != s->net_loaded) {                  /* (a state loaded for everyone: played again after a rollback, the same) */
+        s->net_loaded = st.loaded_at;
+        net_note(s, mdrt_net_is_host(s->net) ? "state loaded for everyone" : "the host loaded a state");
+    }
 }
 
 static int frame_wait(void *user)
@@ -455,18 +465,56 @@ static void input(void *user, uint16_t buttons[MDRT_PADS])
     take_reset(s, buttons);                               /* (a session the client made: its local input reads these) */
 }
 
+/* the file the requests name: the platform's slot (the game thread's copy, until the next handshake) */
+static const char *request_path(void *user);
+static uint8_t *read_file(const char *path, size_t *size, const char **why);
+
+/* (a session's, net_states) a state every machine played into the slot's file the window asked
+ * for; none yet, and nothing is written (the window says so when no file comes) */
+static void net_save(sdl *s)
+{
+    const char *path = request_path(s);
+    size_t size = 0;
+    const void *st = path ? mdrt_net_confirmed_state(s->net, &size, NULL) : NULL;
+    FILE *f = st ? fopen(path, "wb") : NULL;
+    if (!f) return;
+    fwrite(st, 1, size, f);
+    fclose(f);
+}
+
+/* (a session's host, net_states) the slot's state for everyone, when it may be loaded here */
+static void net_load(sdl *s)
+{
+    const char *path = request_path(s), *why = NULL;
+    size_t size = 0;
+    uint8_t *b = path ? read_file(path, &size, &why) : NULL;
+    if (!mdrt_net_is_host(s->net)) why = "only the host loads states";
+    else if (!b) why = "the state could not be read";
+    else if (!mdrt_state_fits(s->m, b, size)) why = "that state is not this game's (another version or FM core)";
+    else if (s->o->state_check && (why = s->o->state_check(b, size, s->user)) != NULL) {}
+    else if (mdrt_net_load(s->net, b, size)) why = "the state could not be sent";
+    free(b);
+    net_note(s, why ? why : "sending the state to everyone");
+}
+
 static unsigned requests(void *user)
 {
     sdl *s = user;
     unsigned r = 0;
-    if (SDL_AtomicGet(&s->session)) { SDL_AtomicSet(&s->saves, 0); SDL_AtomicSet(&s->loads, 0); return 0; }
+    if (SDL_AtomicGet(&s->session)) {                     /* (netplay: the window's, as net_states has them) */
+        int saves = SDL_AtomicSet(&s->saves, 0), loads = SDL_AtomicSet(&s->loads, 0);
+        if (s->o->net_states && s->net && mdrt_net_state(s->net) == MDRT_NET_GO) {
+            if (saves) net_save(s);
+            if (loads) net_load(s);
+        }
+        return 0;
+    }
     if (SDL_AtomicSet(&s->saves, 0)) r |= MDRT_REQUEST_SAVE;
     if (SDL_AtomicSet(&s->loads, 0)) r |= MDRT_REQUEST_LOAD;
     if (SDL_AtomicGet(&s->rewind)) r |= MDRT_REQUEST_REWIND;
     return r;
 }
 
-/* the file the requests name: the platform's slot (the game thread's copy, until the next handshake) */
 static const char *request_path(void *user)
 {
     sdl *s = user;
@@ -517,6 +565,7 @@ static int start_game(sdl *s)
     if (SDL_AtomicGet(&s->session) && s->net) adaptor = (mdrt_net_all_pads(s->net) & 0xC) ? MDRT_ADAPTOR_EA4WAY : MDRT_ADAPTOR_NONE;
     mdrt_pads_set_adaptor(mdrt_get_pads(s->m), adaptor);
     s->net_sram = SDL_AtomicGet(&s->session);             /* (a session's console: the player's save file left as it was) */
+    s->net_loaded = 0;
     if (SDL_AtomicGet(&s->session) && s->net) {           /* (netplay: from this power on) */
         mdrt_set_net(s->m, s->net);
         mdrt_net_start(s->net, s->m);
@@ -929,10 +978,6 @@ static void settings_load(sdl *s)
         s->net_delay = clamp(mdrt_settings_get_int(s->set, "netplay.delay", 2), 0, MDRT_NET_MAX_DELAY);
         s->net_here = clamp(mdrt_settings_get_int(s->set, "netplay.here", 1), 1, MDRT_PADS - 1);
         s->net_all = clamp(mdrt_settings_get_int(s->set, "netplay.players", 2), 2, MDRT_PADS);
-        if (s->o->net_save_ram) {
-            mdrt_settings_default(s->set, "netplay.save_ram", "yours");
-            s->net_fresh = named(mdrt_settings_get(s->set, "netplay.save_ram"), net_save_name, 2, 0);
-        }
     }
     for (int p = 0; p < MDRT_PADS; p++) {
         char k[48];
@@ -1739,8 +1784,6 @@ static void build_page(sdl *s, int page, int select)
                 if (s->net_role != NET_JOIN)
                     mdrt_menu_add_number(m, I_NET_ALL, "Total players", clamp(s->net_all, s->net_here + 1, most), 2, most, 1, NULL);
             }
-            if (s->o->net_save_ram && s->net_role != NET_JOIN)   /* (the host's: what every machine's game plays with) */
-                mdrt_menu_add_choice(m, I_NET_SAVE, "Save RAM", net_save_label, 2, s->net_fresh);
             mdrt_menu_add(m, I_NET_START, MDRT_ITEM_ACTION, s->net_role == NET_HOST ? "Host game" : "Connect");
         }
         char lan[64];
@@ -1835,6 +1878,7 @@ static void ask_load(sdl *s, int slot)
     }
     set_request_path(s, path);
     SDL_AtomicAdd(&s->loads, 1);
+    if (SDL_AtomicGet(&s->session)) return;               /* (netplay: the game thread says how it went) */
     snprintf(msg, sizeof msg, "state loaded: %s", name);
     notice(s, msg);
 }
@@ -1862,15 +1906,31 @@ static void check_pending(sdl *s)
         s->pending = -1;
     } else if (SDL_GetTicks() > s->pending_until) {       /* not in play: nothing changed */
         remove(made);
-        if (s->pending) notice(s, "states are saved during play");   /* (the Autosave: the last one stays) */
+        if (s->pending) notice(s, SDL_AtomicGet(&s->session) ? "no state to save yet" : "states are saved during play");   /* (the Autosave: the last one stays) */
         s->pending = -1;
     } else s->pending_size = n;
 }
 
-/* the window closing: the game's state into the Autosave first (in play), then quit */
+static void say(sdl *s, uint32_t ms, const char *fmt, const char *arg);
+
+/* the game thread's word on a session's state, said */
+static void show_note(sdl *s)
+{
+    char note[96];
+    SDL_LockMutex(s->lock);
+    snprintf(note, sizeof note, "%s", s->net_note);
+    s->net_note[0] = 0;
+    SDL_UnlockMutex(s->lock);
+    if (!note[0]) return;
+    notice(s, note);
+    say(s, 4000, "%.60s", note);
+}
+
+/* the window closing: the game's state into the Autosave first (in play; in a session, as
+ * net_states has it), then quit */
 static void request_quit(sdl *s)
 {
-    if (!s->thread || s->quitting || SDL_AtomicGet(&s->session)) { quit(s); return; }   /* (netplay: none yet) */
+    if (!s->thread || s->quitting || (SDL_AtomicGet(&s->session) && !s->o->net_states)) { quit(s); return; }
     s->quitting = 1;
     if (s->menu_open) close_menu(s);
     SDL_AtomicSet(&s->paused, 0);
@@ -2002,8 +2062,12 @@ static void act(sdl *s, int id)
         notice(s, "netplay: the console reset for everyone");
         return;
     }
-    if (SDL_AtomicGet(&s->session) && (id == I_ROM || id == I_RESET || id == I_SAVE || id == I_LOAD || id == I_FM_CORE ||
-                                       id == I_FM_CHIP || id == I_ADAPTOR)) {
+    if (SDL_AtomicGet(&s->session) && s->o->net_states && id == I_LOAD && (!s->net || !mdrt_net_is_host(s->net))) {
+        snprintf(s->menu.message, sizeof s->menu.message, "Only the host can load a state");
+        return;
+    }
+    if (SDL_AtomicGet(&s->session) && (id == I_ROM || id == I_RESET || ((id == I_SAVE || id == I_LOAD) && !s->o->net_states) ||
+                                       id == I_FM_CORE || id == I_FM_CHIP || id == I_ADAPTOR)) {
         if (id == I_FM_CORE || id == I_FM_CHIP || id == I_ADAPTOR) build_page(s, s->page, id);   /* (the choice as it was) */
         snprintf(s->menu.message, sizeof s->menu.message, "Not during netplay");
         return;
@@ -2063,10 +2127,6 @@ static void act(sdl *s, int id)
     case I_NET_DELAY:
         s->net_delay = it->value;
         mdrt_settings_set_int(s->set, "netplay.delay", s->net_delay);
-        return;
-    case I_NET_SAVE:
-        s->net_fresh = it->value;
-        mdrt_settings_set(s->set, "netplay.save_ram", net_save_name[s->net_fresh]);
         return;
     case I_NET_HERE:
         s->net_here = it->value;
@@ -2776,7 +2836,7 @@ static void net_begin(sdl *s)
     if (!stop_game(s)) { mdrt_udp_close(u); snprintf(s->menu.message, sizeof s->menu.message, "The game would not stop"); return; }
     if (s->o->net_settings) {                             /* (this player's, sent if it hosts: from the menu's values, its save RAM written back) */
         if (s->o->options_use && s->opt_values) s->o->options_use(s->opt_values, s->user);
-        c.settings = s->o->net_settings(&c.settings_size, s->o->net_save_ram && s->net_role != NET_JOIN && s->net_fresh, s->user);
+        c.settings = s->o->net_settings(&c.settings_size, s->user);
         if (!c.settings) c.settings_size = 0;
     }
     mdrt_net *n = mdrt_net_new(&c);
@@ -2910,6 +2970,7 @@ int mdrt_sdl_run(mdrt_config *cfg, const mdrt_sdl_options *o, mdrt_game_fn game,
         read_buttons(s);
         draw(s);
         check_pending(s);
+        show_note(s);
         check_saves(s, 0);
         capture_status(s);
         if (s->quitting && s->pending < 0) quit(s);       /* (the Autosave saved, or not to be) */

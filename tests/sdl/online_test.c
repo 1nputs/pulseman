@@ -17,10 +17,12 @@
  * once it is over, writes its save RAM (the session's) to no file.
  * Last the window hosts, on the port the other player hosted on: a player joins (a thread again),
  * the window leaves, and hosts on that port once more, a player joining again (the last session's
- * socket closed before the next is opened on its port), the page's Save RAM "a new cartridge's"
- * the second time (the game's settings told so; the first time its own); then the host's Reset,
- * chosen in the menu during the session, powers both consoles on again, the session going on in
- * step. */
+ * socket closed before the next is opened on its port). In that session the window saves a state
+ * (one both played: of a frame before the window's), then loads it for everyone (the game's check
+ * asked, both games going back to it, the session going on in step), and a load the game's check
+ * refuses is not sent; the host's Reset, chosen in the menu, powers both consoles on again, the
+ * session going on in step; and the window closing in the session saves the Autosave so too, the
+ * joiner told the host left. */
 #include <SDL2/SDL.h>
 #ifdef _WIN32
 #include <direct.h>
@@ -58,19 +60,27 @@ static int options_session(int *v, void *user)
     v[0] = 2;
     return 1;
 }
-static SDL_atomic_t settings_fresh;
-static const void *window_settings(size_t *size, int fresh, void *user)
+static const void *window_settings(size_t *size, void *user)
 {
     (void)user;
     static const char mine[] = "the window's rules (not sent: it joins)";
     SDL_AtomicAdd(&settings_asked, 1);
-    SDL_AtomicSet(&settings_fresh, fresh);
     *size = sizeof mine;
     return mine;
+}
+/* the game's word on a state to load in a session: refused while refuse_states is set */
+static SDL_atomic_t states_checked, refuse_states;
+static const char *state_check(const void *state, size_t size, void *user)
+{
+    (void)state; (void)size; (void)user;
+    SDL_AtomicAdd(&states_checked, 1);
+    return SDL_AtomicGet(&refuse_states) ? "a state of other rules" : NULL;
 }
 
 static SDL_atomic_t frames, online, starts, window_checks, window_rollbacks, host_done, host_checks, host_rollbacks;
 static SDL_atomic_t joiner_done, joiner_played, joiner_resets, window_resets;
+static SDL_atomic_t window_f, joiner_loads;             /* the window's game's frames (its own count, in its state); the joiner's loads */
+static SDL_atomic_t window_loaded_f, joiner_loaded_f;   /* each game's frame as a state was loaded (-1: none yet) */
 static char host_why[200], host_heard[64], joiner_why[200];
 
 /* ---- the game, the same on both: the pads read through the I/O chip, into its sum ------------- */
@@ -110,6 +120,7 @@ static void window_game(mdrt *m, void *user)
     (void)user;
     static game g;
     memset(&g, 0, sizeof g);
+    long loads = 0;                                       /* (the session's, from this power on) */
     CHECK_EQ(mdrt_add_state_part(m, "GAME", part_save, part_load, &g), 0);
     SDL_AtomicAdd(&starts, 1);
     if (mdrt_get_net(m)) {                                /* (the session's settings, from power on: the host's) */
@@ -121,6 +132,7 @@ static void window_game(mdrt *m, void *user)
         play_frame(m, &g);
         if (mdrt_wait_vblank(m)) return;
         SDL_AtomicAdd(&frames, 1);
+        SDL_AtomicSet(&window_f, (int)g.f);
         mdrt_net *n = mdrt_get_net(m);
         if (!n || mdrt_net_state(n) != MDRT_NET_GO) {     /* (alone: its save RAM written, its own or, after a session, the session's) */
             SDL_AtomicSet(&online, 0);
@@ -134,6 +146,7 @@ static void window_game(mdrt *m, void *user)
         if (r == MDRT_NET_RESET) { memset(&g, 0, sizeof g); SDL_AtomicAdd(&window_resets, 1); }   /* (the host's reset: from power on) */
         mdrt_net_stats st;                                /* (a RESTART: the state is loaded, and the loop plays on from it) */
         mdrt_net_stats_get(n, &st);
+        if (st.loads != loads) { loads = st.loads; SDL_AtomicSet(&window_loaded_f, (int)g.f); }   /* (the host's state for everyone) */
         SDL_AtomicSet(&window_checks, (int)st.checks);
         SDL_AtomicSet(&window_rollbacks, (int)st.rollbacks);
     }
@@ -212,6 +225,8 @@ static int joiner(void *user)
     mdrt *m = mdrt_new(&cfg);
     static game g;
     memset(&g, 0, sizeof g);
+    SDL_AtomicSet(&joiner_loads, 0);
+    SDL_AtomicSet(&joiner_loaded_f, -1);
     CHECK_EQ(mdrt_add_state_part(m, "GAME", part_save, part_load, &g), 0);
     mdrt_net_config c = { .role = MDRT_NET_JOIN, .identity = IDENTITY, .name = "Joiner", .delay = 2, .local_input = host_input, .input_user = m };
     c.link = mdrt_udp_link(u);
@@ -222,12 +237,16 @@ static int joiner(void *user)
         mdrt_udp_lock(u);
         mdrt_net_start(n, m);
         Uint64 freq = SDL_GetPerformanceFrequency(), next = SDL_GetPerformanceCounter();
-        for (Uint32 t0 = SDL_GetTicks(); SDL_GetTicks() - t0 < 20000;) {
+        for (Uint32 t0 = SDL_GetTicks(); SDL_GetTicks() - t0 < 40000;) {
             play_frame(m, &g);
             mdrt_wait_vblank(m);
-            while ((r = mdrt_net_frame(n, 1)) == MDRT_NET_WAIT && SDL_GetTicks() - t0 < 20000) mdrt_udp_wait(u, 1);
+            while ((r = mdrt_net_frame(n, 1)) == MDRT_NET_WAIT && SDL_GetTicks() - t0 < 40000) mdrt_udp_wait(u, 1);
             if (r == MDRT_NET_ENDED || r == MDRT_NET_REFUSED) break;
             if (r == MDRT_NET_RESET) { memset(&g, 0, sizeof g); SDL_AtomicAdd(&joiner_resets, 1); }   /* (the host's reset: from power on) */
+            mdrt_net_stats st;
+            mdrt_net_stats_get(n, &st);
+            if (st.loads != SDL_AtomicGet(&joiner_loads)) SDL_AtomicSet(&joiner_loaded_f, (int)g.f);   /* (the host's state for everyone) */
+            SDL_AtomicSet(&joiner_loads, (int)st.loads);
             if (r == MDRT_NET_RESTART || mdrt_quiet(m)) continue;
             SDL_AtomicAdd(&joiner_played, 1);
             next += freq / 60;
@@ -269,6 +288,18 @@ static void type(const char *t)
 }
 static int until(SDL_atomic_t *a, int v, int ms) { for (int t = 0; t < ms && SDL_AtomicGet(a) != v; t += 10) SDL_Delay(10); return SDL_AtomicGet(a) == v; }
 
+/* a state file's game frame (its last part, the game's: sum, f), or -1 */
+static int state_game_f(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f) return -1;
+    game g;
+    int ok = !fseek(f, -(long)sizeof g, SEEK_END) && fread(&g, sizeof g, 1, f) == 1;
+    fclose(f);
+    return ok ? (int)g.f : -1;
+}
+static int exists(const char *path) { FILE *f = fopen(path, "rb"); if (f) fclose(f); return f != NULL; }
+
 /* the main menu's Online play (the eighth below Resume: Reset, the two states, Video, Capture,
  * Sound, Players) */
 static void online_page(void)
@@ -283,8 +314,8 @@ static int player(void *user)
     (void)user;
     while (SDL_AtomicGet(&frames) < 60) SDL_Delay(10);
     CHECK_EQ(SDL_AtomicGet(&online), 0);
-    online_page();                                        /* (on Host game, below Name, Role, Port, Input delay and Save RAM) */
-    keys(SDL_SCANCODE_UP, 5);
+    online_page();                                        /* (on Host game, below Name, Role, Port and Input delay) */
+    keys(SDL_SCANCODE_UP, 4);
     press(SDL_SCANCODE_RETURN);                           /* the name */
     type("Tester");
     press(SDL_SCANCODE_RETURN);
@@ -355,25 +386,56 @@ static int player(void *user)
     /* the window hosts on the port the other hosted on, is joined, leaves, and hosts there again */
     online_page();                                        /* (on Connect: below Name, Role, Host address, Host port, Input delay) */
     keys(SDL_SCANCODE_UP, 4);
-    press(SDL_SCANCODE_LEFT);                             /* host: Name, Role, Port (7491), Input delay, Save RAM, Host game */
-    keys(SDL_SCANCODE_DOWN, 4);
+    press(SDL_SCANCODE_LEFT);                             /* host: Name, Role, Port (7491), Input delay, Host game */
+    keys(SDL_SCANCODE_DOWN, 3);
     for (int round = 1; round <= 2; round++) {
-        if (round == 2) {                                 /* (Save RAM, above Host game: new cartridge) */
-            press(SDL_SCANCODE_UP);
-            press(SDL_SCANCODE_RIGHT);
-            press(SDL_SCANCODE_DOWN);
-        }
         press(SDL_SCANCODE_RETURN);                       /* (Host game, and "Choose it again": a game is running) */
         press(SDL_SCANCODE_RETURN);
         SDL_AtomicSet(&joiner_done, 0);
         SDL_Thread *j = SDL_CreateThread(joiner, "joiner", NULL);
         int hosting = until(&online, 1, 15000);
         for (int t = 0; t < 5000 && SDL_AtomicGet(&joiner_played) < 60; t += 10) SDL_Delay(10);
-        printf("  hosting from the page, time %d: %s (the joiner played %d frames), the game's settings asked with %s save RAM\n", round,
-               hosting ? "joined, playing" : "NOT joined", SDL_AtomicGet(&joiner_played), SDL_AtomicGet(&settings_fresh) ? "a new cartridge's" : "its own");
+        printf("  hosting from the page, time %d: %s (the joiner played %d frames)\n", round,
+               hosting ? "joined, playing" : "NOT joined", SDL_AtomicGet(&joiner_played));
         CHECK(hosting);
-        CHECK_EQ(SDL_AtomicGet(&settings_fresh), round == 2);
         CHECK(SDL_AtomicGet(&joiner_played) >= 60);
+        if (round == 2) {                                 /* a state saved in the session (the menu's Save state, slot 1), loaded for everyone */
+            press(SDL_SCANCODE_ESCAPE);
+            keys(SDL_SCANCODE_DOWN, 2);
+            keys(SDL_SCANCODE_RETURN, 2);
+            for (int t = 0; t < 3000 && !exists("states/slot1.state"); t += 10) SDL_Delay(10);
+            SDL_Delay(100);
+            int saved = state_game_f("states/slot1.state"), at = SDL_AtomicGet(&window_f);
+            printf("  saved in the session: the game's frame %d (the window's at %d)%s\n", saved, at, exists("states/slot1.png") ? ", its picture beside it" : "");
+            CHECK(saved > 0 && saved <= at);
+            CHECK(exists("states/slot1.png"));
+            SDL_Delay(1500);
+            int checks0 = SDL_AtomicGet(&window_checks);
+            SDL_AtomicSet(&window_loaded_f, -1);
+            press(SDL_SCANCODE_ESCAPE);
+            keys(SDL_SCANCODE_DOWN, 3);
+            keys(SDL_SCANCODE_RETURN, 2);                 /* (Load state: slot 1, the one chosen last) */
+            int loaded = until(&joiner_loads, 1, 5000);
+            SDL_Delay(200);
+            for (int t = 0; t < 8000 && SDL_AtomicGet(&window_checks) < checks0 + 2; t += 10) SDL_Delay(10);
+            printf("  loaded for everyone: %s (asked the game %d time(s)); both games back at the state's frame %d: the window's %d, the joiner's %d;\n"
+                   "  then %d desync checks more agreeing\n", loaded ? "yes" : "NO", SDL_AtomicGet(&states_checked), saved,
+                   SDL_AtomicGet(&window_loaded_f), SDL_AtomicGet(&joiner_loaded_f), SDL_AtomicGet(&window_checks) - checks0);
+            CHECK(loaded);
+            CHECK_EQ(SDL_AtomicGet(&states_checked), 1);
+            CHECK_EQ(SDL_AtomicGet(&window_loaded_f), saved);
+            CHECK_EQ(SDL_AtomicGet(&joiner_loaded_f), saved);
+            CHECK(SDL_AtomicGet(&window_checks) >= checks0 + 2);
+            SDL_AtomicSet(&refuse_states, 1);             /* the game's check refusing: nothing sent */
+            press(SDL_SCANCODE_ESCAPE);
+            keys(SDL_SCANCODE_DOWN, 3);
+            keys(SDL_SCANCODE_RETURN, 2);
+            SDL_Delay(1500);
+            printf("  a load the game's check refuses: asked %d time(s), the joiner's loads %d\n", SDL_AtomicGet(&states_checked), SDL_AtomicGet(&joiner_loads));
+            CHECK_EQ(SDL_AtomicGet(&states_checked), 2);
+            CHECK_EQ(SDL_AtomicGet(&joiner_loads), 1);
+            SDL_AtomicSet(&refuse_states, 0);
+        }
         if (round == 2) {                                 /* the host's Reset (below Resume: no Game ROM here), chosen again: the console reset for all */
             int checks0 = SDL_AtomicGet(&window_checks), played0 = SDL_AtomicGet(&joiner_played);
             press(SDL_SCANCODE_ESCAPE);
@@ -390,6 +452,17 @@ static int player(void *user)
             CHECK(SDL_AtomicGet(&window_checks) >= checks0 + 2);
             CHECK(SDL_AtomicGet(&online) == 1);
         }
+        if (round == 2) {                                 /* the window closed in the session: the Autosave first (both played it) */
+            SDL_Event e;
+            SDL_zero(e);
+            e.type = SDL_QUIT;
+            SDL_PushEvent(&e);
+            CHECK(until(&joiner_done, 1, 5000));
+            SDL_WaitThread(j, NULL);
+            printf("  the window closed in the session: the joiner heard \"%s\"\n", joiner_why);
+            CHECK(!strcmp(joiner_why, "Tester left"));
+            return 0;
+        }
         online_page();                                    /* (on Leave session) */
         press(SDL_SCANCODE_RETURN);
         CHECK(until(&joiner_done, 1, 5000));
@@ -399,12 +472,6 @@ static int player(void *user)
         CHECK(!strcmp(joiner_why, "Tester left"));
         online_page();                                    /* (on Host game, for the next round) */
     }
-    press(SDL_SCANCODE_ESCAPE);
-    press(SDL_SCANCODE_ESCAPE);
-    SDL_Event e;
-    SDL_zero(e);
-    e.type = SDL_QUIT;
-    SDL_PushEvent(&e);
     return 0;
 }
 
@@ -428,10 +495,12 @@ int main(int argc, char **argv)
     remove("settings.ini");
     remove("sound.raw");
     remove("online-test.srm");
+    static const char *const old[] = { "states/slot1.state", "states/slot1.png", "states/autosave.state", "states/autosave.png" };
+    for (int i = 0; i < 4; i++) remove(old[i]);
     mdrt_config c = { 0 };
     c.audio_rate = 48000;
     c.sram_size = 0x2000;
-    mdrt_sdl_options o = { .title = "online test", .app = "online-test", .net_identity = IDENTITY, .net_settings = window_settings, .net_save_ram = 1, .net_reset = 1, .sram_path = "online-test.srm",
+    mdrt_sdl_options o = { .title = "online test", .app = "online-test", .net_identity = IDENTITY, .net_settings = window_settings, .net_states = 1, .state_check = state_check, .net_reset = 1, .sram_path = "online-test.srm",
                            .options_title = "Test rules", .options = &rule, .noptions = 1, .options_use = options_use,
                            .options_text = options_text, .options_session = options_session };
     SDL_Thread *h = SDL_CreateThread(host, "host", NULL), *p = SDL_CreateThread(player, "player", NULL);
@@ -440,12 +509,15 @@ int main(int argc, char **argv)
     SDL_WaitThread(h, NULL);
     const char *set = slurp("settings.ini");
     CHECK(set && strstr(set, "netplay.role = host") && strstr(set, "netplay.address = 127.0.0.1") && strstr(set, "netplay.port = 7491") &&
-          strstr(set, "netplay.name = Tester") && strstr(set, "netplay.save_ram = new") && strstr(set, "test.rule = a"));
+          strstr(set, "netplay.name = Tester") && strstr(set, "test.rule = a"));
     printf("  the settings kept: %s\n", set && strstr(set, "netplay.address = 127.0.0.1") ? "host, 127.0.0.1 kept, port 7491" : "NOT kept");
     FILE *f = fopen("online-test.srm", "rb");
     int first = f ? fgetc(f) : -1;
     if (f) fclose(f);
     printf("  the save file: %s\n", first == 0x11 ? "as the game alone left it (the session's console wrote none)" : first == 0x22 ? "OVERWRITTEN by the session's console" : "missing");
     CHECK_EQ(first, 0x11);
+    int autosaved = state_game_f("states/autosave.state");
+    printf("  the Autosave, from the session: the game's frame %d\n", autosaved);
+    CHECK(autosaved > 0);
     return check_done("online_test");
 }

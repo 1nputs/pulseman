@@ -21,7 +21,13 @@
  * session over, each told who left; a game for two that a third would join: refused. And the host
  * resetting the console mid-game (MDRT_NET_RESET_BIT in its buttons), a guest's reset bit too: every
  * frame of both as a lone console's that powers on again at the host's frame and not the guest's,
- * a rollback across the reset playing it again. */
+ * a rollback across the reset playing it again. And the host loading states for everyone
+ * (mdrt_net_load: another game's, 80-90 ms away, 5% lost): one sent in place of the one before it
+ * (not loaded yet), a third asked for soon after the first is loaded, which waits 256 frames:
+ * every frame of both as a lone console's that loads them at the frames the host's buttons said,
+ * the guest loading each as it plays the frame again (it guessed the host's buttons there); a
+ * guest's load refused; each peer's confirmed state (mdrt_net_confirmed_state) a frame it played, which a
+ * lone console loads as the same; mdrt_state_fits and mdrt_state_part. */
 #include <stdlib.h>
 #include <string.h>
 #include "check.h"
@@ -61,6 +67,7 @@ struct peer {
     int need_frame, state, ready;
     uint32_t perturb_at;                /* its game made to differ here (0: never) */
     int resets;                         /* the console powered on again (MDRT_NET_RESET) */
+    uint8_t loaded[MAXF];               /* frames a state was loaded at (MDRT_NET_RESTART without a rollback's) */
     uint64_t hash[MAXF];
     /* the game, a part of every state */
     struct game { uint32_t f, chance, hints, pads, n; uint64_t next, base; } g;
@@ -233,6 +240,7 @@ static void ref_pads(void *user, uint16_t b[MDRT_PADS])
 
 static uint64_t ref_hash[MAXF];
 static uint32_t ref_reset;              /* the frame the lone console powers on again at (0: none) */
+static struct { uint32_t at; const uint8_t *state; size_t size; } ref_load[2];   /* states it loads (at 0: none) */
 static void play_alone(void)
 {
     static peer r;
@@ -242,9 +250,31 @@ static void play_alone(void)
     while (mdrt_frame_count(r.m) < MAXF - 1) {
         game_frame(&r);
         if (ref_reset && mdrt_frame_count(r.m) == ref_reset) { mdrt_power_on(r.m); memset(&r.g, 0, sizeof r.g); }   /* (the game from its power on) */
+        for (int i = 0; i < 2; i++)
+            if (ref_load[i].at && mdrt_frame_count(r.m) == ref_load[i].at) {
+                CHECK_EQ(mdrt_set_state(r.m, ref_load[i].state, ref_load[i].size), 0);
+                mdrt_set_frame_count(r.m, ref_load[i].at);
+            }
         ref_hash[mdrt_frame_count(r.m)] = mdrt_sim_hash(r.m);
     }
     mdrt_free(r.m);
+}
+
+/* a lone console's state at frame f, its pads' scripts seeds a and b (malloc'd; its size) */
+static uint8_t *state_of(uint32_t a, uint32_t b, uint32_t f, size_t *size)
+{
+    static peer r;
+    memset(&r, 0, sizeof r);
+    console(&r);
+    ref_seed[0] = a; ref_seed[1] = b;
+    ref_used = 0x3;
+    mdrt_set_pad_source(r.m, ref_pads, r.m);
+    while (mdrt_frame_count(r.m) < f) game_frame(&r);
+    *size = mdrt_get_state(r.m, NULL, 0);
+    uint8_t *buf = malloc(*size);
+    mdrt_get_state(r.m, buf, *size);
+    mdrt_free(r.m);
+    return buf;
 }
 /* the host pad 1, the guest pad 2 */
 static void reference(uint32_t host_seed, uint32_t guest_seed)
@@ -297,8 +327,12 @@ static void turn(peer *p, uint32_t until)
             p->need_frame = 0;
         }
         uint32_t f = (uint32_t)mdrt_frame_count(p->m);
+        mdrt_net_stats was, now;
+        mdrt_net_stats_get(p->net, &was);
         int r = mdrt_net_frame(p->net, p->by_state ? state_resumable(p) : resumable(f));
         if (r == MDRT_NET_RESET) { memset(&p->g, 0, sizeof p->g); r = MDRT_NET_GO; p->resets++; }   /* (powered on again: the game from its power on) */
+        mdrt_net_stats_get(p->net, &now);
+        if (now.loads != was.loads && now.loaded_at < MAXF) p->loaded[now.loaded_at] = 1;
         if (f < MAXF) p->hash[f] = mdrt_sim_hash(p->m);
         p->state = r;
         if (r == MDRT_NET_WAIT || (idle && r == MDRT_NET_GO)) { p->next_at = clock_us + 1000; return; }
@@ -340,11 +374,31 @@ static int join_n(peer **ps, int n, uint64_t limit_us)
 }
 static int join_up(peer *a, peer *b, uint64_t limit_us) { peer *ps[2] = { a, b }; return join_n(ps, 2, limit_us); }
 
+/* the host's loads (mdrt_net_load) as it reaches frame `from` (between frames, as a client does) */
+static struct { uint32_t from; const uint8_t *state; size_t size; int sent; } host_load[3];
+/* the guest's confirmed state as it reaches frame `at` (a copy), the frame it is of, the frame the
+ * guest was at and the frames all known then */
+static struct { uint32_t at, frame, played, known; uint8_t *state; size_t size; } grab;
+
 static void play_n(peer **ps, int n, uint32_t until, uint64_t limit_us)
 {
     for (uint64_t end = clock_us + limit_us; clock_us < end; clock_us += 250) {
         for (int i = 0; i < n; i++)
             if ((ps[i]->state == MDRT_NET_GO || ps[i]->state == MDRT_NET_WAIT) && clock_us >= ps[i]->next_at) turn(ps[i], until);
+        for (int i = 0; i < 3; i++)
+            if (host_load[i].from && !host_load[i].sent && ps[0]->m && mdrt_frame_count(ps[0]->m) >= host_load[i].from &&
+                ps[0]->state == MDRT_NET_GO) {
+                CHECK_EQ(mdrt_net_load(ps[0]->net, host_load[i].state, host_load[i].size), 0);
+                host_load[i].sent = 1;
+            }
+        if (grab.at && !grab.state && n > 1 && ps[1]->m && mdrt_frame_count(ps[1]->m) >= grab.at && !mdrt_quiet(ps[1]->m)) {
+            mdrt_net_stats st;
+            mdrt_net_stats_get(ps[1]->net, &st);
+            const void *b = mdrt_net_confirmed_state(ps[1]->net, &grab.size, &grab.frame);
+            if (b && (grab.state = malloc(grab.size))) memcpy(grab.state, b, grab.size);
+            grab.played = (uint32_t)mdrt_frame_count(ps[1]->m);
+            grab.known = st.confirmed;
+        }
         int done = 1, over = 1;
         for (int i = 0; i < n; i++) {
             peer *p = ps[i];
@@ -444,6 +498,96 @@ static void resetting(void)
     CHECK(A.resets + B.resets >= 3);                      /* (one powered on again as it played the reset frame again) */
     host_reset = guest_reset = 0;
     finish(&A, &B);
+}
+
+/* the host loads another game's state (its pads' scripts others, at frame 150) as it reaches frame
+ * 300, then (before that is loaded) another's at frame 500 in its place, and at 400 (the first
+ * loaded) a third: that one waits for 256 frames after the first load. The lone console loads
+ * them at the frames they were loaded at. The host's buttons come 5 frames late or more, so the
+ * guest guesses them at each load's frame (a guess without the load) and loads it as it plays
+ * the frame again */
+static void loading(void)
+{
+    size_t na, nb, nc;
+    uint8_t *sa_ = state_of(7, 8, 150, &na), *sb_ = state_of(9, 10, 500, &nb), *sc_ = state_of(11, 12, 220, &nc);
+    static peer r;
+    memset(&r, 0, sizeof r);
+    console(&r);
+    uint8_t bad[64] = { 'M', 'D', 'R', 'S', 2 };
+    CHECK(mdrt_state_fits(r.m, sa_, na));
+    CHECK(!mdrt_state_fits(r.m, bad, sizeof bad));
+    CHECK(!mdrt_state_fits(r.m, sa_, na - 1));
+    mdrt_free(r.m);
+    size_t part = 0;                                      /* (a part by its tag, from the bytes alone) */
+    const uint8_t *game_part = mdrt_state_part(sa_, na, "GAME", &part);
+    CHECK(game_part && part == sizeof r.g && game_part + part == sa_ + na);
+    CHECK(mdrt_state_part(sa_, na, "SRAM", &part) != NULL);
+    CHECK(mdrt_state_part(sa_, na, "NONE", &part) == NULL && mdrt_state_part(bad, sizeof bad, "GAME", &part) == NULL);
+    memset(host_load, 0, sizeof host_load);
+    host_load[0].from = 300; host_load[0].state = sa_; host_load[0].size = na;
+    host_load[1].from = 300; host_load[1].state = sb_; host_load[1].size = nb;   /* (in the same turn: in its place) */
+    host_load[2].from = 400; host_load[2].state = sc_; host_load[2].size = nc;
+    cond = (net_cond){ .latency = 80000, .jitter = 10000, .loss = 50, .dup = 10 };
+    setup(&A, &B, "host", MDRT_NET_HOST, 101, 16684);
+    setup(&B, &A, "guest", MDRT_NET_JOIN, 202, 16850);
+    CHECK(join_up(&A, &B, 5000000));
+    play(&A, &B, 200, 60000000);
+    CHECK_EQ(mdrt_net_load(B.net, sa_, na), -1);          /* (a guest's: not to be had) */
+    grab.at = 700;
+    play(&A, &B, FRAMES, 120000000);
+    memset(host_load, 0, sizeof host_load);
+    mdrt_net_stats sa, sb;
+    mdrt_net_stats_get(A.net, &sa);
+    mdrt_net_stats_get(B.net, &sb);
+    /* (the lone console: the host's two loads, at the frames the session says) */
+    uint32_t first = 0;
+    for (uint32_t f = 300; f < MAXF && !first; f++) if (A.loaded[f]) first = f;
+    ref_load[0].at = first; ref_load[0].state = sb_; ref_load[0].size = nb;
+    ref_load[1].at = sa.loaded_at; ref_load[1].state = sc_; ref_load[1].size = nc;
+    reference(101, 202);
+    memset(ref_load, 0, sizeof ref_load);
+    int same[2] = { 0, 0 };
+    peer *ps[2] = { &A, &B };
+    for (int i = 0; i < 2; i++)
+        for (uint32_t f = 1; f <= FRAMES; f++) same[i] += ps[i]->hash[f] == ref_hash[f];
+    printf("  the host loading states for everyone (one sent in place of another at frame 300, a third at 400):\n");
+    show(&A); show(&B);
+    printf("    loaded at frames %u and %u: host %ld time(s), guest %ld; every frame as the lone console's that loads them there:\n"
+           "    host %d, guest %d of %d\n", (unsigned)first, (unsigned)sa.loaded_at, sa.loads, sb.loads, same[0], same[1], FRAMES);
+    CHECK_EQ(same[0], FRAMES);
+    CHECK_EQ(same[1], FRAMES);
+    CHECK(first > 300 && first < 400);
+    CHECK(sa.loaded_at >= first + 256);
+    CHECK(sa.loads >= 2 && sb.loads >= 2);
+    CHECK_EQ(sa.load_waiting, 0);
+    for (int i = 0; i < 2; i++) {                         /* (a state every machine played, as the lone console's) */
+        size_t size;
+        uint32_t frame = 0;
+        const void *st = mdrt_net_confirmed_state(ps[i]->net, &size, &frame);
+        mdrt_net_stats now;
+        mdrt_net_stats_get(ps[i]->net, &now);
+        CHECK(st != NULL && frame > 0 && frame <= now.confirmed);
+        if (!st) continue;
+        memset(&r, 0, sizeof r);
+        console(&r);
+        CHECK_EQ(mdrt_set_state(r.m, st, size), 0);
+        printf("    %s's confirmed state: frame %u (all known to %u), as the lone console's: %s\n", ps[i]->name, (unsigned)frame,
+               (unsigned)now.confirmed, mdrt_sim_hash(r.m) == ref_hash[frame] ? "yes" : "no");
+        CHECK(mdrt_sim_hash(r.m) == ref_hash[frame]);
+        mdrt_free(r.m);
+    }
+    memset(&r, 0, sizeof r);                              /* (the guest's in the game, guessing: of a frame before them) */
+    console(&r);
+    CHECK(grab.state && grab.frame <= grab.known && grab.known < grab.played + 1 + DELAY);
+    int fits = grab.state && !mdrt_set_state(r.m, grab.state, grab.size) && mdrt_sim_hash(r.m) == ref_hash[grab.frame];
+    printf("    the guest's confirmed state at frame %u (all known to %u): frame %u, as the lone console's: %s\n",
+           (unsigned)grab.played, (unsigned)grab.known, (unsigned)grab.frame, fits ? "yes" : "no");
+    CHECK(fits);
+    mdrt_free(r.m);
+    free(grab.state);
+    memset(&grab, 0, sizeof grab);
+    finish(&A, &B);
+    free(sa_); free(sb_); free(sc_);
 }
 
 /* one peer's game differs from frame 300: the session ends as a desync on both */
@@ -703,6 +847,7 @@ int main(void)
         if (!strcmp(mdrt_fm_cores(i), "ymfm")) core = "ymfm";
     session();
     resetting();
+    loading();
     desync();
     protocol();
     two_each();

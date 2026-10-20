@@ -155,11 +155,11 @@ typedef struct mdrt_sdl_options {
      * its clock, never making up the time the game spent waiting on the other (in mdrt_idle: so a
      * frame given back to keep in step is given), and
      * stretches the sound a little to keep its queue; the menu does not stop the game; pause, the
-     * frame step, slow motion, fast-forward, rewind, the save slots, the Autosave, reset (but the
-     * host's, for a game that gives net_reset), another
-     * ROM, the FM core and chip and the Players page's adaptor (the session's pads say) are not
-     * to be had; save RAM is not read from the player's file, nor ever written back to it
-     * by that console (after the session too, while it plays on alone); the title shows the round trip, the
+     * frame step, slow motion, fast-forward, rewind, reset (but the host's, for a game that gives
+     * net_reset), the save slots and the Autosave (but as net_states gives them), another ROM,
+     * the FM core and chip and the Players page's adaptor (the session's pads say) are not to be
+     * had; the console's save RAM is a new cartridge's, never read from the player's file nor
+     * written back to it (after the session too, while it plays on alone); the title shows the round trip, the
      * delay and the rollbacks. When it ends (the other left, the connection lost, a desync) the
      * window says why and the game plays on alone. */
     const char *net_identity;
@@ -171,17 +171,23 @@ typedef struct mdrt_sdl_options {
      * 4 Way Play in the ports when pads 3 or 4 are played, for a game that can play with it */
     int net_pads;
     /* the session's settings this player sends if it hosts (mdrt_net_config.settings: what the
-     * game plays by that is not compared in the identity but sent, such as its options, its data
-     * and save RAM), asked when the Online page's Start makes a session, after options_use with the
+     * game plays by that is not compared in the identity but sent, such as its options and its
+     * data), asked when the Online page's Start makes a session, after options_use with the
      * menu's values (and before sram_file is asked again): the bytes and *size, or NULL for none.
      * The session copies them. At power on the game finds the host's with mdrt_net_settings (the
-     * host's own on the host) and plays by them on both; NULL: no settings. fresh_save: the Online
-     * page's Save RAM is "a new cartridge's" (net_save_ram), so the game sends none of its own. */
-    const void *(*net_settings)(size_t *size, int fresh_save, void *user);
-    /* the game sends its save RAM in its settings: a host's Online page then has Save RAM, "yours"
-     * (the game's own, as its save file has it) or "a new cartridge's" (none: the game as new), kept
-     * in the settings file and given to net_settings */
-    int net_save_ram;
+     * host's own on the host) and plays by them on both; NULL: no settings. */
+    const void *(*net_settings)(size_t *size, void *user);
+    /* states in a session (the game's states are the console's, mdrt_get_state, as its save slots
+     * have them): any player's Save state saves one every machine played the same (the newest of
+     * the session's own of a frame whose buttons are all known: mdrt_net_confirmed_state), with
+     * the picture of the moment, and closing the window saves the Autosave so; the host's Load
+     * state loads one for everyone (mdrt_net_load: on every machine at the same frame, each
+     * game told MDRT_NET_RESTART), a guest's saying only the host can. 0: none in a session */
+    int net_states;
+    /* (net_states) whether a state may be loaded in this session, beyond its form (mdrt_state_fits):
+     * NULL when it may, else why not, for the player (a state of other data than the session's,
+     * say). Asked on the game's thread, the session's settings the game's. NULL: any that fits */
+    const char *(*state_check)(const void *state, size_t size, void *user);
     /* the game starts again from its power on when its session says MDRT_NET_RESET: the menu's
      * Reset of the host then resets the console for everyone at once (the bit with its buttons:
      * every machine powered on again at the same frame, the session going on), a guest's saying

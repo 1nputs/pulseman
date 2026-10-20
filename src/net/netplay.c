@@ -19,7 +19,10 @@
  *              receiver it thinks it is i16 (sixteenths of a frame), a desync check: frame u32 and
  *              hash u64 (frame 0: none)
  *   PING, PONG session u32, time u64 (PONG echoes PING's)
- *   BYE        session u32, why (length u8, bytes: what ended the session, for every player) */
+ *   BYE        session u32, why (length u8, bytes: what ended the session, for every player)
+ *   STATE      session u32, the state's number u32 (the host's count of them), its size u32, then
+ *              as CHUNK: index u32, length u16, bytes (a state for everyone, in the game)
+ *   STATE_ACK  session u32, the state's number u32, then as CHUNK_ACK */
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,11 +39,25 @@
 #define MS 1000u
 #define LOST_US (3000u * MS)
 #define GONE_US (10000u * MS)
+#define HOST_BITS (MDRT_NET_RESET_BIT | MDRT_NET_LOAD_BIT)   /* (the host's buttons' bits of no pad's) */
 
-enum { T_HELLO = 1, T_ACCEPT, T_REFUSE, T_CHUNK, T_CHUNK_ACK, T_READY, T_START, T_INPUT, T_PING, T_PONG, T_BYE };
+enum { T_HELLO = 1, T_ACCEPT, T_REFUSE, T_CHUNK, T_CHUNK_ACK, T_READY, T_START, T_INPUT, T_PING, T_PONG, T_BYE,
+       T_STATE, T_STATE_ACK };
 enum { P_HELLO, P_HOSTING, P_GUEST, P_RUNNING, P_DONE };
 
 typedef struct snap { uint32_t frame; int valid; size_t len, cap; uint8_t *buf; } snap;
+
+/* (a host's guest) bytes sent it in chunks, the settings before the game or a state in it: the
+ * chunks acknowledged in a row, sent up to, when each was last sent, which of the window's it said
+ * it had, when they last went */
+typedef struct sending { uint32_t have, sent; uint64_t *at, mask[SACK], last; } sending;
+
+/* bytes coming in chunks: a guest's settings or state (the host's state to send: data, size,
+ * chunks and its number alone), which chunks have come and how many in a row */
+typedef struct receiving { uint8_t *data, *got; size_t size; uint32_t chunks, have, id; } receiving;
+
+/* what goes in chunks: the settings (CHUNK) or a state (STATE, its number) */
+typedef struct blob { int type; uint32_t id; const uint8_t *data; size_t size; uint32_t chunks; } blob;
 
 /* a machine of the session: this one, the host, a guest */
 typedef struct peer {
@@ -50,10 +67,8 @@ typedef struct peer {
     char name[MDRT_NET_NAME + 1];
     int players;
     uint8_t pads;
-    /* (a host's guest) the settings sent it: acknowledged in a row, sent up to, when each was last
-     * sent, which of the window's it said it had, when they last went; it has them all and said so */
-    uint32_t chunks_have, chunks_sent;
-    uint64_t *chunk_at, chunk_mask[SACK], chunks_at;
+    /* (a host's guest) the settings and a state sent it; it has the settings and said so */
+    sending set, state;
     int ready;
     /* its buttons: known in a row up to newest, the frame each ring slot holds */
     uint32_t newest;
@@ -83,10 +98,11 @@ struct mdrt_net {
     uint64_t nonce, rng;
     uint32_t session;
     int delay, window, rollback, check_every;
-    /* the settings (a guest's: had in a row, which it has) */
-    uint8_t *settings, *got;
+    /* the settings (a guest's coming in set_in, its data these bytes), their chunks */
+    uint8_t *settings;
     size_t settings_size;
-    uint32_t chunks, have;
+    uint32_t chunks;
+    receiving set_in;
     uint64_t hello_at, ready_at;
     int started;
     uint32_t period_us;                 /* a frame */
@@ -99,6 +115,13 @@ struct mdrt_net {
     uint16_t used[RING][MDRT_PADS];     /* and what the console was given */
     uint32_t latched, wrong;
     uint32_t reset_done;                /* the frame the console last powered on again at (the host's reset) */
+    /* states loaded for everyone (mdrt_net_load): the one for the newest load frame (the host's since
+     * it gave its buttons the bit, a guest's since it heard them), and the next (the host's waiting:
+     * to be sent, then for its frame; a guest's coming); the frame a state was last loaded at */
+    struct { uint8_t *data; size_t size; uint32_t frame; } load;
+    receiving next;
+    int next_on, next_out, next_whole; /* (a host's) a state waiting; its chunks going out; every guest has it */
+    uint32_t load_done;
     snap *snaps;
     int nsnaps;
     uint64_t hold_until;
@@ -271,8 +294,11 @@ void mdrt_net_free(mdrt_net *n)
     for (int i = 0; i < n->nsnaps; i++) free(n->snaps[i].buf);
     free(n->snaps);
     free(n->settings);
-    free(n->got);
-    for (int k = 0; k < PEERS; k++) free(n->p[k].chunk_at);
+    free(n->set_in.got);
+    for (int k = 0; k < PEERS; k++) { free(n->p[k].set.at); free(n->p[k].state.at); }
+    free(n->load.data);
+    free(n->next.data);
+    free(n->next.got);
     free(n);
 }
 
@@ -371,41 +397,103 @@ static void send_start(mdrt_net *n, int k)
     to_peer(n, k, &o);
 }
 
-static void send_chunk(mdrt_net *n, int k, uint32_t i)
+static blob settings_blob(const mdrt_net *n) { blob b = { T_CHUNK, 0, n->settings, n->settings_size, n->chunks }; return b; }
+static blob state_blob(const mdrt_net *n) { blob b = { T_STATE, n->next.id, n->next.data, n->next.size, n->next.chunks }; return b; }
+static sending *progress(peer *g, const blob *b) { return b->type == T_CHUNK ? &g->set : &g->state; }
+
+static void send_chunk(mdrt_net *n, int k, const blob *b, uint32_t i)
 {
-    peer *g = &n->p[k];
-    if (g->chunk_at) g->chunk_at[i] = now(n);
+    sending *g = progress(&n->p[k], b);
+    if (g->at) g->at[i] = now(n);
     out o;
-    size_t at = (size_t)i * CHUNK, len = n->settings_size - at < CHUNK ? n->settings_size - at : CHUNK;
-    begin(&o, T_CHUNK);
-    p32(&o, n->session); p32(&o, i); p16(&o, (uint32_t)len); pbytes(&o, n->settings + at, len);
+    size_t at = (size_t)i * CHUNK, len = b->size - at < CHUNK ? b->size - at : CHUNK;
+    begin(&o, b->type);
+    p32(&o, n->session);
+    if (b->type == T_STATE) { p32(&o, b->id); p32(&o, (uint32_t)b->size); }
+    p32(&o, i); p16(&o, (uint32_t)len); pbytes(&o, b->data + at, len);
     to_peer(n, k, &o);
 }
 
-/* the settings' chunks up to CHUNKS_OUT past guest k's acknowledgement: those not sent yet, or
- * (again: nothing acknowledged for a while) every one not acknowledged. The guest acknowledges
- * every chunk it gets with the ones it has in a row and which of the window's others it has, so
- * the host sends again just those it lacks, a round trip after their last sending (sack) */
-static int guest_has(const peer *g, uint32_t i)
+/* b's chunks up to CHUNKS_OUT past guest k's acknowledgement: those not sent yet, or (again:
+ * nothing acknowledged for a while) every one not acknowledged. The guest acknowledges every chunk
+ * it gets with the ones it has in a row and which of the window's others it has, so the host sends
+ * again just those it lacks, a round trip after their last sending (sack) */
+static int guest_has(const sending *g, uint32_t i)
 {
-    uint32_t k = i - g->chunks_have - 1;                  /* (chunks_have itself: lacking) */
-    return i > g->chunks_have && k < CHUNKS_OUT && (g->chunk_mask[k / 64] >> (k % 64) & 1);
+    uint32_t k = i - g->have - 1;                         /* (have itself: lacking) */
+    return i > g->have && k < CHUNKS_OUT && (g->mask[k / 64] >> (k % 64) & 1);
 }
-static void send_chunks(mdrt_net *n, int k, int again)
+static void send_chunks(mdrt_net *n, int k, const blob *b, int again)
 {
-    peer *g = &n->p[k];
-    uint32_t end = n->chunks - g->chunks_have > CHUNKS_OUT ? g->chunks_have + CHUNKS_OUT : n->chunks;
+    sending *g = progress(&n->p[k], b);
+    uint32_t end = b->chunks - g->have > CHUNKS_OUT ? g->have + CHUNKS_OUT : b->chunks;
     if (again)                                            /* (those the guest said it lacks) */
-        for (uint32_t i = g->chunks_have; i < end && i < g->chunks_sent; i++) if (!guest_has(g, i)) send_chunk(n, k, i);
-    for (uint32_t i = g->chunks_sent > g->chunks_have ? g->chunks_sent : g->chunks_have; i < end; i++) send_chunk(n, k, i);
-    if (end > g->chunks_sent) g->chunks_sent = end;
-    g->chunks_at = now(n);
+        for (uint32_t i = g->have; i < end && i < g->sent; i++) if (!guest_has(g, i)) send_chunk(n, k, b, i);
+    for (uint32_t i = g->sent > g->have ? g->sent : g->have; i < end; i++) send_chunk(n, k, b, i);
+    if (end > g->sent) g->sent = end;
+    g->last = now(n);
+}
+
+/* b's chunks again to guest k when nothing was acknowledged in twice the round trip */
+static void send_lacking(mdrt_net *n, int k, const blob *b)
+{
+    sending *g = progress(&n->p[k], b);
+    uint64_t wait = n->p[k].rtt_us > 0 ? 2 * (uint64_t)n->p[k].rtt_us : 100 * MS;
+    if (g->have < b->chunks && now(n) - g->last >= (wait > 100 * MS ? wait : 100 * MS)) send_chunks(n, k, b, 1);
+}
+
+/* guest k's acknowledgement of b's chunks: the ones it has in a row (have) and of the window's others */
+static void take_ack(mdrt_net *n, int k, const blob *b, uint32_t have, const uint64_t mask[SACK])
+{
+    sending *g = progress(&n->p[k], b);
+    if (have > b->chunks || have < g->have) return;
+    int moved = have > g->have;
+    g->have = have;
+    memcpy(g->mask, mask, sizeof g->mask);
+    uint64_t at = now(n), rtt = n->p[k].rtt_us > 0 ? (uint64_t)n->p[k].rtt_us : 100 * MS;
+    for (uint32_t c = have; c <= have + CHUNKS_OUT && c < g->sent; c++)   /* (the guest's lacking ones, a round trip on) */
+        if (!guest_has(g, c) && g->at && at - g->at[c] > rtt + rtt / 4) send_chunk(n, k, b, c);
+    if (moved) send_chunks(n, k, b, 0);
+}
+
+/* (a guest) a chunk come: kept, and acknowledged (ack: CHUNK_ACK or STATE_ACK) with the chunks
+ * had in a row and which of the CHUNKS_OUT after the first missing have come */
+static void take_chunk(mdrt_net *n, receiving *r, int ack, uint32_t idx, const uint8_t *d, uint32_t k)
+{
+    size_t at = (size_t)idx * CHUNK;
+    if (idx >= r->chunks || k != (r->size - at < CHUNK ? r->size - at : CHUNK)) return;
+    if (!r->got[idx]) { memcpy(r->data + at, d, k); r->got[idx] = 1; }
+    while (r->have < r->chunks && r->got[r->have]) r->have++;
+    uint64_t mask[SACK] = { 0 };
+    for (uint32_t j = 0; j < CHUNKS_OUT && r->have + 1 + j < r->chunks; j++)
+        if (r->got[r->have + 1 + j]) mask[j / 64] |= 1ull << (j % 64);
+    out o;
+    begin(&o, ack); p32(&o, n->session);
+    if (ack == T_STATE_ACK) p32(&o, r->id);
+    p32(&o, r->have);
+    for (int w = 0; w < SACK; w++) p64(&o, mask[w]);
+    to_peer(n, 0, &o);
+}
+
+/* r made ready for size bytes in chunks (0: none), its old ones gone; 0 when out of memory */
+static int make_room(receiving *r, size_t size)
+{
+    free(r->data);
+    free(r->got);
+    r->chunks = (uint32_t)((size + CHUNK - 1) / CHUNK);
+    r->data = size ? malloc(size) : NULL;
+    r->got = r->chunks ? calloc(r->chunks, 1) : NULL;
+    r->size = size;
+    r->have = 0;
+    if ((size && !r->data) || (r->chunks && !r->got)) { free(r->data); free(r->got); memset(r, 0, sizeof *r); return 0; }
+    return 1;
 }
 
 /* a guest's place in the waiting room given up (it left, or went quiet) */
 static void drop_guest(mdrt_net *n, int k)
 {
-    free(n->p[k].chunk_at);
+    free(n->p[k].set.at);
+    free(n->p[k].state.at);
     memset(&n->p[k], 0, sizeof n->p[k]);
     n->p[k].link = -1;
     n->p[k].rtt_us = -1;
@@ -453,10 +541,11 @@ static void host_guest(mdrt_net *n, int from, uint64_t nonce, uint32_t protocol,
     g->players = players;
     take_name(g->name, name, namen);
     n->chunks = (uint32_t)((n->settings_size + CHUNK - 1) / CHUNK);
-    g->chunk_at = n->chunks ? calloc(n->chunks, sizeof *g->chunk_at) : NULL;
+    g->set.at = n->chunks ? calloc(n->chunks, sizeof *g->set.at) : NULL;
     g->heard_at = now(n);
     send_accept(n, free_k);
-    send_chunks(n, free_k, 0);
+    blob b = settings_blob(n);
+    send_chunks(n, free_k, &b, 0);
 }
 
 /* every place taken and every guest with the settings: the guests in the order they came (their
@@ -527,15 +616,15 @@ int mdrt_net_connect(mdrt_net *n)
                 all_ready = 0;
                 continue;
             }
-            uint64_t wait = g->rtt_us > 0 ? 2 * (uint64_t)g->rtt_us : 100 * MS;   /* (nothing acknowledged in twice the round trip) */
-            if (g->chunks_have < n->chunks && t - g->chunks_at >= (wait > 100 * MS ? wait : 100 * MS)) send_chunks(n, k, 1);
+            blob b = settings_blob(n);
+            send_lacking(n, k, &b);
             if (!g->ready) all_ready = 0;
         }
         if (guests && all_ready && seats == 0) begin_session(n);
     }
     if (n->phase == P_GUEST) {
-        if (n->have == n->chunks && t - n->ready_at >= 100 * MS) { send_session(n, 0, T_READY); n->ready_at = t; }
-        if (n->started && n->have == n->chunks) n->phase = P_RUNNING;
+        if (n->set_in.have == n->chunks && t - n->ready_at >= 100 * MS) { send_session(n, 0, T_READY); n->ready_at = t; }
+        if (n->started && n->set_in.have == n->chunks) n->phase = P_RUNNING;
     }
     ping(n);
     return n->phase == P_RUNNING ? MDRT_NET_READY : MDRT_NET_CONNECTING;
@@ -573,26 +662,43 @@ static void pad_source(void *user, uint16_t b[MDRT_PADS])
         if (q == n->me) { if (f <= n->p[q].newest) b[p] = n->btn[slot(f)][p]; continue; }
         uint32_t known = f <= n->p[q].newest ? f : n->p[q].newest;
         if (n->p[q].frame_of[slot(known)] == known) b[p] = n->btn[slot(known)][p];
-        if (known < f) b[p] &= (uint16_t)~MDRT_NET_RESET_BIT;   /* (a guess holds the buttons, never a reset) */
+        if (known < f) b[p] &= (uint16_t)~HOST_BITS;     /* (a guess holds the buttons, never a reset or a load) */
     }
     memcpy(n->used[slot(f)], b, sizeof n->used[0]);
-    for (int p = 0; p < MDRT_PADS; p++) b[p] &= (uint16_t)~MDRT_NET_RESET_BIT;   /* (no pad's button) */
+    for (int p = 0; p < MDRT_PADS; p++) b[p] &= (uint16_t)~HOST_BITS;   /* (no pad's buttons) */
     n->latched = f;
 }
 
-/* frame f's buttons, as the console was given them, hold the host's reset */
-static int reset_at(const mdrt_net *n, uint32_t f)
+/* frame f's buttons, as the console was given them, hold the host's bit (a reset, a load) */
+static int host_bit(const mdrt_net *n, uint32_t f, uint16_t bit)
 {
     if (n->latched != f) return 0;
     for (int p = 0; p < MDRT_PADS; p++)
-        if (n->owner[p] == 0 && (n->used[slot(f)][p] & MDRT_NET_RESET_BIT)) return 1;
+        if (n->owner[p] == 0 && (n->used[slot(f)][p] & bit)) return 1;
     return 0;
 }
 
-/* frame f goes on: powered on again first if the host reset the console there (once a pass) */
+static void take_snapshot(mdrt_net *n, uint32_t f);
+
+/* frame f goes on: the host's state loaded first if its buttons there say so, else powered on
+ * again if the host reset the console there (each once a pass) */
 static int go(mdrt_net *n, uint32_t f)
 {
-    if (n->reset_done == f || !reset_at(n, f)) return MDRT_NET_GO;
+    if (n->load_done != f && host_bit(n, f, MDRT_NET_LOAD_BIT)) {
+        n->load_done = f;
+        if (f != n->load.frame || !n->load.data || mdrt_set_state(n->m, n->load.data, n->load.size)) {
+            char why[96];
+            snprintf(why, sizeof why, "could not load the host's state at frame %u", (unsigned)f);
+            end_all(n, MDRT_NET_ENDED, why, 1);
+            return n->result;
+        }
+        mdrt_set_frame_count(n->m, f);                    /* (the session's frames go on) */
+        take_snapshot(n, f);
+        n->st.loads++;
+        n->st.loaded_at = f;
+        return MDRT_NET_RESTART;
+    }
+    if (n->reset_done == f || !host_bit(n, f, MDRT_NET_RESET_BIT)) return MDRT_NET_GO;
     n->reset_done = f;
     mdrt_power_on(n->m);
     n->st.resets++;
@@ -654,6 +760,77 @@ static snap *snapshot_before(mdrt_net *n, uint32_t f)
     return best;
 }
 
+/* the next state bound to frame g, where every machine loads it (the one before given up: the
+ * host gives a load RING frames after the last, so no frame played again reaches back to it) */
+static void bind_load(mdrt_net *n, uint32_t g)
+{
+    free(n->load.data);
+    n->load.data = n->next.data;
+    n->load.size = n->next.size;
+    n->load.frame = g;
+    free(n->next.got);
+    n->next.data = n->next.got = NULL;
+    n->next.size = 0;
+    n->next.chunks = n->next.have = 0;
+    n->next_on = n->next_out = n->next_whole = 0;
+}
+
+/* (a host) its next state to every guest once each has the buttons of the last one's frame (it
+ * has bound that one), then again where lacking; whole at every guest, its frame may come */
+static void send_state(mdrt_net *n)
+{
+    if (!n->host || !n->next_on || n->phase != P_RUNNING) return;
+    blob b = state_blob(n);
+    if (!n->next_out) {
+        for (int k = 1; k < n->npeers; k++) if (n->p[k].has[0] < n->load.frame) return;
+        for (int k = 1; k < n->npeers; k++) {
+            sending *g = &n->p[k].state;
+            free(g->at);
+            memset(g, 0, sizeof *g);
+            g->at = calloc(b.chunks, sizeof *g->at);
+            send_chunks(n, k, &b, 0);
+        }
+        n->next_out = 1;
+        return;
+    }
+    int whole = 1;
+    for (int k = 1; k < n->npeers; k++) {
+        send_lacking(n, k, &b);
+        if (n->p[k].state.have < b.chunks) whole = 0;
+    }
+    n->next_whole = whole;
+}
+
+int mdrt_net_load(mdrt_net *n, const void *state, size_t size)
+{
+    if (!n->host || n->phase != P_RUNNING || !n->m || !state || !size || size > MDRT_NET_MAX_STATE) return -1;
+    uint8_t *b = malloc(size);
+    if (!b) return -1;
+    memcpy(b, state, size);
+    free(n->next.data);
+    n->next.data = b;
+    n->next.size = size;
+    n->next.chunks = (uint32_t)((size + CHUNK - 1) / CHUNK);
+    n->next.id++;
+    n->next_on = 1;
+    n->next_out = n->next_whole = 0;
+    send_state(n);
+    return 0;
+}
+
+const void *mdrt_net_confirmed_state(const mdrt_net *n, size_t *size, uint32_t *frame)
+{
+    uint32_t upto = n->m && n->npeers ? known_all(n) : 0;
+    if (n->wrong && n->wrong <= upto) upto = n->wrong - 1;
+    const snap *best = NULL;
+    for (int i = 0; i < n->nsnaps; i++)
+        if (n->snaps[i].valid && n->snaps[i].frame <= upto && (!best || n->snaps[i].frame > best->frame)) best = &n->snaps[i];
+    if (!best) return NULL;
+    *size = best->len;
+    if (frame) *frame = best->frame;
+    return best->buf;
+}
+
 /* peer whose's buttons to peer `to`, from the first it lacks; then what this peer has of each,
  * its frame, its advantage over `to` and its newest final check */
 static void send_buttons(mdrt_net *n, int to, int whose)
@@ -707,6 +884,12 @@ static void take_inputs(mdrt_net *n, in *i, int whose, uint32_t first, uint32_t 
     }
     while (w->frame_of[slot(w->newest + 1)] == w->newest + 1) {
         uint32_t f = ++w->newest;
+        for (int p = 0; whose == 0 && !n->host && p < MDRT_PADS; p++) {   /* (the host's state, loaded at frame f) */
+            if (n->owner[p] != 0 || !(n->btn[slot(f)][p] & MDRT_NET_LOAD_BIT)) continue;
+            if (!n->next.got || n->next.have != n->next.chunks) { end_all(n, MDRT_NET_ENDED, "the host's state did not come whole", 1); return; }
+            bind_load(n, f);
+            break;
+        }
         if (f > n->latched) continue;
         for (int p = 0; p < MDRT_PADS; p++)               /* (a frame the console was given a guess for) */
             if ((w->pads >> p & 1) && n->used[slot(f)][p] != n->btn[slot(f)][p]) {
@@ -776,12 +959,12 @@ static void handle(mdrt_net *n, const uint8_t *b, size_t size, int from)
         take_name(n->p[0].name, name, namen);
         n->delay = (int)delay; n->window = (int)window; n->rollback = (int)rollback; n->check_every = (int)every;
         free(n->settings);
-        n->settings = ssize ? malloc(ssize) : NULL;
-        n->chunks = (ssize + CHUNK - 1) / CHUNK;
-        n->got = n->chunks ? calloc(n->chunks, 1) : NULL;
-        if ((ssize && !n->settings) || (n->chunks && !n->got)) { end(n, MDRT_NET_ENDED, "out of memory"); return; }
+        n->settings = NULL;
+        n->settings_size = 0;
+        if (!make_room(&n->set_in, ssize)) { end(n, MDRT_NET_ENDED, "out of memory"); return; }
+        n->settings = n->set_in.data;                     /* (set_in's bytes are the settings': freed as them) */
         n->settings_size = ssize;
-        n->have = 0;
+        n->chunks = n->set_in.chunks;
         n->phase = P_GUEST;
         return;
     }
@@ -796,34 +979,34 @@ static void handle(mdrt_net *n, const uint8_t *b, size_t size, int from)
     case T_CHUNK: {
         uint32_t idx = g32(&i), k = g16(&i);
         const uint8_t *d = gbytes(&i, k);
-        if (!d || n->host || idx >= n->chunks || (size_t)idx * CHUNK + k > n->settings_size) return;
-        if (!n->got[idx]) { memcpy(n->settings + (size_t)idx * CHUNK, d, k); n->got[idx] = 1; }
-        while (n->have < n->chunks && n->got[n->have]) n->have++;
-        uint64_t mask[SACK] = { 0 };
-        for (uint32_t j = 0; j < CHUNKS_OUT && n->have + 1 + j < n->chunks; j++)
-            if (n->got[n->have + 1 + j]) mask[j / 64] |= 1ull << (j % 64);
-        out o;
-        begin(&o, T_CHUNK_ACK); p32(&o, n->session); p32(&o, n->have);
-        for (int w = 0; w < SACK; w++) p64(&o, mask[w]);
-        to_peer(n, 0, &o);
+        if (!d || n->host || !n->set_in.got) return;
+        take_chunk(n, &n->set_in, T_CHUNK_ACK, idx, d, k);
         break;
     }
-    case T_CHUNK_ACK: {
-        uint32_t have = g32(&i);
+    case T_STATE: {                                       /* (a guest: the host's next state, the one before it given up) */
+        uint32_t id = g32(&i), bytes = g32(&i), idx = g32(&i), k = g16(&i);
+        const uint8_t *d = gbytes(&i, k);
+        if (!d || n->host || n->phase != P_RUNNING || !bytes || bytes > MDRT_NET_MAX_STATE || (int32_t)(id - n->next.id) < 0) return;
+        if (id != n->next.id) {
+            if (!make_room(&n->next, bytes)) { end_all(n, MDRT_NET_ENDED, "out of memory for the host's state", 1); return; }
+            n->next.id = id;
+        }
+        if (n->next.got && bytes == n->next.size) take_chunk(n, &n->next, T_STATE_ACK, idx, d, k);   /* (none: loaded already) */
+        break;
+    }
+    case T_CHUNK_ACK:
+    case T_STATE_ACK: {
+        uint32_t id = type == T_STATE_ACK ? g32(&i) : 0, have = g32(&i);
         uint64_t mask[SACK];
         for (int w = 0; w < SACK; w++) mask[w] = g64(&i);
-        if (i.bad || !n->host || have > n->chunks || have < sp->chunks_have) break;
-        int moved = have > sp->chunks_have;
-        sp->chunks_have = have;
-        memcpy(sp->chunk_mask, mask, sizeof mask);
-        uint64_t at = now(n), rtt = sp->rtt_us > 0 ? (uint64_t)sp->rtt_us : 100 * MS;
-        for (uint32_t c = have; c <= have + CHUNKS_OUT && c < sp->chunks_sent; c++)   /* (the guest's lacking ones, a round trip on) */
-            if (!guest_has(sp, c) && sp->chunk_at && at - sp->chunk_at[c] > rtt + rtt / 4) send_chunk(n, s, c);
-        if (moved) send_chunks(n, s, 0);
+        if (i.bad || !n->host) break;
+        blob what = type == T_CHUNK_ACK ? settings_blob(n) : state_blob(n);
+        if (type == T_STATE_ACK && (!n->next_out || id != n->next.id)) break;
+        take_ack(n, s, &what, have, mask);
         break;
     }
     case T_READY:
-        if (n->host && sp->chunks_have == n->chunks) { sp->ready = 1; if (n->phase == P_RUNNING) send_start(n, s); }
+        if (n->host && sp->set.have == n->chunks) { sp->ready = 1; if (n->phase == P_RUNNING) send_start(n, s); }
         break;
     case T_START: {
         uint32_t me = g8(&i), np = g8(&i);
@@ -963,13 +1146,18 @@ int mdrt_net_frame(mdrt_net *n, int resumable)
         n->arrived = 1;
         n->frame = f;
         if (n->replay_to && f >= n->replay_to) n->replay_to = 0;
-        if (resumable && !reset_at(n, f)) take_snapshot(n, f);   /* (a state about to be powered off: none) */
+        if (resumable && !host_bit(n, f, HOST_BITS)) take_snapshot(n, f);   /* (a state about to be powered off or replaced: none) */
         while (me->newest < f + 1 + (uint32_t)n->delay) { /* this peer's buttons, for frame f + 1 + delay */
             uint32_t g = ++me->newest;
             uint16_t held[MDRT_PADS] = { 0 };
             if (n->c.local_input && g == f + 1 + (uint32_t)n->delay) n->c.local_input(n->c.input_user, held);
             for (int p = 0, k = 0; p < MDRT_PADS; p++)
-                if (me->pads >> p & 1) n->btn[slot(g)][p] = held[k++];
+                if (me->pads >> p & 1) n->btn[slot(g)][p] = held[k++] & (uint16_t)~MDRT_NET_LOAD_BIT;   /* (netplay's own) */
+            if (n->host && n->next_whole && g == f + 1 + (uint32_t)n->delay && (!n->load.frame || g >= n->load.frame + RING)) {
+                for (int p = 0; p < MDRT_PADS; p++)       /* (the host's state for everyone, loaded at frame g) */
+                    if (me->pads >> p & 1) { n->btn[slot(g)][p] |= MDRT_NET_LOAD_BIT; break; }
+                bind_load(n, g);
+            }
             me->frame_of[slot(g)] = g;
         }
         int c = (int)((f / (uint32_t)n->check_every) % CHECKS);
@@ -986,6 +1174,7 @@ int mdrt_net_frame(mdrt_net *n, int resumable)
     }
     receive(n);
     if (n->phase == P_DONE) return n->result;
+    send_state(n);
     uint64_t t = now(n);
     uint64_t oldest = t;
     for (int k = 0; k < n->npeers; k++) if (talks(n, k) && n->p[k].input_at < oldest) oldest = n->p[k].input_at;
@@ -1012,7 +1201,8 @@ int mdrt_net_frame(mdrt_net *n, int resumable)
         n->latched = s->frame;
         n->frame = s->frame;
         n->wrong = 0;
-        n->reset_done = 0;                                /* (a reset after it: played again too) */
+        n->reset_done = 0;                                /* (a reset or load after it: played again too; a state of a */
+        n->load_done = s->frame == n->load.frame ? s->frame : 0;   /* load's frame is the loaded one's, taken after it) */
         for (int i = 0; i < n->nsnaps; i++)               /* (the states after it were the guesses': gone, even where the */
             if (n->snaps[i].valid && n->snaps[i].frame > s->frame) n->snaps[i].valid = 0;   /* frames played again have no resumable point) */
         for (int c = 0; c < CHECKS; c++)
@@ -1099,4 +1289,5 @@ void mdrt_net_stats_get(const mdrt_net *n, mdrt_net_stats *s)
     if (s->remote_frame == UINT32_MAX) s->remote_frame = 0;
     if (s->remote_has == UINT32_MAX) s->remote_has = 0;
     s->delay = n->delay;
+    s->load_waiting = n->next_on;
 }
