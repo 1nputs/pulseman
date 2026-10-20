@@ -8,7 +8,7 @@
  * and the session must have rolled back, checked for desyncs, and given frames back. Then: a game
  * made to differ on one peer ends the session as a desync; a guest of another game is refused,
  * two joiners refuse each other, two "either"s settle who hosts and the host's settings (15,000 or
- * 20,000 bytes, in chunks) reach the guest through loss, and so do 4 MB of them (a league with its
+ * 20,000 bytes, in chunks) reach the guest through loss, and so do 4 MB of them (rosters with their
  * art), each chunk sent about once (a lost one again at once, on three acknowledgements alike);
  * goodbye ends the other's session, and silence ends it as lost after 10 seconds (lost from 3).
  * Then two pads each (two players at each machine: the host pads 1 and 2, the guest 3 and 4):
@@ -499,7 +499,7 @@ static void protocol(void)
            n == wn && got && !memcmp(got, want, n) ? "whole" : "NOT whole");
     CHECK(n == wn && got && !memcmp(got, want, n));
     finish(&A, &B);
-    /* a league's worth of settings, 4 MB, through the same loss */
+    /* rosters' worth of settings, 4 MB, through the same loss */
     enum { BIG = 4u << 20 };
     uint8_t *big = malloc(BIG);
     for (size_t i = 0; big && i < BIG; i++) big[i] = (uint8_t)(i * 2654435761u >> 13);

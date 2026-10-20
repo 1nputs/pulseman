@@ -82,7 +82,7 @@ typedef struct mdrt_net_config {
     uint64_t seed;              /* for the session's numbers (0: from the clock) */
 } mdrt_net_config;
 #define MDRT_NET_MAX_DELAY 10
-#define MDRT_NET_MAX_SETTINGS (16u << 20)    /* (a guest takes no more: 16 MB, a game's league with its art) */
+#define MDRT_NET_MAX_SETTINGS (16u << 20)    /* (a guest takes no more: 16 MB, a game's rosters with their art) */
 
 typedef struct mdrt_net mdrt_net;
 mdrt_net *mdrt_net_new(const mdrt_net_config *c);        /* NULL: out of memory, or a bad configuration */

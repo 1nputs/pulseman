@@ -72,14 +72,14 @@ static const uint16_t cbutton_bit[CBUTTONS] = { MDRT_PAD_A, MDRT_PAD_B, MDRT_PAD
 static const char *const adaptor_label[2] = { "two pads", "EA 4 Way Play" };
 static const char *const adaptor_name[2] = { "none", "ea4way" };
 static const int turbo_rates[6] = { 5, 8, 10, 12, 15, 20 };
-static const char *const turbo_rate_label[6] = { "5 a second", "8 a second", "10 a second", "12 a second", "15 a second", "20 a second" };
+static const char *const turbo_rate_label[6] = { "5/s", "8/s", "10/s", "12/s", "15/s", "20/s" };
 static const char *const scale_name[3] = { "sharp", "integer", "fit" };
 static const char *const aspect_name[2] = { "square", "4:3" };
-static const char *const aspect_label[2] = { "square pixels", "4:3" };
+static const char *const aspect_label[2] = { "square", "4:3" };
 static const char *const off_on[2] = { "off", "on" };
 /* the colours' levels (mdrt_vdp_rgb's curves), and the looks (mdrt/look.h) */
 static const char *const colours_name[3] = { "standard", "full", "console" };
-static const char *const colours_label[3] = { "standard", "full range", "the console's" };
+static const char *const colours_label[3] = { "standard", "full range", "console" };
 static const int colours_curve[3] = { MDRT_RGB_GPGX, MDRT_RGB_LINEAR, MDRT_RGB_CONSOLE };
 static const char *const blend_name[MDRT_BLEND_COUNT] = { "off", "dither", "soft" };
 static const char *const blend_label[MDRT_BLEND_COUNT] = { "off", "dithering", "everything" };
@@ -90,16 +90,16 @@ static const char *const chip_name[2] = { "YM2612", "YM3438" };
 static const struct { const char *name; Uint16 mod; } key_mods[3] = { { "Shift+", KMOD_SHIFT }, { "Ctrl+", KMOD_CTRL }, { "Alt+", KMOD_ALT } };
 /* captures: the replay's seconds, a GIF's size */
 static const int replay_secs[5] = { 0, 10, 20, 30, 60 };
-static const char *const replay_label[5] = { "off", "10 seconds", "20 seconds", "30 seconds", "60 seconds" };
+static const char *const replay_label[5] = { "off", "10 s", "20 s", "30 s", "60 s" };
 static const char *const gif_scale_label[3] = { "1x", "2x", "3x" };
 static const int fast_speeds[6] = { 2, 3, 4, 6, 8, 0 };
-static const char *const fast_label[6] = { "2x", "3x", "4x", "6x", "8x", "as fast as it goes" };
+static const char *const fast_label[6] = { "2x", "3x", "4x", "6x", "8x", "max" };
 enum { NET_HOST, NET_JOIN, NET_BOTH };
 static const char *const net_role_name[3] = { "host", "join", "both" };
-static const char *const net_role_label[3] = { "host", "join a host", "both connect" };
+static const char *const net_role_label[3] = { "host", "join", "both connect" };
 /* the Online page's Save RAM (a host's, for a game that sends its own: net_save_ram) */
 static const char *const net_save_name[2] = { "yours", "new" };
-static const char *const net_save_label[2] = { "yours", "a new cartridge's" };
+static const char *const net_save_label[2] = { "yours", "new cartridge" };
 
 #define VOLUME_STEP 10
 #define ROM_MAX (16u << 20)                               /* (no cartridge is larger) */
@@ -1536,8 +1536,8 @@ static void build_page(sdl *s, int page, int select)
             put_text(it->detail, sizeof it->detail, s->rom ? base_name(s->rom_name) : "none", 1);
         if (running) {
             mdrt_menu_add(m, I_RESET, MDRT_ITEM_ACTION, "Reset");
-            mdrt_menu_add(m, I_SAVE, MDRT_ITEM_ACTION, "Save a state");
-            mdrt_menu_add(m, I_LOAD, MDRT_ITEM_ACTION, "Load a state");
+            mdrt_menu_add(m, I_SAVE, MDRT_ITEM_ACTION, "Save state");
+            mdrt_menu_add(m, I_LOAD, MDRT_ITEM_ACTION, "Load state");
         }
         mdrt_menu_add(m, I_VIDEO, MDRT_ITEM_ACTION, "Video");
         mdrt_menu_add(m, I_CAPTURE, MDRT_ITEM_ACTION, "Capture");
@@ -1585,7 +1585,7 @@ static void build_page(sdl *s, int page, int select)
     case PAGE_CAPTURE: {
         char a[64], b[64];
         mdrt_menu_page(m, "Capture");
-        it = mdrt_menu_add(m, I_CAP_REPLAY, s->replay ? MDRT_ITEM_ACTION : MDRT_ITEM_TEXT, "Save the replay");
+        it = mdrt_menu_add(m, I_CAP_REPLAY, s->replay ? MDRT_ITEM_ACTION : MDRT_ITEM_TEXT, "Save replay");
         if (it) {
             if (s->replay) snprintf(it->detail, sizeof it->detail, "the last %d s", replay_secs[s->replay]);
             else snprintf(it->detail, sizeof it->detail, "(off)");
@@ -1594,7 +1594,7 @@ static void build_page(sdl *s, int page, int select)
             uint32_t t = (SDL_GetTicks() - s->rec_since) / 1000;
             snprintf(it->detail, sizeof it->detail, "%u:%02u", t / 60, t % 60);
         }
-        mdrt_menu_add_choice(m, I_CAP_SECONDS, "Replay kept", replay_label, 5, s->replay);
+        mdrt_menu_add_choice(m, I_CAP_SECONDS, "Replay length", replay_label, 5, s->replay);
         mdrt_menu_add_choice(m, I_CAP_GIFSCALE, "GIF size", gif_scale_label, 3, s->gif_scale);
         mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
         control_detail(s, K_REPLAY, a, sizeof a);
@@ -1608,20 +1608,20 @@ static void build_page(sdl *s, int page, int select)
         mdrt_menu_add_choice(m, I_MUTE, "Mute", off_on, 2, SDL_AtomicGet(&s->mute));
         int core = 0;
         for (int i = 0; i < s->ncores; i++) if (s->cfg->fm_core && !strcmp(s->cfg->fm_core, mdrt_fm_cores(i))) core = i;
-        mdrt_menu_add_choice(m, I_FM_CORE, "FM sound core", s->core_label, s->ncores, core);
+        mdrt_menu_add_choice(m, I_FM_CORE, "FM core", s->core_label, s->ncores, core);
         mdrt_menu_add_choice(m, I_FM_CHIP, "FM chip", chip_name, 2, s->cfg->fm_model);
         mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
-        snprintf(m->subtitle, sizeof m->subtitle, "YM2612: the first consoles. YM3438: later ones.");
+        snprintf(m->subtitle, sizeof m->subtitle, "YM2612: early consoles. YM3438: later ones.");
         break;
     }
     case PAGE_OPTIONS: {
         mdrt_menu_page(m, "Options");
-        mdrt_menu_add_choice(m, I_FOCUS, "Pause when the window loses focus", off_on, 2, s->focus_pause);
+        mdrt_menu_add_choice(m, I_FOCUS, "Pause in background", off_on, 2, s->focus_pause);
         int speed = 2, want = SDL_AtomicGet(&s->fast_speed);
         for (int i = 0; i < 6; i++) if (fast_speeds[i] == want) speed = i;
         mdrt_menu_add_choice(m, I_FAST, "Fast-forward speed", fast_label, 6, speed);
-        mdrt_menu_add_choice(m, I_RESUME_OPT, "Resume where you left off", off_on, 2, s->resume);
-        mdrt_menu_add_choice(m, I_FPS, "Frames a second, at the top right", off_on, 2, s->show_fps);
+        mdrt_menu_add_choice(m, I_RESUME_OPT, "Quick resume", off_on, 2, s->resume);
+        mdrt_menu_add_choice(m, I_FPS, "FPS counter", off_on, 2, s->show_fps);
         mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
         break;
     }
@@ -1647,8 +1647,8 @@ static void build_page(sdl *s, int page, int select)
         break;
     case PAGE_PLAYERS: {
         mdrt_menu_page(m, "Players");
-        snprintf(m->subtitle, sizeof m->subtitle, "%s", s->adaptor ? "EA 4 Way Play: four players (from power on)"
-                                                                   : "Players 3 and 4 need EA's 4 Way Play");
+        snprintf(m->subtitle, sizeof m->subtitle, "%s", s->adaptor ? "EA 4 Way Play: four players"
+                                                                   : "Players 3 and 4: EA 4 Way Play");
         mdrt_menu_add_choice(m, I_ADAPTOR, "Controllers", adaptor_label, 2, s->adaptor);
         ctrl_choices(s);
         for (int p = 0; p < MDRT_PADS; p++) {
@@ -1660,7 +1660,7 @@ static void build_page(sdl *s, int page, int select)
         int rate = 2;
         for (int i = 0; i < 6; i++) if (turbo_rates[i] == s->turbo_rate) rate = i;
         mdrt_menu_add_choice(m, I_TURBO, "Turbo", turbo_rate_label, 6, rate);
-        mdrt_menu_add_number(m, I_DEADZONE, "Stick dead zone", s->dead_zone, 10, 90, 10, "%");
+        mdrt_menu_add_number(m, I_DEADZONE, "Dead zone", s->dead_zone, 10, 90, 10, "%");
         mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
         break;
     }
@@ -1674,8 +1674,8 @@ static void build_page(sdl *s, int page, int select)
         mdrt_menu_add(m, I_BACK, MDRT_ITEM_ACTION, "Back");
         break;
     case PAGE_SAVE: case PAGE_LOAD:
-        mdrt_menu_page(m, page == PAGE_SAVE ? "Save a state" : "Load a state");
-        snprintf(m->subtitle, sizeof m->subtitle, "%s", page == PAGE_SAVE ? "States are taken during play" : "Then the game goes on from there");
+        mdrt_menu_page(m, page == PAGE_SAVE ? "Save state" : "Load state");
+        snprintf(m->subtitle, sizeof m->subtitle, "%s", page == PAGE_SAVE ? "Only during play" : "The game goes on from it");
         for (int i = 1; i <= SLOT_COUNT; i++) {
             char label[64];
             int full = slot_label(s, i, label, sizeof label);
@@ -1686,13 +1686,13 @@ static void build_page(sdl *s, int page, int select)
         slot_picture(s);
         break;
     case PAGE_ROM:
-        mdrt_menu_page(m, "Choose the game's ROM");
+        mdrt_menu_page(m, "Choose ROM");
         list_dir(s, s->dir, NULL);
         put_text(m->subtitle, sizeof m->subtitle, s->dir, 1);
         {
             char up[1024];
             snprintf(up, sizeof up, "%s", s->dir);
-            if (dir_up(up)) mdrt_menu_add(m, I_UP, MDRT_ITEM_ACTION, "..  (the folder above)");
+            if (dir_up(up)) mdrt_menu_add(m, I_UP, MDRT_ITEM_ACTION, ".. (up)");
         }
         for (int i = 0; i < s->nentries; i++) {
             mdrt_menu_add(m, I_ENTRY + i, MDRT_ITEM_ACTION, s->entries[i]);
@@ -1700,7 +1700,7 @@ static void build_page(sdl *s, int page, int select)
         }
         for (int i = 0; i < s->nentries && select == I_ENTRY; i++)     /* (else the first ROM here) */
             if (!sep(s->entries[i][strlen(s->entries[i]) - 1])) select = I_ENTRY + i;
-        if (!s->nentries) mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "(no folders or ROMs here)");
+        if (!s->nentries) mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "(no ROMs here)");
         break;
     case PAGE_PICK: {                                     /* the browser for a client's option */
         const mdrt_sdl_option *op = &s->o->options[s->pick];
@@ -1710,9 +1710,9 @@ static void build_page(sdl *s, int page, int select)
         put_text(m->subtitle, sizeof m->subtitle, s->pick_dir, 1);
         if (op->browse->folders) mdrt_menu_add(m, I_USE, MDRT_ITEM_ACTION, "Use this folder");
         snprintf(up, sizeof up, "%s", s->pick_dir);
-        if (dir_up(up)) mdrt_menu_add(m, I_UP, MDRT_ITEM_ACTION, "..  (the folder above)");
+        if (dir_up(up)) mdrt_menu_add(m, I_UP, MDRT_ITEM_ACTION, ".. (up)");
         for (int i = 0; i < s->nentries; i++) mdrt_menu_add(m, I_ENTRY + i, MDRT_ITEM_ACTION, s->entries[i]);
-        if (!s->nentries) mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "(nothing here)");
+        if (!s->nentries) mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "(empty)");
         break;
     }
     case PAGE_NET: {                                      /* two players, each at their own machine */
@@ -1721,42 +1721,42 @@ static void build_page(sdl *s, int page, int select)
         SDL_LockMutex(s->lock);
         if (on) snprintf(m->subtitle, sizeof m->subtitle, "Playing online: %.120s", s->net_line[0] ? s->net_line + 9 : "connected");
         else if (s->net_line[0]) snprintf(m->subtitle, sizeof m->subtitle, "Last time: %.120s", s->net_line + 9);
-        else snprintf(m->subtitle, sizeof m->subtitle, "%s", game_pads(s) > 2 ? "Two to four machines, players at each" : "Two players, each at their own machine");
+        else snprintf(m->subtitle, sizeof m->subtitle, "%s", game_pads(s) > 2 ? "2 to 4 machines" : "2 machines");
         SDL_UnlockMutex(s->lock);
         char port[8];
         snprintf(port, sizeof port, "%d", s->net_port);
-        if (on) mdrt_menu_add(m, I_NET_LEAVE, MDRT_ITEM_ACTION, "Leave the session");
+        if (on) mdrt_menu_add(m, I_NET_LEAVE, MDRT_ITEM_ACTION, "Leave session");
         else {
-            mdrt_menu_add_field(m, I_NET_NAME, "Your name", s->net_name, MDRT_NET_NAME,
+            mdrt_menu_add_field(m, I_NET_NAME, "Name", s->net_name, MDRT_NET_NAME,
                                 "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 -_.'!?");
-            mdrt_menu_add_choice(m, I_NET_ROLE, "Play as", net_role_label, 3, s->net_role);
+            mdrt_menu_add_choice(m, I_NET_ROLE, "Role", net_role_label, 3, s->net_role);
             if (s->net_role != NET_HOST)
-                mdrt_menu_add_field(m, I_NET_ADDR, s->net_role == NET_JOIN ? "Host's address" : "Their address", s->net_addr, 60,
+                mdrt_menu_add_field(m, I_NET_ADDR, s->net_role == NET_JOIN ? "Host address" : "Their address", s->net_addr, 60,
                                     "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ.:-[]");
-            mdrt_menu_add_field(m, I_NET_PORT, s->net_role == NET_JOIN ? "The host's port" : "Port", port, 5, "0123456789");
+            mdrt_menu_add_field(m, I_NET_PORT, s->net_role == NET_JOIN ? "Host port" : "Port", port, 5, "0123456789");
             mdrt_menu_add_number(m, I_NET_DELAY, "Input delay", s->net_delay, 0, MDRT_NET_MAX_DELAY, 1, " frames");
             int most = game_pads(s);
             if (most > 2) {                               /* (a game for more than two: players here, and the host's in all) */
                 mdrt_menu_add_number(m, I_NET_HERE, "Players here", clamp(s->net_here, 1, most - 1), 1, most - 1, 1, NULL);
                 if (s->net_role != NET_JOIN)
-                    mdrt_menu_add_number(m, I_NET_ALL, "Players in all", clamp(s->net_all, s->net_here + 1, most), 2, most, 1, NULL);
+                    mdrt_menu_add_number(m, I_NET_ALL, "Total players", clamp(s->net_all, s->net_here + 1, most), 2, most, 1, NULL);
             }
             if (s->o->net_save_ram && s->net_role != NET_JOIN)   /* (the host's: what every machine's game plays with) */
                 mdrt_menu_add_choice(m, I_NET_SAVE, "Save RAM", net_save_label, 2, s->net_fresh);
-            mdrt_menu_add(m, I_NET_START, MDRT_ITEM_ACTION, s->net_role == NET_HOST ? "Start hosting" : "Connect and play");
+            mdrt_menu_add(m, I_NET_START, MDRT_ITEM_ACTION, s->net_role == NET_HOST ? "Host game" : "Connect");
         }
         char lan[64];
-        if ((it = mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "Your LAN address")))
+        if ((it = mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "LAN address")))
             snprintf(it->detail, sizeof it->detail, "%s, port %d", mdrt_udp_lan_address(lan, sizeof lan)[0] ? lan : "none found", s->net_port);
         mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "");
         static const char *const help[3][3] = {
-            { "Tell the others your public address.", "Your router must let this UDP port in to you,", "or play on one LAN, or a VPN such as Tailscale." },
-            { "The host's public address (or LAN or VPN one).", "Add :port to it if the host's port is another.", "The host is player 1; the others as they join." },
-            { "Two machines: each types the other's public", "address and starts: most routers need no setup.", "The two games decide who is player 1." },
+            { "Share your public address. Forward this", "UDP port, or play on a LAN or a VPN", "(such as Tailscale)." },
+            { "The host's public, LAN or VPN address", "(add :port for another port).", "Pads: the host's first, then by join order." },
+            { "Two machines: each enters the other's", "address. Most routers need no setup.", "The two games decide who is player 1." },
         };
         for (int i = 0; i < 3; i++) mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, help[s->net_role][i]);
-        mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "All need this build. While you play together,");
-        mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "pause, rewind and the save slots are off.");
+        mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "Everyone needs this build.");
+        mdrt_menu_add(m, 0, MDRT_ITEM_TEXT, "Online: no pause, rewind or save slots.");
         break;
     }
     }
@@ -1997,7 +1997,7 @@ static void act(sdl *s, int id)
     int running = s->thread != NULL;
     if (SDL_AtomicGet(&s->session) && id == I_RESET && s->o->net_reset) {   /* (the host's: the console reset for everyone) */
         if (!s->net || !mdrt_net_is_host(s->net)) { snprintf(s->menu.message, sizeof s->menu.message, "Only the host can reset"); return; }
-        if (!confirmed(s, id, "reset the console for everyone")) return;
+        if (!confirmed(s, id, "reset for everyone")) return;
         SDL_AtomicSet(&s->net_reset, 1);
         close_menu(s);
         notice(s, "netplay: the console reset for everyone");
@@ -2022,7 +2022,7 @@ static void act(sdl *s, int id)
         }
         build_page(s, PAGE_ROM, I_ENTRY);
         return;
-    case I_RESET: if (confirmed(s, id, "start the game again")) restart(s, NULL); return;
+    case I_RESET: if (confirmed(s, id, "reset")) restart(s, NULL); return;
     case I_SAVE: build_page(s, PAGE_SAVE, I_SLOT + s->slot); return;
     case I_LOAD: build_page(s, PAGE_LOAD, I_SLOT + s->slot); return;
     case I_RESUME_OPT:
@@ -2766,7 +2766,7 @@ static void net_begin(sdl *s)
 {
     char err[200], addr[128];
     if (s->net_role != NET_HOST && !s->net_addr[0]) { snprintf(s->menu.message, sizeof s->menu.message, "Type their address first"); return; }
-    if (s->thread && !confirmed(s, I_NET_START, "stop this game and play online")) return;
+    if (s->thread && !confirmed(s, I_NET_START, "stop this game")) return;
     if (s->net_role != NET_HOST) {                        /* (the port the page says, unless the address has one) */
         const char *colon = strrchr(s->net_addr, ':');
         int has_port = colon && (s->net_addr[0] == '[' ? colon > strchr(s->net_addr, ']') : strchr(s->net_addr, ':') == colon);

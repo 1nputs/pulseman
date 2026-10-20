@@ -257,8 +257,8 @@ session:
    machines with one each, pads 1 and 2; four with one each, pads 1 to 4; two and one and one;
    one and three ...; a guest that would make more is refused), the input delay, the window
    (frames played on guesses before waiting), how far a rollback may go back, how often to check
-   for a desync, and its settings for the guests' clients (rules, save RAM, a game's league with
-   its art: a blob of up to 16 MB, sent to each 1 KB at a time with 128 in flight; the guest says
+   for a desync, and its settings for the guests' clients (rules, save RAM, a game's rosters with
+   their art: a blob of up to 16 MB, sent to each 1 KB at a time with 128 in flight; the guest says
    which it has, and the lost ones go again a round trip on).
 2. `mdrt_net_connect(n)` until it returns `MDRT_NET_READY` (or `_REFUSED`, with `mdrt_net_why`):
    every player is in; each guest's client then applies `mdrt_net_settings(n, &size)` and powers

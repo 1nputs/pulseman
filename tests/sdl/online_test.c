@@ -283,13 +283,13 @@ static int player(void *user)
     (void)user;
     while (SDL_AtomicGet(&frames) < 60) SDL_Delay(10);
     CHECK_EQ(SDL_AtomicGet(&online), 0);
-    online_page();                                        /* (on Start hosting, below Your name, Play as, Port, Input delay and Save RAM) */
+    online_page();                                        /* (on Host game, below Name, Role, Port, Input delay and Save RAM) */
     keys(SDL_SCANCODE_UP, 5);
     press(SDL_SCANCODE_RETURN);                           /* the name */
     type("Tester");
     press(SDL_SCANCODE_RETURN);
     press(SDL_SCANCODE_DOWN);
-    press(SDL_SCANCODE_RIGHT);                            /* join a host: Your name, Play as, Host's address, The host's port, ... */
+    press(SDL_SCANCODE_RIGHT);                            /* join: Name, Role, Host address, Host port, ... */
     press(SDL_SCANCODE_DOWN);
     press(SDL_SCANCODE_RETURN);
     type("10.9.8.7");
@@ -302,7 +302,7 @@ static int player(void *user)
     keys(SDL_SCANCODE_BACKSPACE, 4);
     type("7491");
     press(SDL_SCANCODE_RETURN);
-    keys(SDL_SCANCODE_DOWN, 2);                           /* (past Input delay) to Connect and play */
+    keys(SDL_SCANCODE_DOWN, 2);                           /* (past Input delay) to Connect */
     press(SDL_SCANCODE_RETURN);                           /* ("Choose it again": a game is running) */
     press(SDL_SCANCODE_RETURN);
     int on = until(&online, 1, 15000);
@@ -338,7 +338,7 @@ static int player(void *user)
     printf("  the menu open in the session: %d frames went by in half a second\n", f1 - f0);
     CHECK(f1 - f0 > 15);
     SDL_Delay(1500);
-    online_page();                                        /* (on Leave the session) */
+    online_page();                                        /* (on Leave session) */
     press(SDL_SCANCODE_RETURN);
     CHECK(until(&host_done, 1, 5000));
     CHECK(until(&online, 0, 5000));
@@ -353,17 +353,17 @@ static int player(void *user)
     CHECK(SDL_AtomicGet(&window_rollbacks) > 0);          /* (the host's buttons come late: guessed) */
     CHECK(SDL_AtomicGet(&window_checks) >= 2 && SDL_AtomicGet(&host_checks) >= 2);
     /* the window hosts on the port the other hosted on, is joined, leaves, and hosts there again */
-    online_page();                                        /* (on Connect and play: below Your name, Play as, Host's address, The host's port, Input delay) */
+    online_page();                                        /* (on Connect: below Name, Role, Host address, Host port, Input delay) */
     keys(SDL_SCANCODE_UP, 4);
-    press(SDL_SCANCODE_LEFT);                             /* host: Your name, Play as, Port (7491), Input delay, Save RAM, Start hosting */
+    press(SDL_SCANCODE_LEFT);                             /* host: Name, Role, Port (7491), Input delay, Save RAM, Host game */
     keys(SDL_SCANCODE_DOWN, 4);
     for (int round = 1; round <= 2; round++) {
-        if (round == 2) {                                 /* (Save RAM, above Start hosting: a new cartridge's) */
+        if (round == 2) {                                 /* (Save RAM, above Host game: new cartridge) */
             press(SDL_SCANCODE_UP);
             press(SDL_SCANCODE_RIGHT);
             press(SDL_SCANCODE_DOWN);
         }
-        press(SDL_SCANCODE_RETURN);                       /* (Start hosting, and "Choose it again": a game is running) */
+        press(SDL_SCANCODE_RETURN);                       /* (Host game, and "Choose it again": a game is running) */
         press(SDL_SCANCODE_RETURN);
         SDL_AtomicSet(&joiner_done, 0);
         SDL_Thread *j = SDL_CreateThread(joiner, "joiner", NULL);
@@ -390,14 +390,14 @@ static int player(void *user)
             CHECK(SDL_AtomicGet(&window_checks) >= checks0 + 2);
             CHECK(SDL_AtomicGet(&online) == 1);
         }
-        online_page();                                    /* (on Leave the session) */
+        online_page();                                    /* (on Leave session) */
         press(SDL_SCANCODE_RETURN);
         CHECK(until(&joiner_done, 1, 5000));
         CHECK(until(&online, 0, 5000));
         SDL_WaitThread(j, NULL);
         printf("  the window left: the joiner heard \"%s\"\n", joiner_why);
         CHECK(!strcmp(joiner_why, "Tester left"));
-        online_page();                                    /* (on Start hosting, for the next round) */
+        online_page();                                    /* (on Host game, for the next round) */
     }
     press(SDL_SCANCODE_ESCAPE);
     press(SDL_SCANCODE_ESCAPE);

@@ -343,7 +343,7 @@ static int slots(void *user)
         quit_event();
         return 0;
     }
-    /* the menu: [Resume, Reset, Save a state, Load a state, Video ...]; Save: [slot 1-8, Back], the
+    /* the menu: [Resume, Reset, Save state, Load state, Video ...]; Save: [slot 1-8, Back], the
      * slot chosen last selected */
     keys(SDL_SCANCODE_ESCAPE, 1);
     keys(SDL_SCANCODE_DOWN, 2);
@@ -396,8 +396,8 @@ static int capturer(void *user)
     SDL_Delay(1000);
     press(SDL_SCANCODE_F11);
     SDL_Delay(1000);
-    /* the menu: [Resume, Reset, Save, Load, Video, Capture ...]; Capture: [Save the replay, Start
-     * recording, Replay kept, GIF size, Back] */
+    /* the menu: [Resume, Reset, Save, Load, Video, Capture ...]; Capture: [Save replay, Start
+     * recording, Replay length, GIF size, Back] */
     keys(SDL_SCANCODE_ESCAPE, 1);
     keys(SDL_SCANCODE_DOWN, 5);
     keys(SDL_SCANCODE_RETURN, 2);                         /* the replay, from the menu */
@@ -560,9 +560,9 @@ static int rules_player(void *user)
     CHECK(SDL_AtomicGet(&picks) == 2 && !strcmp(last_pick, "browse-test/a.zip"));
     keys(SDL_SCANCODE_ESCAPE, 1);                         /* (back on More) */
     keys(SDL_SCANCODE_DOWN, 1);
-    keys(SDL_SCANCODE_RETURN, 1);                         /* Options: [Pause ..., Fast-forward ..., Resume ..., Frames a second ..., Back] */
+    keys(SDL_SCANCODE_RETURN, 1);                         /* Options: [Pause in background, Fast-forward speed, Quick resume, FPS counter, Back] */
     keys(SDL_SCANCODE_DOWN, 3);
-    keys(SDL_SCANCODE_RIGHT, 1);                          /* frames a second: on */
+    keys(SDL_SCANCODE_RIGHT, 1);                          /* FPS counter: on */
     SDL_Delay(1200);                                      /* (drawn: shown at the top right, a second of frames) */
     keys(SDL_SCANCODE_ESCAPE, 1);                         /* (back on Options) */
     keys(SDL_SCANCODE_UP, 9);
@@ -919,7 +919,7 @@ int main(int argc, char **argv)
     t = slurp(settings_path, &len);
     CHECK(t && strstr(t, "test.choice = third\n") && strstr(t, "test.number = 8\n") && strstr(t, "test.share = 75\n"));
     CHECK(t && strstr(t, "test.kept = 150\n"));          /* (a choice's number, never changed: as written) */
-    CHECK(t && strstr(t, "general.show_fps = 1\n"));     /* (frames a second, turned on in Options) */
+    CHECK(t && strstr(t, "general.show_fps = 1\n"));     /* (the FPS counter, turned on in Options) */
     CHECK(t && strstr(t, "test.found = browse-test/a.zip\n") && SDL_AtomicGet(&opt_seen[4]) == 2);   /* (the path the settings keep) */
     remove("browse-test/a.zip");
     remove("browse-test/notes.txt");
