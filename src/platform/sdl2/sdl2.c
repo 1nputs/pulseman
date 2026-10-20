@@ -168,6 +168,7 @@ typedef struct sdl {
     mdrt_net *net;              /* the session (the client's from its command line, or the menu's: owned) */
     mdrt_udp *net_udp;
     int net_owned;
+    int net_sram;               /* this console powered on in a session: its save RAM the session's, never written to the file */
     int net_role, net_port, net_delay;   /* the Online page's, kept in the settings */
     int net_here, net_all;      /* the Online page's players at this machine, and in all (a host's) */
     uint64_t net_idle;          /* the game thread's time in mdrt_idle since its last frame (performance counts) */
@@ -270,7 +271,7 @@ typedef struct sdl {
 static void sram_save(sdl *s)
 {
     mdrt_sram *r = mdrt_get_sram(s->m);
-    if (!s->sram_file[0] || !r->size || !r->dirty || SDL_AtomicGet(&s->session)) return;   /* (netplay: the session's own) */
+    if (!s->sram_file[0] || !r->size || !r->dirty || s->net_sram) return;   /* (netplay: the session's own, after it ends too) */
     FILE *f = fopen(s->sram_file, "wb");
     if (!f) return;
     if (fwrite(r->bytes, 1, r->size, f) == r->size) r->dirty = 0;
@@ -502,6 +503,7 @@ static int start_game(sdl *s)
     int adaptor = s->adaptor;                             /* (in the ports at power on; in a session, pads 3 or 4 played: 4 Way Play) */
     if (SDL_AtomicGet(&s->session) && s->net) adaptor = (mdrt_net_all_pads(s->net) & 0xC) ? MDRT_ADAPTOR_EA4WAY : MDRT_ADAPTOR_NONE;
     mdrt_pads_set_adaptor(mdrt_get_pads(s->m), adaptor);
+    s->net_sram = SDL_AtomicGet(&s->session);             /* (a session's console: the player's save file left as it was) */
     if (SDL_AtomicGet(&s->session) && s->net) {           /* (netplay: from this power on) */
         mdrt_set_net(s->m, s->net);
         mdrt_net_start(s->net, s->m);

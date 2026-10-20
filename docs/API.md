@@ -312,7 +312,8 @@ game spent waiting on the other player in `mdrt_idle` (a frame given back to kee
 given; other lateness is caught up as ever), stretches the sound by up to half a per cent to
 keep its queue, and keeps the session's rules: the menu does not stop the game, and pause, the
 frame step, slow motion, fast-forward, rewind, the save slots, quick resume, reset, another ROM,
-the FM core and chip and the Players page's adaptor (the session's pads say) are not to be had; save RAM is not read or written.
+the FM core and chip and the Players page's adaptor (the session's pads say) are not to be had; save RAM is not read from the player's file, nor written back to it by that
+console ever (after the session too, while the game plays on alone: its save RAM is the session's).
 `mdrt_net_state(n)` says where a session is. Every client reads the same options: `mdrt_net_parse` takes `--host [PORT]`,
 `--join ADDR[:PORT]`, `--peer ADDR[:PORT]`, `--port`, `--delay`, `--name`, `--here N` (the players
 at this machine), `--players N` (a host's players in all) and `--net-sim` from its command line

@@ -12,7 +12,9 @@
  * wrong to play again), the menu is opened during play (the game does not stop), and the session is
  * left from the menu. It checks that the session played (the window's game and the host in step:
  * rollbacks, desync checks agreeing), that the host heard the goodbye, that the window's
- * game plays on alone, and that the settings file kept the page's choices. */
+ * game plays on alone, and that the settings file kept the page's choices. The window's save file
+ * keeps what its game wrote alone before the session: the session's console, which plays on alone
+ * once it is over, writes its save RAM (the session's) to no file. */
 #include <SDL2/SDL.h>
 #ifdef _WIN32
 #include <direct.h>
@@ -111,7 +113,11 @@ static void window_game(mdrt *m, void *user)
         if (mdrt_wait_vblank(m)) return;
         SDL_AtomicAdd(&frames, 1);
         mdrt_net *n = mdrt_get_net(m);
-        if (!n || mdrt_net_state(n) != MDRT_NET_GO) { SDL_AtomicSet(&online, 0); continue; }
+        if (!n || mdrt_net_state(n) != MDRT_NET_GO) {     /* (alone: its save RAM written, its own or, after a session, the session's) */
+            SDL_AtomicSet(&online, 0);
+            mdrt_sram_write8(mdrt_get_sram(m), 1, n ? 0x22 : 0x11);
+            continue;
+        }
         SDL_AtomicSet(&online, 1);
         int r;
         while ((r = mdrt_net_frame(n, 1)) == MDRT_NET_WAIT)
@@ -139,6 +145,7 @@ static int host(void *user)
     if (!u) { SDL_AtomicSet(&host_done, 1); return 0; }
     mdrt_udp_simulate(u, 60, 20, 0, 0);                   /* (its buttons late: the window has to guess them) */
     mdrt_config cfg = { 0 };
+    cfg.sram_size = 0x2000;                               /* (as the window's: save RAM is in the simulation) */
     mdrt *m = mdrt_new(&cfg);
     static game g;
     CHECK_EQ(mdrt_add_state_part(m, "GAME", part_save, part_load, &g), 0);
@@ -312,9 +319,11 @@ int main(int argc, char **argv)
     SDL_setenv("SDL_DISKAUDIOFILE", "sound.raw", 1);
     remove("settings.ini");
     remove("sound.raw");
+    remove("online-test.srm");
     mdrt_config c = { 0 };
     c.audio_rate = 48000;
-    mdrt_sdl_options o = { .title = "online test", .app = "online-test", .net_identity = IDENTITY, .net_settings = window_settings,
+    c.sram_size = 0x2000;
+    mdrt_sdl_options o = { .title = "online test", .app = "online-test", .net_identity = IDENTITY, .net_settings = window_settings, .sram_path = "online-test.srm",
                            .options_title = "Test rules", .options = &rule, .noptions = 1, .options_use = options_use,
                            .options_text = options_text, .options_session = options_session };
     SDL_Thread *h = SDL_CreateThread(host, "host", NULL), *p = SDL_CreateThread(player, "player", NULL);
@@ -325,5 +334,10 @@ int main(int argc, char **argv)
     CHECK(set && strstr(set, "netplay.role = join") && strstr(set, "netplay.address = 127.0.0.1") && strstr(set, "netplay.port = 7491") &&
           strstr(set, "netplay.name = Tester") && strstr(set, "test.rule = a"));
     printf("  the settings kept: %s\n", set && strstr(set, "netplay.address = 127.0.0.1") ? "join 127.0.0.1, port 7491" : "NOT kept");
+    FILE *f = fopen("online-test.srm", "rb");
+    int first = f ? fgetc(f) : -1;
+    if (f) fclose(f);
+    printf("  the save file: %s\n", first == 0x11 ? "as the game alone left it (the session's console wrote none)" : first == 0x22 ? "OVERWRITTEN by the session's console" : "missing");
+    CHECK_EQ(first, 0x11);
     return check_done("online_test");
 }

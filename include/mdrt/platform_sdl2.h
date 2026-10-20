@@ -156,7 +156,8 @@ typedef struct mdrt_sdl_options {
      * stretches the sound a little to keep its queue; the menu does not stop the game; pause, the
      * frame step, slow motion, fast-forward, rewind, the save slots, quick resume, reset, another
      * ROM, the FM core and chip, the Players page's adaptor (the session's pads say) and pausing when the window loses
-     * focus are not to be had; save RAM is not written back; the title shows the round trip, the
+     * focus are not to be had; save RAM is not read from the player's file, nor ever written back to it
+     * by that console (after the session too, while it plays on alone); the title shows the round trip, the
      * delay and the rollbacks. When it ends (the other left, the connection lost, a desync) the
      * window says why and the game plays on alone. */
     const char *net_identity;
