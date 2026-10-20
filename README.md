@@ -50,7 +50,7 @@ its own thread, frames paced by the sound queue, keyboard and controllers for up
 (each button rebindable, turbo, dead zone), save RAM in a file per game, pause, fast-forward, slow
 motion and frame step, full screen and hi-DPI, vsync (no tearing; the game keeps its own time),
 scaling (sharp, integer, fit; square or 4:3) with the upscalers and looks above, screenshots,
-replays and recordings as GIFs, save slots with a picture each, quick resume, and a menu (Esc) with
+replays and recordings as GIFs, save slots with a picture each and an Autosave, and a menu (Esc) with
 the ROM browser, reset, states, video, capture, sound (the FM core and chip changed live), players,
 keys, and pages of the client's own options handed to it before every power on. And netplay, two
 to four machines (a host and its guests, any players at each up to four pads, EA's 4 Way Play

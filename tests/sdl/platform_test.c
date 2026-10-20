@@ -1,7 +1,7 @@
 /* The SDL2 platform played as a player would (make sdl-check): a thread presses keys (SDL events)
  * while a small game runs under SDL's dummy video and real-time disk sound. It checks the frame
- * rate at full speed, with fast-forward held and in slow motion; pause and a frame step; pausing
- * when the window loses focus (and the keys let go); a screenshot (its size and colour); the
+ * rate at full speed, with fast-forward held and in slow motion; pause and a frame step; the
+ * window losing focus (the game going on, the keys let go); a screenshot (its size and colour); the
  * volume and mute in the sound written to disk; the settings kept in the file in the directory it
  * runs in, with its comment and an unknown key; run again, keys bound in that file by hand; and
  * the menu: a ROM chosen in its browser (one the client turns down first), the upscaler (MMPX 4x
@@ -11,8 +11,9 @@
  * last found again on the next start; and four players: EA's 4 Way Play in the ports, two virtual
  * controllers given to players 1 and 3, a button moved, a turbo button, the stick's dead zone, a
  * controller pulled out, the Players page and a controller button changed by pressing it; and the
- * save slots (the menu's Save and Load pages, a save out of play that changes nothing) and quick
- * resume (the state at quitting, back at the next start; none when quitting out of play); and
+ * save slots (the menu's Save and Load pages, a save out of play that changes nothing) and the
+ * Autosave (the state at quitting, not loaded at the next start but from the Load page's first
+ * line; the last one kept when quitting out of play); and
  * captures: the replay saved by F10, a recording by F11, the replay from the menu, each GIF read
  * back, and a control's key set with Ctrl by pressing it; and an older build's keys taken out of
  * the settings; and the client's own options page (a preset changing another value, the values
@@ -145,14 +146,14 @@ static int player(void *user)
     CHECK_EQ(SDL_AtomicGet(&frame), c0 + 2);
     press(SDL_SCANCODE_F5);
     CHECK(rate(300) > 40);
-    /* the window loses focus with fast-forward held: paused, and the key let go */
+    /* the window loses focus with fast-forward held: the game goes on, at its speed (the key let go) */
     key(SDL_SCANCODE_F6, 1);
     SDL_Delay(200);
     focus(0);
     SDL_Delay(200);
-    int d0 = SDL_AtomicGet(&frame);
-    SDL_Delay(300);
-    CHECK_EQ(SDL_AtomicGet(&frame), d0);
+    double away = rate(600);
+    printf("  with the focus elsewhere: %.1f frames a second\n", away);
+    CHECK(away > normal * 0.8 && away < normal * 1.3);
     focus(1);
     double back = rate(600);
     printf("  after focus came back: %.1f frames a second\n", back);
@@ -319,7 +320,7 @@ static int players(void *user)
     return 0;
 }
 
-/* runs 6 and 7: the save slots and quick resume */
+/* runs 6 and 7: the save slots and the Autosave */
 static int state_in(const char *path)
 {
     FILE *f = fopen(path, "rb");
@@ -335,11 +336,19 @@ static int slots(void *user)
 {
     (void)user;
     until_frame(20);
-    if (run == 7) {                                       /* started again: back where run 6 quit */
-        int was = state_in("states/resume.state.seen");
-        printf("  quick resume: the game at %d, run 6 quit at %d\n", SDL_AtomicGet(&game_frame), was);
-        CHECK(was > 0 && SDL_AtomicGet(&game_frame) >= was && SDL_AtomicGet(&game_frame) < was + 60);
-        SDL_AtomicSet(&refuse_saves, 1);                  /* quitting out of play: no state to come back to */
+    if (run == 7) {                                       /* started again: from power on, the Autosave on the Load page */
+        int was = state_in("states/autosave.state");
+        int start = SDL_AtomicGet(&game_frame);
+        keys(SDL_SCANCODE_ESCAPE, 1);
+        keys(SDL_SCANCODE_DOWN, 3);
+        keys(SDL_SCANCODE_RETURN, 1);                     /* Load: [Autosave, slot 1-8, Back], slot 1 (chosen last) selected */
+        keys(SDL_SCANCODE_UP, 1);
+        keys(SDL_SCANCODE_RETURN, 1);                     /* the Autosave */
+        SDL_Delay(200);
+        printf("  the Autosave: run 6 quit at %d; started at %d, loaded: %d\n", was, start, SDL_AtomicGet(&game_frame));
+        CHECK(was > 0 && start < was);
+        CHECK(SDL_AtomicGet(&game_frame) >= was && SDL_AtomicGet(&game_frame) < was + 20);
+        SDL_AtomicSet(&refuse_saves, 1);                  /* quitting out of play: the last Autosave kept */
         quit_event();
         return 0;
     }
@@ -380,7 +389,7 @@ static int slots(void *user)
     CHECK_EQ(state_in("states/slot1.state"), s1);
     CHECK(!exists("states/slot1.state.new"));
     SDL_AtomicSet(&refuse_saves, 0);
-    quit_event();                                         /* quick resume: the state at quitting */
+    quit_event();                                         /* the Autosave: the state at quitting */
     return 0;
 }
 
@@ -560,8 +569,8 @@ static int rules_player(void *user)
     CHECK(SDL_AtomicGet(&picks) == 2 && !strcmp(last_pick, "browse-test/a.zip"));
     keys(SDL_SCANCODE_ESCAPE, 1);                         /* (back on More) */
     keys(SDL_SCANCODE_DOWN, 1);
-    keys(SDL_SCANCODE_RETURN, 1);                         /* Options: [Pause in background, Fast-forward speed, Quick resume, FPS counter, Back] */
-    keys(SDL_SCANCODE_DOWN, 3);
+    keys(SDL_SCANCODE_RETURN, 1);                         /* Options: [Fast-forward speed, FPS counter, Back] */
+    keys(SDL_SCANCODE_DOWN, 1);
     keys(SDL_SCANCODE_RIGHT, 1);                          /* FPS counter: on */
     SDL_Delay(1200);                                      /* (drawn: shown at the top right, a second of frames) */
     keys(SDL_SCANCODE_ESCAPE, 1);                         /* (back on Options) */
@@ -782,7 +791,7 @@ int main(int argc, char **argv)
             static const char *const ext[4] = { ".state", ".png", ".state.new", ".state.seen" };
             char p[64];
             if (i) snprintf(p, sizeof p, "states/slot%d%s", i, ext[k]);
-            else snprintf(p, sizeof p, "states/resume%s", ext[k]);
+            else snprintf(p, sizeof p, "states/autosave%s", ext[k]);
             remove(p);
         }
     remove_dir("states");
@@ -795,7 +804,7 @@ int main(int argc, char **argv)
     while (d && (e = readdir(d))) if (strstr(e->d_name, ".png")) { snprintf(path, sizeof path, "%s/%s", shots, e->d_name); remove(path); }
     if (d) closedir(d);
     char text[1024];
-    snprintf(text, sizeof text, "# the test's own comment\nmystery.key = kept\ngeneral.screenshots = %s\nvideo.scale = integer\ngeneral.resume = 0\n"
+    snprintf(text, sizeof text, "# the test's own comment\nmystery.key = kept\ngeneral.screenshots = %s\nvideo.scale = integer\n"
              "key.save_state = F9\nkey.fullscreen = F11\ncapture.format = mp4\n", shots);   /* (the last three: an older build's) */
     spit(settings_path, text);
     run = 1;
@@ -824,6 +833,9 @@ int main(int argc, char **argv)
     spit("bad.gen", "BAD!");
     spit("good.gen", "GOOD-good");
     spit("roms/other.gen", "GOOD-other");
+    remove("states/autosave.state");                      /* (runs 1 and 2 quit in play: their Autosave, out of the ROM page's way) */
+    remove("states/autosave.png");
+    remove_dir("states");
     run = 3;
     CHECK_EQ(play(), 0);
     t = slurp(settings_path, &len);
@@ -855,31 +867,22 @@ int main(int argc, char **argv)
     t = slurp(settings_path, &len);
     CHECK(t && strstr(t, "\nplayer1.controller = 3\n") && strstr(t, "\ncontroller.a = leftstick\n"));
     free(t);
-    /* save slots and quick resume */
+    /* save slots and the Autosave */
     for (int i = 0; i <= 2; i++) {                        /* (last time's) */
         char p[64];
-        snprintf(p, sizeof p, i ? "states/slot%d.state" : "states/resume.state", i);
+        snprintf(p, sizeof p, i ? "states/slot%d.state" : "states/autosave.state", i);
         remove(p);
-    }
-    t = slurp(settings_path, &len);                       /* quick resume on, from here */
-    if (t) {
-        char *at = strstr(t, "general.resume = 0\n");
-        if (at) at[17] = '1';
-        spit(settings_path, t);
-        free(t);
     }
     SDL_AtomicSet(&game_frame, 0);
     run = 6;
     CHECK_EQ(play(), 0);
-    int quit_at = state_in("states/resume.state");
+    int quit_at = state_in("states/autosave.state");
     CHECK(quit_at > 0);
-    t = slurp("states/resume.state", &len);
-    if (t) { spit("states/resume.state.seen", t); free(t); }
     SDL_AtomicSet(&game_frame, 0);
     SDL_AtomicSet(&refuse_saves, 0);
     run = 7;
     CHECK_EQ(play(), 0);
-    CHECK(!exists("states/resume.state"));                /* (quit out of play: none to come back to) */
+    CHECK_EQ(state_in("states/autosave.state"), quit_at);   /* (quit out of play: the last Autosave kept) */
     /* captures: the replay, a recording, the replay from the menu */
     t = slurp(settings_path, &len);
     if (t) {

@@ -25,8 +25,8 @@ started from the Finder runs in `/`, where nothing can be written, so a game cal
 the other systems, it leaves the working directory alone. It writes the file with
 every setting the first time and whenever the player changes one: the window's size, place and full
 screen, vsync, the scaling (sharp, integer, fit) and aspect (square pixels, 4:3), the volume, mute,
-sound device and latency, pausing when the window loses focus, fast-forward's speed, frames a
-second shown at the picture's top right (the Options page; off by default), the screenshots'
+sound device and latency, fast-forward's speed, the FPS counter at the picture's top right (the
+Options page; off by default), the screenshots'
 directory and every key of both pads and of the player's controls (on the function
 keys by default: `include/mdrt/platform_sdl2.h` lists them). `scale` (a window of N times the
 picture) and `aspect` (4:3) set this run's window over the settings'.
@@ -202,8 +202,8 @@ The player's requests reach the client through the platform: `mdrt_platform.requ
 MDRT_REQUEST_SAVE and MDRT_REQUEST_LOAD once for each press and MDRT_REQUEST_REWIND while it is
 held; `mdrt_requests(m)` gives the client what the last handshake brought (the SDL2 platform:
 the menu's Save and Load pages, and F4 held). The client decides what to do and when. `mdrt_request_path(m)` is the
-file a SAVE or LOAD names, when the platform names one (the SDL2 platform's save slots and quick
-resume: `states/slotN.state.new` to write, `states/slotN.state` to read); NULL leaves the file to
+file a SAVE or LOAD names, when the platform names one (the SDL2 platform's save slots and the
+Autosave: `states/slotN.state.new` to write, `states/slotN.state` to read); NULL leaves the file to
 the client. A client that can take a state only at some points (in play, say) does nothing
 otherwise, and the platform keeps the slot as it was. Fast-forward, slow motion,
 pause and the frame step are the platform's alone: they change when its `wait` lets the next frame
@@ -320,7 +320,7 @@ While the session lasts the window paces the frames by its clock and never makes
 game spent waiting on the other player in `mdrt_idle` (a frame given back to keep in step stays
 given; other lateness is caught up as ever), stretches the sound by up to half a per cent to
 keep its queue, and keeps the session's rules: the menu does not stop the game, and pause, the
-frame step, slow motion, fast-forward, rewind, the save slots, quick resume, reset, another ROM,
+frame step, slow motion, fast-forward, rewind, the save slots, the Autosave, reset, another ROM,
 the FM core and chip and the Players page's adaptor (the session's pads say) are not to be had,
 but for the host's Reset in a game that gives `mdrt_sdl_options.net_reset` (it starts again on
 `MDRT_NET_RESET`): that resets the console for everyone, the session going on; save RAM is not read from the player's file, nor written back to it by that

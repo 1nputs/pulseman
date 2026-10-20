@@ -13,9 +13,9 @@
  * still paced by its sound), captures (the replay and recordings as GIFs: mdrt/capture.h),
  * the sound (volume, mute, the FM core and chip, changed as the game plays), the players (two pads, or EA's 4 Way Play for four, from the next power on;
  * each player's controller; the controllers' buttons, turbo A / B / C, the stick's dead zone),
- * the client's own options (a page it describes: mdrt_sdl_option), the platform's options (pausing
- * when the window loses focus, fast-forward's speed, quick resume, frames a second shown at the
- * picture's top right: the frames the game makes, over each half second) and every key, each changed
+ * the client's own options (a page it describes: mdrt_sdl_option), the platform's options
+ * (fast-forward's speed, the FPS counter at the picture's top right: the frames the game makes,
+ * over each half second) and every key, each changed
  * by pressing the new one (a controller's button, on a controller). Arrows and Enter work it, or a controller's d-pad, A
  * and B. It is drawn over the picture at the console's resolution (mdrt/menu.h).
  *
@@ -30,9 +30,10 @@
  *   a screenshot; Esc the menu; Alt+Enter full screen. States are saved and loaded from the menu.
  * Saves and loads reach the client as MDRT_REQUEST_SAVE / LOAD with the slot's file
  * (mdrt_request_path); a save is written to slotN.state.new and kept only when the client writes it
- * (a game that takes states only in play leaves the slot as it was). Quick resume (on by default):
- * the window closing asks for a state into states/resume.state, which the next start loads; when
- * none is written (out of play) the old one goes, and the next start is a fresh one.
+ * (a game that takes states only in play leaves the slot as it was). The Autosave (slot 0): the
+ * window closing asks for a state into states/autosave.state (none out of play: the last one
+ * stays); the next start is a fresh one, and the Load page's first line loads it. The window never
+ * pauses itself when it loses focus: Esc pauses.
  * Controllers keep the slot they were given when plugged in; by default controller N is player N's
  * (X / A / B = A / B / C, Start, the left shoulder X, Y Y, the right shoulder Z; the d-pad and the
  * left stick are the directions). A change shows for a moment in the window's title.
@@ -43,8 +44,8 @@
  * screen, the upscaler, the scaling (sharp, integer, fit) and aspect (square, 4:3), the volume and mute, the
  * sound device and how many frames of sound are queued (latency), the FM core and chip, the
  * adaptor in the ports, each player's controller, the controllers' buttons, turbo's speed, the
- * stick's dead zone, pausing when the window loses focus, fast-forward's speed, frames a second, the states'
- * directory, the slot chosen last, quick resume, the screenshots' directory, the looks, the
+ * stick's dead zone, fast-forward's speed, the FPS counter, the states'
+ * directory, the slot chosen last, the screenshots' directory, the looks, the
  * replay's length, a GIF's size, the videos' directory and every key. */
 #ifndef MDRT_PLATFORM_SDL2_H
 #define MDRT_PLATFORM_SDL2_H
@@ -154,10 +155,10 @@ typedef struct mdrt_sdl_options {
      * its clock, never making up the time the game spent waiting on the other (in mdrt_idle: so a
      * frame given back to keep in step is given), and
      * stretches the sound a little to keep its queue; the menu does not stop the game; pause, the
-     * frame step, slow motion, fast-forward, rewind, the save slots, quick resume, reset (but the
+     * frame step, slow motion, fast-forward, rewind, the save slots, the Autosave, reset (but the
      * host's, for a game that gives net_reset), another
-     * ROM, the FM core and chip, the Players page's adaptor (the session's pads say) and pausing when the window loses
-     * focus are not to be had; save RAM is not read from the player's file, nor ever written back to it
+     * ROM, the FM core and chip and the Players page's adaptor (the session's pads say) are not
+     * to be had; save RAM is not read from the player's file, nor ever written back to it
      * by that console (after the session too, while it plays on alone); the title shows the round trip, the
      * delay and the rollbacks. When it ends (the other left, the connection lost, a desync) the
      * window says why and the game plays on alone. */

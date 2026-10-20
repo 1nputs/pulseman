@@ -184,7 +184,7 @@ void mdrt_set_hint(mdrt *m, mdrt_hint_fn fn, void *user);
 int mdrt_wait_vblank(mdrt *m);
 void mdrt_vblank_end(mdrt *m);
 /* the requests the last handshake brought (MDRT_REQUEST_*), and the file a SAVE or LOAD among them
- * names (NULL: the client's own); the SDL2 platform's are its save slots and quick resume */
+ * names (NULL: the client's own); the SDL2 platform's are its save slots and the Autosave */
 unsigned mdrt_requests(const mdrt *m);
 const char *mdrt_request_path(const mdrt *m);
 
