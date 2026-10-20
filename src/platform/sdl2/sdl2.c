@@ -2742,15 +2742,23 @@ static void net_begin(sdl *s)
         if (has_port) snprintf(addr, sizeof addr, "%s", s->net_addr);
         else snprintf(addr, sizeof addr, strchr(s->net_addr, ':') ? "[%s]:%d" : "%s:%d", s->net_addr, s->net_port);
     }
+    int playing = s->thread != NULL;
+    if (s->net_owned) {                                   /* (the last session's socket has the port still: closed first, once its game stops) */
+        if (!stop_game(s)) { snprintf(s->menu.message, sizeof s->menu.message, "The game would not stop"); return; }
+        net_free_owned(s);
+    }
     mdrt_udp *u = mdrt_udp_open(s->net_role == NET_JOIN ? 0 : (uint16_t)s->net_port, s->net_role == NET_HOST ? NULL : addr, err, sizeof err);
-    if (!u) { snprintf(s->menu.message, sizeof s->menu.message, "%.120s", err); return; }
+    if (!u) {
+        if (playing && !s->thread) start_game(s);         /* (stopped for it: alone again, from power on) */
+        snprintf(s->menu.message, sizeof s->menu.message, "%.120s", err);
+        return;
+    }
     int most = game_pads(s), here = most > 2 ? clamp(s->net_here, 1, most - 1) : 1;   /* (the client's game takes more than two: the page's) */
     mdrt_net_config c = { .role = s->net_role == NET_HOST ? MDRT_NET_HOST : s->net_role == NET_JOIN ? MDRT_NET_JOIN : MDRT_NET_EITHER,
                           .identity = s->o->net_identity, .name = s->net_name, .local_input = net_input, .input_user = s, .delay = s->net_delay,
                           .window = 8, .rollback = 30, .check_every = 60,
                           .players = here, .players_total = most > 2 ? clamp(s->net_all, here + 1, most) : 2 };
     c.link = mdrt_udp_link(u);
-    int playing = s->thread != NULL;
     if (!stop_game(s)) { mdrt_udp_close(u); snprintf(s->menu.message, sizeof s->menu.message, "The game would not stop"); return; }
     if (s->o->net_settings) {                             /* (this player's, sent if it hosts: from the menu's values, its save RAM written back) */
         if (s->o->options_use && s->opt_values) s->o->options_use(s->opt_values, s->user);

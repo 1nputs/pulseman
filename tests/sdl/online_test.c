@@ -14,7 +14,10 @@
  * rollbacks, desync checks agreeing), that the host heard the goodbye, that the window's
  * game plays on alone, and that the settings file kept the page's choices. The window's save file
  * keeps what its game wrote alone before the session: the session's console, which plays on alone
- * once it is over, writes its save RAM (the session's) to no file. */
+ * once it is over, writes its save RAM (the session's) to no file.
+ * Last the window hosts, on the port the other player hosted on: a player joins (a thread again),
+ * the window leaves, and hosts on that port once more, a player joining again (the last session's
+ * socket closed before the next is opened on its port). */
 #include <SDL2/SDL.h>
 #ifdef _WIN32
 #include <direct.h>
@@ -62,7 +65,8 @@ static const void *window_settings(size_t *size, void *user)
 }
 
 static SDL_atomic_t frames, online, starts, window_checks, window_rollbacks, host_done, host_checks, host_rollbacks;
-static char host_why[200], host_heard[64];
+static SDL_atomic_t joiner_done, joiner_played;
+static char host_why[200], host_heard[64], joiner_why[200];
 
 /* ---- the game, the same on both: the pads read through the I/O chip, into its sum ------------- */
 
@@ -185,6 +189,54 @@ static int host(void *user)
     return 0;
 }
 
+/* a player joining the window's session on the loopback, until it ends (the window leaving) */
+static int joiner(void *user)
+{
+    (void)user;
+    char err[200];
+    joiner_why[0] = 0;
+    SDL_AtomicSet(&joiner_played, 0);
+    char addr[32];
+    snprintf(addr, sizeof addr, "127.0.0.1:%d", PORT);
+    mdrt_udp *u = mdrt_udp_open(0, addr, err, sizeof err);
+    CHECK(u != NULL);
+    if (!u) { SDL_AtomicSet(&joiner_done, 1); return 0; }
+    mdrt_config cfg = { 0 };
+    cfg.sram_size = 0x2000;
+    mdrt *m = mdrt_new(&cfg);
+    static game g;
+    memset(&g, 0, sizeof g);
+    CHECK_EQ(mdrt_add_state_part(m, "GAME", part_save, part_load, &g), 0);
+    mdrt_net_config c = { .role = MDRT_NET_JOIN, .identity = IDENTITY, .name = "Joiner", .delay = 2, .local_input = host_input, .input_user = m };
+    c.link = mdrt_udp_link(u);
+    mdrt_net *n = mdrt_net_new(&c);
+    int r = MDRT_NET_CONNECTING;
+    for (Uint32 t0 = SDL_GetTicks(); r == MDRT_NET_CONNECTING && SDL_GetTicks() - t0 < 15000;) { r = mdrt_net_connect(n); mdrt_udp_wait(u, 10); }
+    if (r == MDRT_NET_READY) {
+        mdrt_udp_lock(u);
+        mdrt_net_start(n, m);
+        Uint64 freq = SDL_GetPerformanceFrequency(), next = SDL_GetPerformanceCounter();
+        for (Uint32 t0 = SDL_GetTicks(); SDL_GetTicks() - t0 < 20000;) {
+            play_frame(m, &g);
+            mdrt_wait_vblank(m);
+            while ((r = mdrt_net_frame(n, 1)) == MDRT_NET_WAIT && SDL_GetTicks() - t0 < 20000) mdrt_udp_wait(u, 1);
+            if (r == MDRT_NET_ENDED || r == MDRT_NET_REFUSED) break;
+            if (r == MDRT_NET_RESTART || mdrt_quiet(m)) continue;
+            SDL_AtomicAdd(&joiner_played, 1);
+            next += freq / 60;
+            Uint64 now = SDL_GetPerformanceCounter();
+            if (next > now) SDL_Delay((Uint32)((next - now) * 1000 / freq));
+            else next = now;
+        }
+    }
+    snprintf(joiner_why, sizeof joiner_why, "%s", r == MDRT_NET_CONNECTING ? "never connected" : mdrt_net_why(n));
+    mdrt_net_free(n);
+    mdrt_free(m);
+    mdrt_udp_close(u);
+    SDL_AtomicSet(&joiner_done, 1);
+    return 0;
+}
+
 /* ---- the player at the window --------------------------------------------------------------------- */
 
 static void key(SDL_Scancode k, int down)
@@ -293,6 +345,33 @@ static int player(void *user)
            SDL_AtomicGet(&window_rollbacks), SDL_AtomicGet(&host_rollbacks), SDL_AtomicGet(&window_checks), SDL_AtomicGet(&host_checks));
     CHECK(SDL_AtomicGet(&window_rollbacks) > 0);          /* (the host's buttons come late: guessed) */
     CHECK(SDL_AtomicGet(&window_checks) >= 2 && SDL_AtomicGet(&host_checks) >= 2);
+    /* the window hosts on the port the other hosted on, is joined, leaves, and hosts there again */
+    online_page();                                        /* (on Connect and play: below Your name, Play as, Host's address, The host's port, Input delay) */
+    keys(SDL_SCANCODE_UP, 4);
+    press(SDL_SCANCODE_LEFT);                             /* host: Your name, Play as, Port (7491), Input delay, Start hosting */
+    keys(SDL_SCANCODE_DOWN, 3);
+    for (int round = 1; round <= 2; round++) {
+        press(SDL_SCANCODE_RETURN);                       /* (Start hosting, and "Choose it again": a game is running) */
+        press(SDL_SCANCODE_RETURN);
+        SDL_AtomicSet(&joiner_done, 0);
+        SDL_Thread *j = SDL_CreateThread(joiner, "joiner", NULL);
+        int hosting = until(&online, 1, 15000);
+        for (int t = 0; t < 5000 && SDL_AtomicGet(&joiner_played) < 60; t += 10) SDL_Delay(10);
+        printf("  hosting from the page, time %d: %s (the joiner played %d frames)\n", round, hosting ? "joined, playing" : "NOT joined",
+               SDL_AtomicGet(&joiner_played));
+        CHECK(hosting);
+        CHECK(SDL_AtomicGet(&joiner_played) >= 60);
+        online_page();                                    /* (on Leave the session) */
+        press(SDL_SCANCODE_RETURN);
+        CHECK(until(&joiner_done, 1, 5000));
+        CHECK(until(&online, 0, 5000));
+        SDL_WaitThread(j, NULL);
+        printf("  the window left: the joiner heard \"%s\"\n", joiner_why);
+        CHECK(!strcmp(joiner_why, "Tester left"));
+        online_page();                                    /* (on Start hosting, for the next round) */
+    }
+    press(SDL_SCANCODE_ESCAPE);
+    press(SDL_SCANCODE_ESCAPE);
     SDL_Event e;
     SDL_zero(e);
     e.type = SDL_QUIT;
@@ -331,9 +410,9 @@ int main(int argc, char **argv)
     SDL_WaitThread(p, NULL);
     SDL_WaitThread(h, NULL);
     const char *set = slurp("settings.ini");
-    CHECK(set && strstr(set, "netplay.role = join") && strstr(set, "netplay.address = 127.0.0.1") && strstr(set, "netplay.port = 7491") &&
+    CHECK(set && strstr(set, "netplay.role = host") && strstr(set, "netplay.address = 127.0.0.1") && strstr(set, "netplay.port = 7491") &&
           strstr(set, "netplay.name = Tester") && strstr(set, "test.rule = a"));
-    printf("  the settings kept: %s\n", set && strstr(set, "netplay.address = 127.0.0.1") ? "join 127.0.0.1, port 7491" : "NOT kept");
+    printf("  the settings kept: %s\n", set && strstr(set, "netplay.address = 127.0.0.1") ? "host, 127.0.0.1 kept, port 7491" : "NOT kept");
     FILE *f = fopen("online-test.srm", "rb");
     int first = f ? fgetc(f) : -1;
     if (f) fclose(f);
