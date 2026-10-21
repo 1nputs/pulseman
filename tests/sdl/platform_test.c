@@ -786,11 +786,12 @@ int main(int argc, char **argv)
     SDL_setenv("SDL_AUDIODRIVER", "disk", 1);
     SDL_setenv("SDL_DISKAUDIOFILE", sound, 1);
     remove(sound);
-    for (int i = 0; i <= 8; i++)                          /* (last time's save slots: the ROM page lists folders) */
+    for (int i = 0; i <= 9; i++)                          /* (last time's save slots: the ROM page lists folders) */
         for (int k = 0; k < 4; k++) {
             static const char *const ext[4] = { ".state", ".png", ".state.new", ".state.seen" };
             char p[64];
-            if (i) snprintf(p, sizeof p, "states/slot%d%s", i, ext[k]);
+            if (i == 9) snprintf(p, sizeof p, "states/resume%s", ext[k]);   /* (the quick resume's, before the Autosave) */
+            else if (i) snprintf(p, sizeof p, "states/slot%d%s", i, ext[k]);
             else snprintf(p, sizeof p, "states/autosave%s", ext[k]);
             remove(p);
         }
